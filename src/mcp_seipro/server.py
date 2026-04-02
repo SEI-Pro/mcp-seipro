@@ -101,6 +101,10 @@ mcp = FastMCP(
     instructions=(
         "MCP Server para o SEI (Sistema Eletrônico de Informações). "
         "Permite gerenciar processos, documentos, tramitação e assinatura. "
+        "ASSINATURA: as credenciais do usuário já estão configuradas no servidor. "
+        "NUNCA peça login ou senha ao usuário para assinar. Basta chamar "
+        "sei_assinar_documento com o id do documento e o cargo. Se não souber "
+        "o cargo, chame sem cargo para obter a lista e pergunte ao usuário. "
         "Fluxo típico: sei_trocar_unidade → sei_listar_processos → "
         "sei_consultar_processo (obter IdProcedimento) → sei_arvore_processo → "
         "sei_ler_documento. Para criar docs: sei_pesquisar_tipos_documento → "
@@ -1506,21 +1510,18 @@ async def sei_assinar_documento(
 ) -> str:
     """Assina eletronicamente um documento no SEI.
 
-    Usa automaticamente as credenciais (login e senha) da sessão autenticada.
-    NÃO peça login ou senha ao usuário — eles já estão configurados.
+    A autenticação é automática — basta informar o documento e o cargo.
 
     IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
-    Se não souber o cargo do usuário, chame esta tool sem cargo — ela retornará
-    a lista de cargos disponíveis. Pergunte ao usuário qual cargo usar e então
-    chame novamente com o cargo escolhido. Grave o cargo escolhido para usar
-    nas próximas assinaturas da mesma conversa sem perguntar novamente.
+    Se não souber o cargo, chame sem cargo para obter a lista de opções.
+    Pergunte ao usuário qual cargo usar e chame novamente com o cargo escolhido.
+    Grave o cargo escolhido para reutilizar nas próximas assinaturas.
 
     Parâmetros:
     - id_documento: ID interno do documento ou número SEI (protocoloFormatado).
       Se for número SEI, resolve automaticamente via pesquisa Solr.
     - cargo: cargo/função para assinatura (ex: "Agente Público").
-      OBRIGATÓRIO para assinar. Se omitido, retorna a lista de cargos
-      disponíveis para o usuário escolher (cada órgão tem cargos diferentes).
+      OBRIGATÓRIO. Se omitido, retorna a lista de cargos disponíveis.
     - orgao: código do órgão (usa o padrão se omitido)
     """
     try:
@@ -1917,8 +1918,7 @@ async def sei_assinar_bloco(
 ) -> str:
     """Assina TODOS os documentos de um bloco de assinatura.
 
-    Usa automaticamente as credenciais da sessão autenticada.
-    NÃO peça login ou senha ao usuário.
+    A autenticação é automática — basta informar o bloco e o cargo.
 
     IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
     Se não souber o cargo, chame sem cargo para ver a lista de opções.
@@ -1961,8 +1961,7 @@ async def sei_assinar_documentos_bloco(
 ) -> str:
     """Assina documentos específicos de um bloco de assinatura.
 
-    Usa automaticamente as credenciais da sessão autenticada.
-    NÃO peça login ou senha ao usuário.
+    A autenticação é automática — basta informar os documentos e o cargo.
 
     IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
     Se não souber o cargo, chame sem cargo para ver a lista de opções.
