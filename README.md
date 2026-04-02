@@ -276,57 +276,118 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 
 ## Deploy remoto (Railway)
 
-O servidor pode rodar em modo HTTP para uso via Claude mobile (celular), Claude web ou qualquer cliente MCP remoto. Cada órgão faz seu próprio deploy com suas credenciais.
+O servidor pode rodar em modo HTTP para uso via Claude no celular, na web ou em qualquer cliente MCP remoto. Cada órgão faz seu próprio deploy — as credenciais do SEI são informadas pelo usuário na tela de login OAuth e nunca ficam armazenadas no servidor.
 
-### Pré-requisitos
+### O que é o Railway
 
-- Conta no [Railway](https://railway.com)
-- [Railway CLI](https://docs.railway.com/guides/cli) instalado (`npm install -g @railway/cli`)
+O [Railway](https://railway.com?referralCode=jJJ7Xz) é uma plataforma de deploy na nuvem que facilita colocar aplicações no ar. Você faz push do código e o Railway cuida de build, domínio, SSL e escalabilidade. O plano gratuito (Trial) oferece US$ 5 de crédito, suficiente para testar. O plano Hobby custa US$ 5/mês.
 
-### Passo a passo
+### 1. Criar conta no Railway
 
-**1. Clone e acesse o repositório:**
+1. Acesse [railway.com](https://railway.com?referralCode=jJJ7Xz) e clique em **Sign Up**
+2. Faça login com GitHub, GitLab ou e-mail
+3. Confirme seu e-mail
+
+### 2. Instalar o Railway CLI
+
+**macOS (Homebrew):**
+```bash
+brew install railway
+```
+
+**npm (qualquer plataforma):**
+```bash
+npm install -g @railway/cli
+```
+
+**Verificar instalação:**
+```bash
+railway --version
+```
+
+### 3. Autenticar no terminal
+
+```bash
+railway login
+```
+
+Isso abre o navegador para você autorizar o CLI na sua conta Railway.
+
+### 4. Clonar o repositório
 
 ```bash
 git clone https://github.com/sei-pro/mcp-seipro.git
 cd mcp-seipro
 ```
 
-**2. Crie o projeto no Railway:**
+### 5. Criar o projeto no Railway
 
 ```bash
-railway login
 railway init -n mcp-seipro
+```
+
+Se você tiver mais de um workspace, adicione `--workspace "Nome do Workspace"`.
+
+### 6. Criar o serviço
+
+```bash
 railway add --service mcp-seipro
 ```
 
-**3. Configure as credenciais do SEI:**
+### 7. Configurar variáveis de ambiente
+
+O servidor precisa de duas variáveis obrigatórias:
 
 ```bash
 railway variables set \
-  SEI_URL="https://sei.orgao.gov.br/sei/modulos/wssei/controlador_ws.php/api/v2" \
-  SEI_USUARIO="seu.usuario" \
-  SEI_SENHA="sua-senha" \
-  SEI_ORGAO="0" \
-  SEI_VERIFY_SSL="true"
+  JWT_SECRET="$(openssl rand -base64 48)" \
+  BASE_URL="https://SEU-PROJETO.up.railway.app"
 ```
 
-**4. Gere um domínio e faça o deploy:**
+- **`JWT_SECRET`** — chave para encriptar os tokens OAuth (gerada automaticamente pelo comando acima)
+- **`BASE_URL`** — URL pública do seu servidor (será definida no passo 9)
+
+> **Nota:** as credenciais do SEI (URL, usuário, senha) **não** ficam no servidor. São informadas pelo usuário na tela de login OAuth e encriptadas dentro do token.
+
+### 8. Gerar domínio público
 
 ```bash
 railway domain
+```
+
+Isso gera uma URL como `https://mcp-seipro-production.up.railway.app`. Copie essa URL.
+
+Agora atualize a variável `BASE_URL` com a URL gerada:
+
+```bash
+railway variables set BASE_URL="https://mcp-seipro-production.up.railway.app"
+```
+
+### 9. Fazer o deploy
+
+```bash
 railway up
 ```
 
-**5. Conecte no Claude:**
+Aguarde o build finalizar (2-3 minutos na primeira vez). Ao terminar, verifique:
 
-Vá em [claude.ai](https://claude.ai) → Settings → Connectors → Add Custom Connector e cole a URL:
-
+```bash
+# Deve retornar HTTP 401 (protegido por OAuth)
+curl -s -o /dev/null -w "%{http_code}" -X POST https://SEU-PROJETO.up.railway.app/mcp
 ```
-https://seu-projeto.up.railway.app/mcp
-```
 
-A configuração sincroniza automaticamente com o app mobile e web.
+Se retornar `401`, o servidor está rodando com autenticação ativa.
+
+### 10. Conectar no Claude
+
+1. Acesse [claude.ai](https://claude.ai) → **Settings** → **Connectors**
+2. Clique em **Adicionar conector personalizado**
+3. Cole a URL do seu servidor: `https://SEU-PROJETO.up.railway.app/mcp`
+4. O Claude vai abrir a tela de login do SEI Pro
+5. Preencha a URL da API do SEI, usuário e senha do seu órgão
+6. Clique em **Conectar**
+
+Pronto! A configuração sincroniza automaticamente com o app mobile e a web.
 
 ### Como funciona
 
@@ -335,17 +396,32 @@ O servidor detecta automaticamente o ambiente:
 | Ambiente | Variável `PORT` | Transporte | Uso |
 |----------|-----------------|------------|-----|
 | Local | ausente | stdio | Claude Code / Claude Desktop |
-| Railway | presente (injetada) | Streamable HTTP | Claude mobile / web / remoto |
+| Railway | presente (injetada) | Streamable HTTP + OAuth | Claude mobile / web / remoto |
 
-O `Dockerfile` inclui `tesseract-ocr` para OCR de PDFs escaneados. Se não precisar, comente as linhas de OCR no Dockerfile para reduzir o tamanho da imagem.
+No modo remoto, as credenciais do SEI são encriptadas dentro do token JWT e nunca armazenadas no servidor. O `Dockerfile` inclui `tesseract-ocr` para OCR de PDFs escaneados.
 
 ### Domínio customizado (opcional)
 
 ```bash
-railway domain --custom seu-dominio.gov.br
+railway domain --custom mcp.seu-orgao.gov.br
 ```
 
-Configure o CNAME no DNS do seu órgão apontando para o valor fornecido pelo Railway. O certificado SSL é provisionado automaticamente.
+Configure um registro CNAME no DNS do seu órgão apontando para o valor fornecido pelo Railway. O certificado SSL é provisionado automaticamente.
+
+Lembre-se de atualizar a variável `BASE_URL`:
+```bash
+railway variables set BASE_URL="https://mcp.seu-orgao.gov.br"
+railway up
+```
+
+### Atualizar o servidor
+
+Para atualizar com novas versões do mcp-seipro:
+
+```bash
+git pull
+railway up
+```
 
 ## Requisitos de sistema
 
@@ -362,6 +438,7 @@ Configure o CNAME no DNS do seu órgão apontando para o valor fornecido pelo Ra
 - [SEI Pro](https://sei-pro.github.io/sei-pro/) — Extensão de navegador para o SEI
 - [PyPI](https://pypi.org/project/mcp-seipro/)
 - [Repositório](https://github.com/sei-pro/mcp-seipro)
+- [Railway](https://railway.com?referralCode=jJJ7Xz) — Plataforma de deploy na nuvem
 
 ## Licença
 

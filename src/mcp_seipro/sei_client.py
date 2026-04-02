@@ -14,16 +14,18 @@ logger = logging.getLogger(__name__)
 class SEIClient:
     """Cliente REST assíncrono para qualquer instância do SEI com mod-wssei v2."""
 
-    def __init__(self):
-        self.base_url = os.environ["SEI_URL"].rstrip("/")
-        self._usuario = os.environ["SEI_USUARIO"]
-        self._senha = os.environ["SEI_SENHA"]
-        self._orgao = os.environ.get("SEI_ORGAO", "0")
-        self._contexto = os.environ.get("SEI_CONTEXTO", "")
+    def __init__(self, **kwargs):
+        self.base_url = kwargs.get("sei_url", os.environ.get("SEI_URL", "")).rstrip("/")
+        self._usuario = kwargs.get("sei_usuario", os.environ.get("SEI_USUARIO", ""))
+        self._senha = kwargs.get("sei_senha", os.environ.get("SEI_SENHA", ""))
+        self._orgao = kwargs.get("sei_orgao", os.environ.get("SEI_ORGAO", "0"))
+        self._contexto = kwargs.get("sei_contexto", os.environ.get("SEI_CONTEXTO", ""))
         self._token: Optional[str] = None
         self._unidade_ativa: Optional[str] = None
 
-        verify_ssl = os.environ.get("SEI_VERIFY_SSL", "true").lower() != "false"
+        verify_ssl = kwargs.get("sei_verify_ssl", os.environ.get("SEI_VERIFY_SSL", "true"))
+        if isinstance(verify_ssl, str):
+            verify_ssl = verify_ssl.lower() != "false"
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(120.0, connect=10.0, read=90.0),
             verify=verify_ssl,
