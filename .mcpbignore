@@ -1,0 +1,14 @@
+.venv
+.env
+.git
+.gitignore
+.claude
+.mcpbignore
+__pycache__
+*.pyc
+*.egg-info
+dist/
+build/
+.DS_Store
+setup_claude.py
+docs/

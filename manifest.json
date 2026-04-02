@@ -1,0 +1,87 @@
+{
+  "manifest_version": "0.3",
+  "name": "seipro",
+  "display_name": "SEI Pro",
+  "version": "0.1.0",
+  "description": "64 ferramentas para gerenciar processos, documentos, tramitacao e assinatura no SEI.",
+  "long_description": "Servidor MCP para o Sistema Eletronico de Informacoes (SEI) via API REST mod-wssei v2. Cobre processos, documentos, tramitacao, assinatura, blocos, marcadores e acompanhamento. Funciona com qualquer instancia SEI que tenha o modulo mod-wssei v2.",
+  "author": {
+    "name": "Pedro Soares",
+    "email": "pedro.soares@antaq.gov.br",
+    "url": "https://github.com/ANTAQ/mcp-seipro"
+  },
+  "homepage": "https://github.com/ANTAQ/mcp-seipro",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ANTAQ/mcp-seipro"
+  },
+  "license": "MIT",
+  "icon": "icon.png",
+  "server": {
+    "type": "python",
+    "entry_point": "bootstrap.py",
+    "mcp_config": {
+      "command": "python",
+      "args": ["${__dirname}/bootstrap.py"],
+      "env": {
+        "SEI_URL": "${user_config.sei_url}",
+        "SEI_USUARIO": "${user_config.sei_usuario}",
+        "SEI_SENHA": "${user_config.sei_senha}",
+        "SEI_ORGAO": "${user_config.sei_orgao}",
+        "SEI_VERIFY_SSL": "${user_config.sei_verify_ssl}"
+      }
+    }
+  },
+  "user_config": {
+    "sei_url": {
+      "type": "string",
+      "title": "URL da API do SEI",
+      "description": "URL base da API REST mod-wssei v2 do seu orgao (ex: https://sei.orgao.gov.br/sei/modulos/wssei/controlador_ws.php/api/v2)",
+      "required": true
+    },
+    "sei_usuario": {
+      "type": "string",
+      "title": "Usuario",
+      "description": "Seu usuario de acesso ao SEI",
+      "required": true
+    },
+    "sei_senha": {
+      "type": "string",
+      "title": "Senha",
+      "description": "Sua senha de acesso ao SEI",
+      "sensitive": true,
+      "required": true
+    },
+    "sei_orgao": {
+      "type": "string",
+      "title": "Codigo do orgao",
+      "description": "Codigo do orgao no SEI (use 0 para o orgao principal)",
+      "default": "0",
+      "required": false
+    },
+    "sei_verify_ssl": {
+      "type": "string",
+      "title": "Verificar SSL",
+      "description": "Verificar certificado SSL (true ou false)",
+      "default": "true",
+      "required": false
+    }
+  },
+  "tools": [
+    {"name": "sei_listar_unidades", "description": "Lista unidades acessiveis"},
+    {"name": "sei_trocar_unidade", "description": "Troca a unidade ativa"},
+    {"name": "sei_listar_processos", "description": "Lista processos da caixa da unidade"},
+    {"name": "sei_consultar_processo", "description": "Consulta detalhes de um processo"},
+    {"name": "sei_criar_processo", "description": "Cria novo processo"},
+    {"name": "sei_tramitar_processo", "description": "Tramita processo para outra unidade"},
+    {"name": "sei_ler_documento", "description": "Le o conteudo de um documento"},
+    {"name": "sei_criar_documento", "description": "Cria novo documento em um processo"},
+    {"name": "sei_assinar_documento", "description": "Assina documento digitalmente"}
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  }
+}
