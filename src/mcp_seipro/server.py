@@ -1500,13 +1500,14 @@ async def sei_cancelar_assinatura(
 @mcp.tool()
 async def sei_assinar_documento(
     id_documento: str,
-    login: str = "",
-    senha: str = "",
     cargo: str = "",
     orgao: str = "",
     ctx: Context = None,
 ) -> str:
     """Assina eletronicamente um documento no SEI.
+
+    Usa automaticamente as credenciais (login e senha) da sessão autenticada.
+    NÃO peça login ou senha ao usuário — eles já estão configurados.
 
     IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
     Se não souber o cargo do usuário, chame esta tool sem cargo — ela retornará
@@ -1517,10 +1518,6 @@ async def sei_assinar_documento(
     Parâmetros:
     - id_documento: ID interno do documento ou número SEI (protocoloFormatado).
       Se for número SEI, resolve automaticamente via pesquisa Solr.
-    - login: login do usuário assinante (ex: pedro.soares).
-      Se omitido, usa o login da sessão autenticada.
-    - senha: senha do usuário assinante.
-      Se omitido, usa a senha da sessão autenticada.
     - cargo: cargo/função para assinatura (ex: "Agente Público").
       OBRIGATÓRIO para assinar. Se omitido, retorna a lista de cargos
       disponíveis para o usuário escolher (cada órgão tem cargos diferentes).
@@ -1528,10 +1525,8 @@ async def sei_assinar_documento(
     """
     try:
         client = _get_client(ctx)
-
-        # Usar credenciais da sessão se não informados
-        login = login or client._usuario
-        senha = senha or client._senha
+        login = client._usuario
+        senha = client._senha
 
         # Resolver número SEI → id interno se necessário
         doc_id = id_documento.strip()
@@ -1917,26 +1912,25 @@ async def sei_criar_documento_externo(
 @mcp.tool()
 async def sei_assinar_bloco(
     id_bloco: str,
-    login: str = "",
-    senha: str = "",
     cargo: str = "",
     ctx: Context = None,
 ) -> str:
     """Assina TODOS os documentos de um bloco de assinatura.
+
+    Usa automaticamente as credenciais da sessão autenticada.
+    NÃO peça login ou senha ao usuário.
 
     IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
     Se não souber o cargo, chame sem cargo para ver a lista de opções.
     Pergunte ao usuário e grave o cargo para reutilizar na mesma conversa.
 
     - id_bloco: ID do bloco
-    - login: login do assinante (se omitido, usa o login da sessão)
-    - senha: senha do assinante (se omitido, usa a senha da sessão)
     - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
     """
     try:
         client = _get_client(ctx)
-        login = login or client._usuario
-        senha = senha or client._senha
+        login = client._usuario
+        senha = client._senha
         if not cargo:
             try:
                 resp = await client._request("GET", "/assinante/listar")
@@ -1962,26 +1956,25 @@ async def sei_assinar_bloco(
 @mcp.tool()
 async def sei_assinar_documentos_bloco(
     documentos: str,
-    login: str = "",
-    senha: str = "",
     cargo: str = "",
     ctx: Context = None,
 ) -> str:
     """Assina documentos específicos de um bloco de assinatura.
+
+    Usa automaticamente as credenciais da sessão autenticada.
+    NÃO peça login ou senha ao usuário.
 
     IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
     Se não souber o cargo, chame sem cargo para ver a lista de opções.
     Pergunte ao usuário e grave o cargo para reutilizar na mesma conversa.
 
     - documentos: ID(s) de documento(s) separados por vírgula
-    - login: login do assinante (se omitido, usa o login da sessão)
-    - senha: senha do assinante (se omitido, usa a senha da sessão)
     - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
     """
     try:
         client = _get_client(ctx)
-        login = login or client._usuario
-        senha = senha or client._senha
+        login = client._usuario
+        senha = client._senha
         if not cargo:
             try:
                 resp = await client._request("GET", "/assinante/listar")
