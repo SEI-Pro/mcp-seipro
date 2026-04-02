@@ -44,6 +44,19 @@ O script pergunta suas credenciais, instala o pacote e configura o Claude Deskto
 | `SEI_VERIFY_SSL` | Não | `true` (padrão) ou `false` |
 | `SEI_OCR_LANG` | Não | Idioma do OCR (padrão: `por`) |
 
+> **Dica: como obter `SEI_URL` e `SEI_ORGAO` direto pelo SEI**
+>
+> Na barra lateral do SEI (menu à esquerda), role até o final — você verá um QR Code para o aplicativo móvel. Esse QR Code contém um link com todas as informações necessárias:
+>
+> ```
+> https://sei.orgao.gov.br/sei/modulos/wssei/controlador_ws.php/api/v2;siglaorgao: ORGAO;orgao: 0;contexto:
+> ```
+>
+> - **`SEI_URL`** — a URL antes do `;` (ex: `https://sei.orgao.gov.br/sei/modulos/wssei/controlador_ws.php/api/v2`)
+> - **`SEI_ORGAO`** — o valor após `orgao:` (ex: `0`)
+>
+> Você pode escanear o QR Code com a câmera do celular para copiar o link, ou simplesmente anotar os dados a partir do menu.
+
 ### Registro no Claude Code
 
 Adicione ao `.mcp.json` do projeto ou `~/.claude.json` (global):
@@ -83,6 +96,32 @@ Edite `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
   }
 }
 ```
+
+## Exemplos de uso
+
+Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural:
+
+### Consultas
+
+- *"O que diz o processo 50300.018905/2018-67?"*
+- *"Leia o documento SEI 2843449 e me faça um resumo"*
+- *"Qual foi o último andamento do processo de Auditoria TCU que está na unidade GPF?"*
+- *"Liste para mim os processos da caixa GPF no SEI"*
+- *"Quais processos estão atribuídos a mim na unidade SFC?"*
+
+### Ações
+
+- *"Crie um despacho no processo 50300.001234/2024-01 aprovando o pedido"*
+- *"Tramite o processo 50300.005678/2024-02 para a unidade SFC com prazo de 5 dias"*
+- *"Assine todos os documentos do bloco de assinatura 'Contratos Março'"*
+- *"Marque o processo como acompanhamento especial com o grupo 'Urgentes'"*
+- *"Crie um marcador vermelho chamado 'Pendente Resposta' e aplique no processo"*
+
+### Análise
+
+- *"Me dê um resumo dos processos da minha caixa agrupados por tipo"*
+- *"Quais processos da unidade GPF estão sem movimentação há mais de 30 dias?"*
+- *"Compare o conteúdo dos documentos 2843449 e 2843450"*
 
 ## Tools disponíveis (64)
 
@@ -234,6 +273,79 @@ Edite `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
 **Notas Técnicas:** `Item_Nivel1/2/3/4` (H1/H2/H3/H4), `Item_Alinea_Letra` (a, b, c), `Item_Inciso_Romano` (I, II, III)
 
 **Regra:** toda numeração usa classes CSS, nunca texto manual.
+
+## Deploy remoto (Railway)
+
+O servidor pode rodar em modo HTTP para uso via Claude mobile (celular), Claude web ou qualquer cliente MCP remoto. Cada órgão faz seu próprio deploy com suas credenciais.
+
+### Pré-requisitos
+
+- Conta no [Railway](https://railway.com)
+- [Railway CLI](https://docs.railway.com/guides/cli) instalado (`npm install -g @railway/cli`)
+
+### Passo a passo
+
+**1. Clone e acesse o repositório:**
+
+```bash
+git clone https://github.com/sei-pro/mcp-seipro.git
+cd mcp-seipro
+```
+
+**2. Crie o projeto no Railway:**
+
+```bash
+railway login
+railway init -n mcp-seipro
+railway add --service mcp-seipro
+```
+
+**3. Configure as credenciais do SEI:**
+
+```bash
+railway variables set \
+  SEI_URL="https://sei.orgao.gov.br/sei/modulos/wssei/controlador_ws.php/api/v2" \
+  SEI_USUARIO="seu.usuario" \
+  SEI_SENHA="sua-senha" \
+  SEI_ORGAO="0" \
+  SEI_VERIFY_SSL="true"
+```
+
+**4. Gere um domínio e faça o deploy:**
+
+```bash
+railway domain
+railway up
+```
+
+**5. Conecte no Claude:**
+
+Vá em [claude.ai](https://claude.ai) → Settings → Connectors → Add Custom Connector e cole a URL:
+
+```
+https://seu-projeto.up.railway.app/mcp
+```
+
+A configuração sincroniza automaticamente com o app mobile e web.
+
+### Como funciona
+
+O servidor detecta automaticamente o ambiente:
+
+| Ambiente | Variável `PORT` | Transporte | Uso |
+|----------|-----------------|------------|-----|
+| Local | ausente | stdio | Claude Code / Claude Desktop |
+| Railway | presente (injetada) | Streamable HTTP | Claude mobile / web / remoto |
+
+O `Dockerfile` inclui `tesseract-ocr` para OCR de PDFs escaneados. Se não precisar, comente as linhas de OCR no Dockerfile para reduzir o tamanho da imagem.
+
+### Domínio customizado (opcional)
+
+```bash
+railway domain --custom seu-dominio.gov.br
+```
+
+Configure o CNAME no DNS do seu órgão apontando para o valor fornecido pelo Railway. O certificado SSL é provisionado automaticamente.
 
 ## Requisitos de sistema
 
