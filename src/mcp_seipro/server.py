@@ -3,10 +3,12 @@
 import base64
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.transport_security import TransportSecuritySettings
 
 from mcp_seipro.sei_client import SEIClient
 from mcp_seipro.html_utils import (
@@ -23,18 +25,79 @@ logger = logging.getLogger(__name__)
 
 MAX_BINARY_SIZE = 10 * 1024 * 1024  # 10 MB
 
+# Detecta modo HTTP (Railway injeta PORT)
+_http_mode = bool(os.environ.get("PORT"))
+_http_port = int(os.environ.get("PORT", 8000))
+
 
 @asynccontextmanager
 async def lifespan(server: FastMCP):
-    client = SEIClient()
-    try:
-        yield {"sei": client}
-    finally:
-        await client.close()
+    if _http_mode:
+        # Modo HTTP: SEIClient criado por request com credenciais do token OAuth
+        yield {"sei": None}
+    else:
+        # Modo stdio: SEIClient com credenciais das env vars
+        client = SEIClient()
+        try:
+            yield {"sei": client}
+        finally:
+            await client.close()
 
+
+def _get_client(ctx: Context) -> SEIClient:
+    """Obtém o SEIClient, criando sob demanda em modo HTTP."""
+    client = ctx.request_context.lifespan_context.get("sei")
+    if client is not None:
+        return client
+
+    # Modo HTTP: extrai credenciais do token OAuth
+    if _http_mode:
+        from mcp.server.auth.middleware.auth_context import get_access_token
+        from mcp_seipro.auth import get_sei_credentials_from_token
+
+        access_token = get_access_token()
+        if not access_token:
+            raise ValueError("Autenticacao necessaria. Reconecte o MCP.")
+
+        creds = get_sei_credentials_from_token(access_token.token)
+        if not creds:
+            raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
+
+        client = SEIClient(**creds)
+        ctx.request_context.lifespan_context["sei"] = client
+        return client
+
+    raise ValueError("SEIClient nao configurado. Verifique as variaveis de ambiente.")
+
+
+_http_kwargs = {}
+if _http_mode:
+    from pydantic import AnyHttpUrl
+    from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
+    from mcp_seipro.auth import SEIProOAuthProvider
+
+    _base_url = os.environ.get("BASE_URL", f"http://localhost:{_http_port}")
+    _provider = SEIProOAuthProvider()
+
+    _http_kwargs = {
+        "host": "0.0.0.0",
+        "port": _http_port,
+        "stateless_http": True,
+        "transport_security": TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        ),
+        "auth": AuthSettings(
+            issuer_url=AnyHttpUrl(_base_url),
+            resource_server_url=AnyHttpUrl(f"{_base_url}/mcp"),
+            client_registration_options=ClientRegistrationOptions(enabled=True),
+            revocation_options=RevocationOptions(enabled=True),
+        ),
+        "auth_server_provider": _provider,
+    }
 
 mcp = FastMCP(
     "sei",
+    **_http_kwargs,
     instructions=(
         "MCP Server para o SEI (Sistema Eletrônico de Informações). "
         "Permite gerenciar processos, documentos, tramitação e assinatura. "
@@ -74,10 +137,6 @@ mcp = FastMCP(
     ),
     lifespan=lifespan,
 )
-
-
-def _get_client(ctx: Context) -> SEIClient:
-    return ctx.request_context.lifespan_context["sei"]
 
 
 async def _resolver_processo(client: SEIClient, referencia: str) -> str:
@@ -1441,29 +1500,38 @@ async def sei_cancelar_assinatura(
 @mcp.tool()
 async def sei_assinar_documento(
     id_documento: str,
-    login: str,
-    senha: str,
+    login: str = "",
+    senha: str = "",
     cargo: str = "",
     orgao: str = "",
     ctx: Context = None,
 ) -> str:
     """Assina eletronicamente um documento no SEI.
 
+    IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
+    Se não souber o cargo do usuário, chame esta tool sem cargo — ela retornará
+    a lista de cargos disponíveis. Pergunte ao usuário qual cargo usar e então
+    chame novamente com o cargo escolhido. Grave o cargo escolhido para usar
+    nas próximas assinaturas da mesma conversa sem perguntar novamente.
+
     Parâmetros:
     - id_documento: ID interno do documento ou número SEI (protocoloFormatado).
       Se for número SEI, resolve automaticamente via pesquisa Solr.
-    - login: login do usuário assinante (ex: pedro.soares)
-    - senha: senha do usuário assinante
+    - login: login do usuário assinante (ex: pedro.soares).
+      Se omitido, usa o login da sessão autenticada.
+    - senha: senha do usuário assinante.
+      Se omitido, usa a senha da sessão autenticada.
     - cargo: cargo/função para assinatura (ex: "Agente Público").
-      Se omitido, retorna a lista de cargos disponíveis para o usuário
-      escolher (cada órgão tem cargos diferentes).
+      OBRIGATÓRIO para assinar. Se omitido, retorna a lista de cargos
+      disponíveis para o usuário escolher (cada órgão tem cargos diferentes).
     - orgao: código do órgão (usa o padrão se omitido)
-
-    Use /assinante/listar para ver os cargos disponíveis.
-    Na maioria dos órgãos, o cargo padrão é "Agente Público".
     """
     try:
         client = _get_client(ctx)
+
+        # Usar credenciais da sessão se não informados
+        login = login or client._usuario
+        senha = senha or client._senha
 
         # Resolver número SEI → id interno se necessário
         doc_id = id_documento.strip()
@@ -1486,7 +1554,9 @@ async def sei_assinar_documento(
                 "error": "Cargo/Função não informado — é obrigatório para assinatura.",
                 "cargos_disponiveis": cargos,
                 "dica": "Pergunte ao usuário qual cargo/função usar para assinar. "
-                        "Os cargos disponíveis estão listados acima.",
+                        "Os cargos disponíveis estão listados acima. "
+                        "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
+                        "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
             })
 
         # Buscar id_usuario
@@ -1847,20 +1917,26 @@ async def sei_criar_documento_externo(
 @mcp.tool()
 async def sei_assinar_bloco(
     id_bloco: str,
-    login: str,
-    senha: str,
+    login: str = "",
+    senha: str = "",
     cargo: str = "",
     ctx: Context = None,
 ) -> str:
     """Assina TODOS os documentos de um bloco de assinatura.
 
+    IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
+    Se não souber o cargo, chame sem cargo para ver a lista de opções.
+    Pergunte ao usuário e grave o cargo para reutilizar na mesma conversa.
+
     - id_bloco: ID do bloco
-    - login: login do assinante
-    - senha: senha do assinante
-    - cargo: cargo/função (se omitido, lista opções disponíveis)
+    - login: login do assinante (se omitido, usa o login da sessão)
+    - senha: senha do assinante (se omitido, usa a senha da sessão)
+    - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
     """
     try:
         client = _get_client(ctx)
+        login = login or client._usuario
+        senha = senha or client._senha
         if not cargo:
             try:
                 resp = await client._request("GET", "/assinante/listar")
@@ -1871,7 +1947,9 @@ async def sei_assinar_bloco(
             return _json({
                 "error": "Cargo/Função não informado.",
                 "cargos_disponiveis": cargos,
-                "dica": "Pergunte ao usuário qual cargo usar.",
+                "dica": "Pergunte ao usuário qual cargo usar. "
+                        "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
+                        "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
             })
         result = await client.assinar_bloco(
             id_bloco=id_bloco, login=login, senha=senha, cargo=cargo,
@@ -1884,20 +1962,26 @@ async def sei_assinar_bloco(
 @mcp.tool()
 async def sei_assinar_documentos_bloco(
     documentos: str,
-    login: str,
-    senha: str,
+    login: str = "",
+    senha: str = "",
     cargo: str = "",
     ctx: Context = None,
 ) -> str:
     """Assina documentos específicos de um bloco de assinatura.
 
+    IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
+    Se não souber o cargo, chame sem cargo para ver a lista de opções.
+    Pergunte ao usuário e grave o cargo para reutilizar na mesma conversa.
+
     - documentos: ID(s) de documento(s) separados por vírgula
-    - login: login do assinante
-    - senha: senha do assinante
-    - cargo: cargo/função (se omitido, lista opções disponíveis)
+    - login: login do assinante (se omitido, usa o login da sessão)
+    - senha: senha do assinante (se omitido, usa a senha da sessão)
+    - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
     """
     try:
         client = _get_client(ctx)
+        login = login or client._usuario
+        senha = senha or client._senha
         if not cargo:
             try:
                 resp = await client._request("GET", "/assinante/listar")
@@ -1908,7 +1992,9 @@ async def sei_assinar_documentos_bloco(
             return _json({
                 "error": "Cargo/Função não informado.",
                 "cargos_disponiveis": cargos,
-                "dica": "Pergunte ao usuário qual cargo usar.",
+                "dica": "Pergunte ao usuário qual cargo usar. "
+                        "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
+                        "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
             })
         result = await client.assinar_documentos_bloco(
             login=login, senha=senha, cargo=cargo, documentos=documentos,
@@ -2317,4 +2403,57 @@ async def sei_criar_anotacao(
 
 
 def main():
-    mcp.run(transport="stdio")
+    if _http_mode:
+        import uvicorn
+        from pathlib import Path
+        from starlette.routing import Route
+        from starlette.responses import Response
+
+        from mcp_seipro.auth import login_page, login_submit
+
+        # Favicon / ícone do SEI Pro — busca em vários locais possíveis
+        _icon_bytes = b""
+        for _candidate in [
+            Path(__file__).resolve().parent.parent.parent / "icon.png",  # dev: repo root
+            Path("/app/icon.png"),  # Docker
+        ]:
+            if _candidate.exists():
+                _icon_bytes = _candidate.read_bytes()
+                break
+
+        from starlette.responses import HTMLResponse
+
+        async def favicon(request):
+            return Response(_icon_bytes, media_type="image/png",
+                            headers={"Cache-Control": "public, max-age=86400"})
+
+        _base = os.environ.get("BASE_URL", f"http://localhost:{_http_port}")
+        _root_html = f"""<!DOCTYPE html>
+<html><head>
+<link rel="icon" type="image/png" href="{_base}/favicon.ico">
+<link rel="icon" type="image/png" sizes="128x128" href="{_base}/icon.png">
+<link rel="apple-touch-icon" href="{_base}/icon.png">
+<title>SEI Pro MCP Server</title>
+</head><body><h1>SEI Pro MCP Server</h1></body></html>"""
+
+        async def root_page(request):
+            return HTMLResponse(_root_html)
+
+        app = mcp.streamable_http_app()
+        # Adiciona rotas extras
+        app.routes.insert(0, Route("/", root_page, methods=["GET"]))
+        app.routes.insert(1, Route("/favicon.ico", favicon, methods=["GET"]))
+        app.routes.insert(2, Route("/icon.png", favicon, methods=["GET"]))
+        app.routes.insert(3, Route("/login", login_page, methods=["GET"]))
+        app.routes.insert(4, Route("/login", login_submit, methods=["POST"]))
+
+        config = uvicorn.Config(
+            app,
+            host="0.0.0.0",
+            port=_http_port,
+            log_level="info",
+        )
+        import anyio
+        anyio.run(uvicorn.Server(config).serve)
+    else:
+        mcp.run(transport="stdio")
