@@ -23,6 +23,9 @@ env/
 *.swo
 .DS_Store
 
+# Docs internos
+docs/
+
 # Claude Code
 .claude/
 
