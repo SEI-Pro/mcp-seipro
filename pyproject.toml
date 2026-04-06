@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-seipro"
-version = "0.1.0"
-description = "MCP server for SEI (Sistema Eletronico de Informacoes) - mod-wssei v2 REST API"
+version = "0.2.0"
+description = "MCP server for SEI (Sistema Eletronico de Informacoes) - 116 tools for mod-wssei v2 REST API"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
