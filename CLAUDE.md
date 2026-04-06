@@ -3,7 +3,7 @@
 ## O que é
 
 MCP Server genérico para o SEI (Sistema Eletrônico de Informações) via API REST mod-wssei v2.
-64 tools cobrindo processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento.
+~115 tools cobrindo processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais.
 Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 
 ## Stack
@@ -14,7 +14,7 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 
 ## Arquivos principais
 
-- `src/mcp_seipro/server.py` — FastMCP server com 64 tools + helpers (_resolver_documento, _resolver_processo)
+- `src/mcp_seipro/server.py` — FastMCP server com ~115 tools + helpers (_resolver_documento, _resolver_processo)
 - `src/mcp_seipro/sei_client.py` — Cliente REST assíncrono para mod-wssei v2 (auth automática, auto-reauth 401/403)
 - `src/mcp_seipro/html_utils.py` — html_to_text, html_to_markdown, pdf_to_text, pdf_to_markdown (com OCR fallback), sanitize_iso8859
 - `src/mcp_seipro/sei_styles.py` — Dicionário de 39 estilos CSS do SEI + helpers (html_referencia_sei, html_destinatario)
@@ -39,6 +39,20 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - Destinatário: `Texto_Alinhado_Esquerda` com span `ancoraSei interessadoSeiPro data-id`
 - Referências SEI: span `ancoraSei` com `id="lnkSei{id_documento}"`
 - `sei_editar_secao` preenche seções somenteLeitura automaticamente
+
+### Compatibilidade de versão do mod-wssei
+- **Todos os ~116 endpoints existem desde o mod-wssei 2.0.0** (SEI 4.0.x)
+- Única exceção: `sei_listar_relacionamentos` (`GET /processo/{id}/relacionamentos`) requer **mod-wssei 3.0.2+** (SEI 5.0.x)
+- Tabela de compatibilidade SEI ↔ mod-wssei:
+  - SEI 4.0.x → mod-wssei 2.0.x (131 endpoints)
+  - SEI 4.1.1 → mod-wssei 2.2.0 (131 endpoints, correções de bugs)
+  - SEI 5.0.x → mod-wssei 3.0.1 (131 endpoints, compat PHP 8.2)
+  - SEI 5.0.x → mod-wssei 3.0.2 (132 endpoints, +relacionamentos)
+- Diferenças entre versões são majoritariamente correções de bugs e encoding, não endpoints novos
+- v3.0.x corrigiu `iconv()` → `mb_convert_encoding()` para compatibilidade PHP 8.2
+- v3.0.2 adicionou campo `dataHora` na resposta de `listar_assinaturas`
+- Se um endpoint falhar com erro inesperado, usar `sei_versao` para verificar a versão instalada
+- Funcionalidades que dependem do core SEI (ex: credenciamento) podem não funcionar se o órgão não habilitou processos sigilosos
 
 ### Limitações conhecidas
 - Cancelar assinatura: a função `DocumentoRN::cancelarAssinaturaInternoControlado` existe no core SEI (linha 4026) mas NÃO está exposta na API REST
