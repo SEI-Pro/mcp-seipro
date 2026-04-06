@@ -6,7 +6,7 @@
 
 MCP Server do **[SEI Pro](https://sei-pro.github.io/sei-pro/)** para o SEI (Sistema Eletrônico de Informações) via API REST mod-wssei v2.
 
-64 tools para gerenciar processos, documentos, tramitação, assinatura, blocos, marcadores e acompanhamento em qualquer instância do SEI.
+**116 tools** para gerenciar processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais em qualquer instância do SEI. Cobertura completa da API mod-wssei v2 oficial ([pengovbr/mod-wssei](https://github.com/pengovbr/mod-wssei)).
 
 ## Instalação
 
@@ -123,18 +123,29 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 - *"Quais processos da unidade GPF estão sem movimentação há mais de 30 dias?"*
 - *"Compare o conteúdo dos documentos 2843449 e 2843450"*
 
-## Tools disponíveis (64)
+## Tools disponíveis (116)
 
-### Navegação e contexto (4)
+### Sistema e metadados (3)
+
+| Tool | Descrição |
+|------|-----------|
+| `sei_versao` | Retorna versão do SEI e do mod-wssei instalado |
+| `sei_listar_orgaos` | Lista órgãos da instalação do SEI |
+| `sei_listar_contextos` | Lista contextos disponíveis para um órgão |
+
+### Navegação e contexto (7)
 
 | Tool | Descrição |
 |------|-----------|
 | `sei_listar_unidades` | Lista unidades acessíveis pelo usuário |
 | `sei_trocar_unidade` | Troca a unidade ativa |
 | `sei_pesquisar_unidades` | Pesquisa unidades por nome/sigla |
+| `sei_pesquisar_outras_unidades` | Pesquisa unidades excluindo a atual |
+| `sei_pesquisar_textos_padrao` | Pesquisa textos padrão internos da unidade |
 | `sei_listar_usuarios` | Lista usuários (filtra por unidade ativa e nome) |
+| `sei_pesquisar_usuarios` | Busca usuários por palavra-chave no órgão |
 
-### Processos — consulta (5)
+### Processos — consulta (11)
 
 | Tool | Descrição |
 |------|-----------|
@@ -143,8 +154,14 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 | `sei_consultar_processo` | Consulta processo pelo protocolo formatado |
 | `sei_resumo_processos` | Resumo agrupado por 17 campos |
 | `sei_listar_unidades_processo` | Lista unidades onde o processo está aberto |
+| `sei_consultar_atribuicao` | Consulta quem é responsável pelo processo |
+| `sei_verificar_acesso` | Verifica se o usuário tem acesso ao processo |
+| `sei_listar_relacionamentos` | Lista processos relacionados (mod-wssei 3.0.2+) |
+| `sei_listar_atividades` | Histórico completo de atividades/andamentos |
+| `sei_listar_interessados` | Lista interessados do processo |
+| `sei_listar_sobrestamentos` | Lista histórico de sobrestamentos |
 
-### Processos — gestão (14)
+### Processos — gestão (13)
 
 | Tool | Descrição |
 |------|-----------|
@@ -161,9 +178,24 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 | `sei_remover_sobrestamento` | Remove sobrestamento |
 | `sei_pesquisar_tipos_processo` | Pesquisa tipos de processo |
 | `sei_pesquisar_hipoteses_legais` | Pesquisa hipóteses legais (restrito/sigiloso) |
-| `sei_listar_interessados` | Lista interessados do processo |
 
-### Documentos — leitura (7)
+### Processos — assuntos (2)
+
+| Tool | Descrição |
+|------|-----------|
+| `sei_pesquisar_assuntos` | Pesquisa assuntos disponíveis |
+| `sei_sugestao_assuntos_processo` | Sugestões de assunto para um tipo de processo |
+
+### Processos sigilosos — credenciamento (4)
+
+| Tool | Descrição |
+|------|-----------|
+| `sei_listar_credenciamentos` | Lista credenciamentos de acesso ao processo |
+| `sei_conceder_credenciamento` | Concede acesso a um usuário |
+| `sei_renunciar_credenciamento` | Renuncia ao próprio acesso |
+| `sei_cassar_credenciamento` | Revoga acesso de um usuário |
+
+### Documentos — leitura (8)
 
 | Tool | Descrição |
 |------|-----------|
@@ -172,15 +204,18 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 | `sei_listar_documentos` | Lista documentos de um processo |
 | `sei_ler_documento` | Lê documento (HTML ou PDF/OCR) em Markdown |
 | `sei_baixar_anexo` | Baixa documento externo em base64 (max 10MB) |
-| `sei_pesquisar_tipos_documento` | Pesquisa tipos de documento (séries) |
+| `sei_consultar_documento_externo` | Consulta metadados de documento externo |
 | `sei_listar_assinaturas` | Lista assinaturas de um documento |
+| `sei_listar_blocos_documento` | Lista blocos de assinatura do documento |
 
-### Documentos — escrita (8)
+### Documentos — escrita (10)
 
 | Tool | Descrição |
 |------|-----------|
 | `sei_criar_documento` | Cria documento interno vazio |
 | `sei_criar_documento_externo` | Cria documento externo com upload de arquivo |
+| `sei_alterar_documento_interno` | Altera metadados de documento interno |
+| `sei_alterar_documento_externo` | Altera metadados/arquivo de documento externo |
 | `sei_listar_secoes` | Lista seções editáveis de um documento |
 | `sei_editar_secao` | Altera conteúdo HTML (preenche somenteLeitura auto) |
 | `sei_assinar_documento` | Assinatura eletrônica |
@@ -188,66 +223,129 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 | `sei_gerar_referencia` | Gera hiperlink dinâmico para documento citado |
 | `sei_estilos` | Consulta dicionário de 39 estilos CSS do SEI |
 
-### Ciência e andamento (4)
+### Documentos — tipos e modelos (7)
+
+| Tool | Descrição |
+|------|-----------|
+| `sei_pesquisar_tipos_documento` | Pesquisa tipos de documento (séries) |
+| `sei_pesquisar_tipos_documento_externo` | Tipos aplicáveis a documentos externos |
+| `sei_pesquisar_tipos_conferencia` | Tipos de conferência (cópia, original, autenticada) |
+| `sei_sugestao_assuntos_documento` | Sugestões de assunto para um tipo de documento |
+| `sei_listar_grupos_modelos` | Lista grupos de modelos de documento |
+| `sei_listar_modelos` | Lista modelos de documento disponíveis |
+| `sei_parametros_upload` | Extensões/tamanhos permitidos para upload |
+
+### Assinantes (2)
+
+| Tool | Descrição |
+|------|-----------|
+| `sei_listar_assinantes` | Lista cargos/funções para assinatura |
+| `sei_listar_orgaos_assinante` | Lista órgãos disponíveis para assinatura |
+
+### Ciência e andamento (3)
 
 | Tool | Descrição |
 |------|-----------|
 | `sei_dar_ciencia` | Dá ciência em documento ou processo |
 | `sei_listar_ciencias` | Lista ciências registradas |
 | `sei_registrar_andamento` | Registra andamento/atividade no processo |
-| `sei_listar_sobrestamentos` | Lista histórico de sobrestamentos |
 
-### Anotação (1)
+### Anotação e observação (2)
 
 | Tool | Descrição |
 |------|-----------|
-| `sei_criar_anotacao` | Cria anotação (post-it) no processo |
+| `sei_criar_anotacao` | Cria anotação (post-it) individual no processo |
+| `sei_criar_observacao` | Cria observação da unidade no processo |
 
-### Contato (1)
+### Contatos (2)
 
 | Tool | Descrição |
 |------|-----------|
 | `sei_pesquisar_contatos` | Pesquisa contatos cadastrados |
+| `sei_criar_contato` | Cria novo contato |
 
-### Marcador (5)
+### Marcador (8)
 
 | Tool | Descrição |
 |------|-----------|
 | `sei_criar_marcador` | Cria marcador (lista cores se omitida) |
 | `sei_excluir_marcador` | Exclui marcador(es) |
+| `sei_desativar_marcador` | Desativa marcador(es) sem excluir |
+| `sei_reativar_marcador` | Reativa marcador(es) desativados |
 | `sei_marcar_processo` | Adiciona marcador a um processo |
 | `sei_pesquisar_marcadores` | Lista marcadores disponíveis |
 | `sei_consultar_marcador_processo` | Consulta marcadores ativos de um processo |
+| `sei_historico_marcador_processo` | Histórico de marcadores do processo |
 
-### Acompanhamento especial (5)
+### Acompanhamento especial (8)
 
 | Tool | Descrição |
 |------|-----------|
 | `sei_acompanhar_processo` | Adiciona acompanhamento especial |
+| `sei_alterar_acompanhamento` | Altera acompanhamento existente |
 | `sei_remover_acompanhamento` | Remove acompanhamento |
+| `sei_listar_meus_acompanhamentos` | Lista processos acompanhados pelo usuário |
+| `sei_listar_acompanhamentos_unidade` | Lista acompanhamentos da unidade |
 | `sei_listar_grupos_acompanhamento` | Lista grupos de acompanhamento |
 | `sei_criar_grupo_acompanhamento` | Cria grupo de acompanhamento |
 | `sei_excluir_grupo_acompanhamento` | Exclui grupo de acompanhamento |
 
-### Bloco interno (3)
+### Bloco interno (10)
 
 | Tool | Descrição |
 |------|-----------|
 | `sei_criar_bloco_interno` | Cria bloco interno |
+| `sei_alterar_bloco_interno` | Altera descrição do bloco |
+| `sei_excluir_bloco_interno` | Exclui bloco(s) |
+| `sei_concluir_bloco_interno` | Conclui bloco(s) |
+| `sei_reabrir_bloco_interno` | Reabre bloco concluído |
 | `sei_incluir_processo_bloco_interno` | Inclui processo(s) no bloco |
 | `sei_retirar_processo_bloco_interno` | Remove processo(s) do bloco |
+| `sei_listar_processos_bloco_interno` | Lista processos do bloco |
+| `sei_anotar_processo_bloco_interno` | Cria anotação em processo do bloco |
+| `sei_alterar_anotacao_bloco_interno` | Altera anotação do bloco |
 
-### Bloco de assinatura (7)
+### Bloco de assinatura (16)
 
 | Tool | Descrição |
 |------|-----------|
 | `sei_criar_bloco_assinatura` | Cria bloco (aceita sigla de unidades) |
+| `sei_alterar_bloco_assinatura` | Altera descrição do bloco |
+| `sei_excluir_bloco_assinatura` | Exclui bloco(s) |
+| `sei_concluir_bloco_assinatura` | Conclui bloco(s) |
+| `sei_reabrir_bloco_assinatura` | Reabre bloco concluído |
+| `sei_retornar_bloco_assinatura` | Retorna bloco para unidade de origem |
 | `sei_incluir_documento_bloco_assinatura` | Inclui documento(s) no bloco |
+| `sei_retirar_documentos_bloco_assinatura` | Remove documento(s) do bloco |
+| `sei_listar_documentos_bloco_assinatura` | Lista documentos do bloco |
 | `sei_disponibilizar_bloco_assinatura` | Disponibiliza bloco para assinatura |
 | `sei_cancelar_disponibilizacao_bloco` | Cancela disponibilização |
 | `sei_pesquisar_blocos_assinatura` | Pesquisa blocos existentes |
 | `sei_assinar_bloco` | Assina todos os documentos de um bloco |
 | `sei_assinar_documentos_bloco` | Assina documentos específicos de um bloco |
+| `sei_anotar_documento_bloco_assinatura` | Cria anotação em documento do bloco |
+| `sei_alterar_anotacao_bloco_assinatura` | Altera anotação do bloco |
+
+## Compatibilidade com versões do SEI
+
+Todos os **116 endpoints funcionam desde o mod-wssei 2.0.0** (SEI 4.0.x), exceto um:
+
+| Tool | Versão mínima |
+|------|---------------|
+| `sei_listar_relacionamentos` | mod-wssei **3.0.2+** (SEI 5.0.x) |
+
+Tabela de compatibilidade SEI ↔ mod-wssei:
+
+| Versão SEI | mod-wssei | Observações |
+|---|---|---|
+| 4.0.x | 2.0.x | Base completa (131 rotas) |
+| 4.1.1 | 2.2.0 | Correções de bugs |
+| 5.0.x | 3.0.1 | Compatibilidade PHP 8.2 |
+| 5.0.x | **3.0.2** | +`relacionamentos`, +`dataHora` em assinaturas |
+
+Se algum endpoint falhar com erro inesperado, use `sei_versao` para verificar a versão do mod-wssei instalada na sua instância do SEI.
+
+> **Nota:** a API mod-wssei v2 não expõe endpoint para **cancelar assinatura** de documentos em nenhuma versão (verificado até v3.0.2). A função existe no core do SEI (`DocumentoRN::cancelarAssinaturaInternoControlado`) mas não está exposta via REST. O `sei_cancelar_assinatura` usa o workaround de forçar uma edição mínima no documento.
 
 ## Funcionalidades
 

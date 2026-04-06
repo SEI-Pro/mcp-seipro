@@ -4,7 +4,7 @@
 
 Criar um ecossistema completo em torno do SEI composto por:
 
-1. **mcp-sei** (Open Source) — MCP Server com 64 tools (já pronto)
+1. **mcp-sei** (Open Source) — MCP Server com 116 tools (já pronto)
 2. **SEI Nova Interface** — App web (React/Next.js) + Mobile (iOS/Android) com design moderno e responsivo
 3. **Agente IA integrado** — Sidebar com chat IA (mcp-sei embutido) que executa ações no SEI via conversa
 4. **mcp-sei Cloud** — Versão SaaS hospedada do MCP
@@ -25,7 +25,7 @@ Criar um ecossistema completo em torno do SEI composto por:
 ### 1.2 Landing Page
 
 - Site simples (GitHub Pages ou Vercel) com:
-  - Demonstração das 64 tools
+  - Demonstração das 116 tools
   - Guia de instalação em 3 passos
   - Vídeo demo de uso no Claude Code
   - Lista de órgãos compatíveis
