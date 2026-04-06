@@ -68,6 +68,36 @@ class SEIClient:
         logger.info("Autenticação SEI bem-sucedida")
         return self._token
 
+    # ------------------------------------------------------------------
+    # Sistema — versão, órgãos, contextos
+    # Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    # Podem não existir em instalações mais antigas.
+    # ------------------------------------------------------------------
+
+    async def versao(self) -> dict:
+        """Retorna versão do SEI e do módulo wssei."""
+        resp = await self._request("GET", "/versao")
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao obter versão: {data.get('mensagem')}")
+        return data.get("data", {})
+
+    async def listar_orgaos(self) -> list[dict]:
+        """Lista órgãos da instalação do SEI."""
+        resp = await self._request("GET", "/orgao/listar")
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar órgãos: {data.get('mensagem')}")
+        return data.get("data", [])
+
+    async def listar_contextos(self, id_orgao: str) -> list[dict]:
+        """Lista contextos disponíveis para um órgão."""
+        resp = await self._request("GET", f"/contexto/listar/{id_orgao}")
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar contextos: {data.get('mensagem')}")
+        return data.get("data", [])
+
     async def consultar_processo(self, protocolo_formatado: str) -> dict:
         """Consulta processo pelo número formatado.
         Retorna: {IdProcedimento, ProtocoloProcedimentoFormatado, NomeTipoProcedimento, ...}
@@ -109,6 +139,143 @@ class SEIClient:
         if not data.get("sucesso"):
             raise Exception(f"Erro ao consultar documento {id_documento}: {data.get('mensagem')}")
         return data["data"]
+
+    async def consultar_documento_externo(self, id_documento: str) -> dict:
+        """Consulta metadados de um documento externo pelo id.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "GET", f"/documento/externo/consultar/{id_documento}"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao consultar documento externo {id_documento}: {data.get('mensagem')}")
+        return data["data"]
+
+    async def alterar_documento_interno(
+        self,
+        id_documento: str,
+        descricao: str = "",
+        nivel_acesso: str = "",
+        id_hipotese_legal: str = "",
+    ) -> dict:
+        """Altera metadados de um documento interno (não o conteúdo).
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        payload: dict = {}
+        if descricao:
+            payload["descricao"] = descricao
+        if nivel_acesso:
+            payload["nivelAcesso"] = nivel_acesso
+        if id_hipotese_legal:
+            payload["idHipoteseLegal"] = id_hipotese_legal
+        resp = await self._request(
+            "POST", f"/documento/interno/{id_documento}/alterar", data=payload
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao alterar documento interno: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def alterar_documento_externo(
+        self,
+        id_documento: str,
+        descricao: str = "",
+        nivel_acesso: str = "",
+        id_hipotese_legal: str = "",
+        arquivo_path: str = "",
+    ) -> dict:
+        """Altera metadados de um documento externo (e opcionalmente substitui o arquivo).
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        payload: dict = {}
+        if descricao:
+            payload["descricao"] = descricao
+        if nivel_acesso:
+            payload["nivelAcesso"] = nivel_acesso
+        if id_hipotese_legal:
+            payload["idHipoteseLegal"] = id_hipotese_legal
+
+        if arquivo_path:
+            import os
+            headers = await self._get_headers()
+            with open(arquivo_path, "rb") as f:
+                resp = await self._client.post(
+                    f"{self.base_url}/documento/externo/{id_documento}/alterar",
+                    headers=headers,
+                    data=payload,
+                    files={"anexo": (os.path.basename(arquivo_path), f)},
+                )
+        else:
+            resp = await self._request(
+                "POST", f"/documento/externo/{id_documento}/alterar", data=payload
+            )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao alterar documento externo: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def pesquisar_tipos_conferencia(
+        self, filtro: str = "", limit: int = 50, start: int = 0
+    ) -> dict:
+        """Pesquisa tipos de conferência para documentos externos.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        params: dict = {"limit": limit, "start": start}
+        if filtro:
+            params["filter"] = filtro
+        resp = await self._request("GET", "/documento/tipoconferencia/pesquisar", params=params)
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao pesquisar tipos de conferência: {data.get('mensagem')}")
+        return self._paginated(data, "tipos", data.get("data", []), start, limit)
+
+    async def sugestao_assuntos_documento(self, id_serie: str) -> list[dict]:
+        """Lista sugestões de assuntos para um tipo de documento (série).
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request("GET", f"/documento/assunto/sugestao/{id_serie}/listar")
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar sugestões de assunto: {data.get('mensagem')}")
+        return data.get("data", [])
+
+    async def listar_blocos_documento(self, id_documento: str) -> list[dict]:
+        """Lista blocos de assinatura em que um documento está incluído.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "GET", f"/documento/{id_documento}/bloco/assinatura/listar"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar blocos do documento: {data.get('mensagem')}")
+        return data.get("data", [])
+
+    async def pesquisar_tipos_documento_externo(
+        self, filtro: str = "", limit: int = 50, start: int = 0
+    ) -> dict:
+        """Pesquisa tipos de documento para documentos externos (séries externas).
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        params: dict = {"limit": limit, "start": start}
+        if filtro:
+            params["filter"] = filtro
+        resp = await self._request("GET", "/serie/externo/pesquisar", params=params)
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao pesquisar tipos de doc externo: {data.get('mensagem')}")
+        return self._paginated(data, "tipos", data.get("data", []), start, limit)
+
+    async def parametros_upload(self) -> dict:
+        """Retorna parâmetros de upload (extensões permitidas, tamanhos máximos).
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request("GET", "/upload/parametros")
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao obter parâmetros de upload: {data.get('mensagem')}")
+        return data.get("data", {})
 
     async def listar_assinaturas(self, id_documento: str) -> list[dict]:
         """Lista assinaturas de um documento."""
@@ -227,6 +394,25 @@ class SEIClient:
             raise Exception(f"Erro ao listar unidades: {data.get('mensagem')}")
         return data.get("data", [])
 
+    async def pesquisar_usuarios(
+        self, filtro: str = "", id_orgao: str = "", limit: int = 50, start: int = 0
+    ) -> dict:
+        """Pesquisa usuários por palavra-chave no órgão.
+        Diferente de listar_usuarios que filtra client-side — este usa
+        o endpoint /usuario/pesquisar que busca no servidor.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        params: dict = {"limit": limit, "start": start}
+        if filtro:
+            params["filter"] = filtro
+        if id_orgao:
+            params["orgao"] = id_orgao
+        resp = await self._request("GET", "/usuario/pesquisar", params=params)
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao pesquisar usuários: {data.get('mensagem')}")
+        return self._paginated(data, "usuarios", data.get("data", []), start, limit)
+
     async def trocar_unidade(self, id_unidade: str) -> dict:
         """Troca a unidade ativa do usuário."""
         resp = await self._request(
@@ -250,6 +436,37 @@ class SEIClient:
         if not data.get("sucesso"):
             raise Exception(f"Erro ao pesquisar unidades: {data.get('mensagem')}")
         return self._paginated(data, "unidades", data.get("data", []), start, limit)
+
+    async def pesquisar_outras_unidades(
+        self, filtro: str = "", limit: int = 50, start: int = 0
+    ) -> dict:
+        """Pesquisa unidades excluindo a unidade atual.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        params: dict = {"limit": limit, "start": start}
+        if filtro:
+            params["filter"] = filtro
+        resp = await self._request("GET", "/unidade/outras/pesquisar", params=params)
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao pesquisar outras unidades: {data.get('mensagem')}")
+        return self._paginated(data, "unidades", data.get("data", []), start, limit)
+
+    async def pesquisar_textos_padrao(
+        self, filtro: str = "", limit: int = 50, start: int = 0
+    ) -> dict:
+        """Pesquisa textos padrão internos disponíveis na unidade.
+        Textos padrão são modelos reutilizáveis para preencher documentos.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        params: dict = {"limit": limit, "start": start}
+        if filtro:
+            params["filter"] = filtro
+        resp = await self._request("GET", "/unidade/textopadrao/interno/pesquisar", params=params)
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao pesquisar textos padrão: {data.get('mensagem')}")
+        return self._paginated(data, "textos", data.get("data", []), start, limit)
 
     async def listar_usuarios(
         self, filtro: str = "", id_unidade: str = "", apenas_unidade: bool = True
@@ -915,6 +1132,100 @@ class SEIClient:
             raise Exception(f"Erro ao retirar do bloco: {data.get('mensagem')}")
         return data.get("data", {"mensagem": data.get("mensagem")})
 
+    async def listar_processos_bloco_interno(
+        self, id_bloco: str, limit: int = 200
+    ) -> list[dict]:
+        """Lista processos de um bloco interno.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "GET", f"/bloco/interno/{id_bloco}/processos/listar",
+            params={"limit": limit},
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar processos do bloco: {data.get('mensagem')}")
+        return data.get("data", [])
+
+    async def alterar_bloco_interno(self, id_bloco: str, descricao: str) -> dict:
+        """Altera descrição de um bloco interno.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", f"/bloco/interno/{id_bloco}/alterar",
+            data={"descricao": descricao},
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao alterar bloco interno: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def excluir_blocos_internos(self, ids: str) -> dict:
+        """Exclui bloco(s) interno(s). IDs separados por vírgula.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", "/bloco/interno/excluir", data={"blocos": ids}
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao excluir blocos internos: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def concluir_blocos_internos(self, ids: str) -> dict:
+        """Conclui bloco(s) interno(s). IDs separados por vírgula.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", "/bloco/interno/concluir", data={"blocos": ids}
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao concluir blocos internos: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def reabrir_bloco_interno(self, id_bloco: str) -> dict:
+        """Reabre bloco interno concluído.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", f"/bloco/interno/{id_bloco}/reabrir"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao reabrir bloco interno: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def anotar_processo_bloco_interno(
+        self, id_bloco: str, protocolo: str, descricao: str
+    ) -> dict:
+        """Cria anotação em processo dentro de um bloco interno.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", "/bloco/interno/anotacao/cadastrar",
+            data={"bloco": id_bloco, "protocolo": protocolo, "descricao": descricao},
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao anotar no bloco interno: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def alterar_anotacao_bloco_interno(
+        self, id_bloco: str, protocolo: str, descricao: str
+    ) -> dict:
+        """Altera anotação de processo em um bloco interno.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", "/bloco/interno/anotacao/alterar",
+            data={"bloco": id_bloco, "protocolo": protocolo, "descricao": descricao},
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao alterar anotação do bloco interno: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
     async def pesquisar_blocos_internos(self, filtro: str = "", limit: int = 50, start: int = 0) -> dict:
         """Pesquisa blocos internos."""
         params: dict = {"limit": limit, "start": start}
@@ -1003,6 +1314,97 @@ class SEIClient:
         data = resp.json()
         if not data.get("sucesso"):
             raise Exception(f"Erro ao retirar do bloco: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def alterar_bloco_assinatura(self, id_bloco: str, descricao: str) -> dict:
+        """Altera descrição de um bloco de assinatura.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", f"/bloco/assinatura/{id_bloco}/alterar",
+            data={"descricao": descricao},
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao alterar bloco de assinatura: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def excluir_blocos_assinatura(self, ids: str) -> dict:
+        """Exclui bloco(s) de assinatura. IDs separados por vírgula.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", "/bloco/assinatura/excluir", data={"blocos": ids}
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao excluir blocos de assinatura: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def concluir_blocos_assinatura(self, ids: str) -> dict:
+        """Conclui bloco(s) de assinatura. IDs separados por vírgula.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", "/bloco/assinatura/concluir", data={"blocos": ids}
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao concluir blocos de assinatura: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def reabrir_bloco_assinatura(self, id_bloco: str) -> dict:
+        """Reabre bloco de assinatura concluído.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", f"/bloco/assinatura/{id_bloco}/reabrir"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao reabrir bloco de assinatura: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def retornar_bloco_assinatura(self, id_bloco: str) -> dict:
+        """Retorna bloco de assinatura para a unidade de origem.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", f"/bloco/assinatura/{id_bloco}/retornar"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao retornar bloco de assinatura: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def anotar_documento_bloco_assinatura(
+        self, id_bloco: str, documento: str, descricao: str
+    ) -> dict:
+        """Cria anotação em documento dentro de um bloco de assinatura.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", "/bloco/assinatura/anotacao/cadastrar",
+            data={"bloco": id_bloco, "documento": documento, "descricao": descricao},
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao anotar no bloco de assinatura: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def alterar_anotacao_bloco_assinatura(
+        self, id_bloco: str, documento: str, descricao: str
+    ) -> dict:
+        """Altera anotação de documento em um bloco de assinatura.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "POST", "/bloco/assinatura/anotacao/alterar",
+            data={"bloco": id_bloco, "documento": documento, "descricao": descricao},
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao alterar anotação do bloco: {data.get('mensagem')}")
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -1167,9 +1569,185 @@ class SEIClient:
             raise Exception(f"Erro ao listar interessados: {data.get('mensagem')}")
         return data.get("data", [])
 
+    async def pesquisar_assuntos(
+        self, filtro: str = "", limit: int = 50, start: int = 0
+    ) -> dict:
+        """Pesquisa assuntos disponíveis para processos.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        params: dict = {"limit": limit, "start": start}
+        if filtro:
+            params["filter"] = filtro
+        resp = await self._request("GET", "/processo/assunto/pesquisar", params=params)
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao pesquisar assuntos: {data.get('mensagem')}")
+        return self._paginated(data, "assuntos", data.get("data", []), start, limit)
+
+    async def sugestao_assuntos_processo(self, id_tipo_processo: str) -> list[dict]:
+        """Lista sugestões de assuntos para um tipo de processo.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "GET", f"/processo/assunto/sugestao/{id_tipo_processo}/listar"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar sugestões de assunto: {data.get('mensagem')}")
+        return data.get("data", [])
+
+    async def consultar_atribuicao(self, id_procedimento: str) -> dict:
+        """Consulta atribuição atual de um processo.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "GET", f"/processo/{id_procedimento}/consultar/atribuicao"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao consultar atribuição: {data.get('mensagem')}")
+        return data.get("data", {})
+
+    async def verificar_acesso(self, id_procedimento: str) -> dict:
+        """Verifica se o usuário tem acesso a um processo.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        resp = await self._request(
+            "GET", f"/processo/verifica/acesso/{id_procedimento}"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao verificar acesso: {data.get('mensagem')}")
+        return data.get("data", {})
+
+    async def listar_relacionamentos(self, id_procedimento: str) -> list[dict]:
+        """Lista processos relacionados.
+        REQUER mod-wssei 3.0.2+ (SEI 5.0.x). Não disponível em versões anteriores.
+        """
+        resp = await self._request(
+            "GET", f"/processo/{id_procedimento}/relacionamentos"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar relacionamentos: {data.get('mensagem')}")
+        return data.get("data", [])
+
+    async def listar_meus_acompanhamentos(
+        self, limit: int = 50, start: int = 0
+    ) -> dict:
+        """Lista processos acompanhados pelo usuário.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        params: dict = {"limit": limit, "start": start}
+        resp = await self._request(
+            "GET", "/processo/listar/meus/acompanhamentos", params=params
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar acompanhamentos: {data.get('mensagem')}")
+        return self._paginated(data, "acompanhamentos", data.get("data", []), start, limit)
+
+    async def listar_acompanhamentos_unidade(
+        self, limit: int = 50, start: int = 0
+    ) -> dict:
+        """Lista processos acompanhados na unidade atual.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        params: dict = {"limit": limit, "start": start}
+        resp = await self._request(
+            "GET", "/processo/listar/acompanhamentos", params=params
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar acompanhamentos da unidade: {data.get('mensagem')}")
+        return self._paginated(data, "acompanhamentos", data.get("data", []), start, limit)
+
+    async def alterar_acompanhamento(
+        self, id_procedimento: str, id_grupo: str = "", observacao: str = ""
+    ) -> dict:
+        """Altera acompanhamento especial de um processo.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        payload: dict = {"protocolo": id_procedimento}
+        if id_grupo:
+            payload["grupo"] = id_grupo
+        if observacao:
+            payload["observacao"] = observacao
+        resp = await self._request(
+            "POST", "/processo/acompanhamento/alterar", data=payload
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao alterar acompanhamento: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    # ------------------------------------------------------------------
+    # Credenciamento (processos sigilosos)
+    # Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    # ------------------------------------------------------------------
+
+    async def listar_credenciamentos(self, id_procedimento: str) -> list[dict]:
+        """Lista credenciamentos de acesso a um processo sigiloso."""
+        resp = await self._request(
+            "GET", f"/processo/{id_procedimento}/credenciamento/listar"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar credenciamentos: {data.get('mensagem')}")
+        return data.get("data", [])
+
+    async def conceder_credenciamento(
+        self, id_procedimento: str, id_usuario: str
+    ) -> dict:
+        """Concede credenciamento de acesso a um processo sigiloso."""
+        resp = await self._request(
+            "POST", f"/processo/{id_procedimento}/credenciamento/conceder",
+            data={"usuario": id_usuario},
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao conceder credenciamento: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def renunciar_credenciamento(self, id_procedimento: str) -> dict:
+        """Renuncia ao credenciamento de acesso a um processo sigiloso."""
+        resp = await self._request(
+            "POST", f"/processo/{id_procedimento}/credenciamento/renunciar"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao renunciar credenciamento: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    async def cassar_credenciamento(
+        self, id_procedimento: str, id_usuario: str
+    ) -> dict:
+        """Cassa credenciamento de acesso de um usuário a processo sigiloso."""
+        resp = await self._request(
+            "POST", f"/processo/{id_procedimento}/credenciamento/cassar",
+            data={"usuario": id_usuario},
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao cassar credenciamento: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
     # ------------------------------------------------------------------
     # Andamento
     # ------------------------------------------------------------------
+
+    async def listar_atividades(
+        self, id_procedimento: str, limit: int = 50, start: int = 0
+    ) -> dict:
+        """Lista histórico de atividades/andamentos de um processo.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        params: dict = {"protocolo": id_procedimento, "limit": limit, "start": start}
+        resp = await self._request("GET", "/atividade/listar", params=params)
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar atividades: {data.get('mensagem')}")
+        return self._paginated(data, "atividades", data.get("data", []), start, limit)
 
     async def registrar_andamento(
         self, id_procedimento: str, descricao: str
@@ -1198,6 +1776,110 @@ class SEIClient:
         if not data.get("sucesso"):
             raise Exception(f"Erro ao pesquisar contatos: {data.get('mensagem')}")
         return {"contatos": data.get("data", []), "total": data.get("total")}
+
+    async def criar_contato(
+        self, nome: str, tipo: str = "", email: str = "", telefone: str = ""
+    ) -> dict:
+        """Cria novo contato no SEI.
+        Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        """
+        payload: dict = {"nome": nome}
+        if tipo:
+            payload["tipo"] = tipo
+        if email:
+            payload["email"] = email
+        if telefone:
+            payload["telefone"] = telefone
+        resp = await self._request("POST", "/contato/criar", data=payload)
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao criar contato: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    # ------------------------------------------------------------------
+    # Assinante — listar signatários e órgãos
+    # Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    # ------------------------------------------------------------------
+
+    async def listar_assinantes(self) -> list[dict]:
+        """Lista signatários (cargos/funções) disponíveis na unidade atual."""
+        resp = await self._request("GET", "/assinante/listar")
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar assinantes: {data.get('mensagem')}")
+        return data.get("data", [])
+
+    async def listar_orgaos_assinante(self) -> list[dict]:
+        """Lista órgãos disponíveis para assinatura."""
+        resp = await self._request("GET", "/assinante/orgao")
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar órgãos para assinatura: {data.get('mensagem')}")
+        return data.get("data", [])
+
+    # ------------------------------------------------------------------
+    # Observação de unidade
+    # Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    # ------------------------------------------------------------------
+
+    async def criar_observacao(
+        self, id_procedimento: str, descricao: str
+    ) -> dict:
+        """Cria observação da unidade em um processo (diferente de anotação).
+        Observação é visível apenas para a unidade, anotação é post-it individual.
+        """
+        resp = await self._request(
+            "POST", "/observacao/",
+            data={"protocolo": id_procedimento, "descricao": descricao},
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao criar observação: {data.get('mensagem')}")
+        return data.get("data", {"mensagem": data.get("mensagem")})
+
+    # ------------------------------------------------------------------
+    # Modelos de documento
+    # Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    # ------------------------------------------------------------------
+
+    async def listar_grupos_modelos(self, limit: int = 50, start: int = 0) -> dict:
+        """Lista grupos de modelos de documento disponíveis."""
+        params: dict = {"limit": limit, "start": start}
+        resp = await self._request("GET", "/protocolomodelo/grupo/listar", params=params)
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar grupos de modelos: {data.get('mensagem')}")
+        return self._paginated(data, "grupos", data.get("data", []), start, limit)
+
+    async def listar_modelos(
+        self, id_grupo: str = "", filtro: str = "", limit: int = 50, start: int = 0
+    ) -> dict:
+        """Lista modelos de documento disponíveis."""
+        params: dict = {"limit": limit, "start": start}
+        if id_grupo:
+            params["grupo"] = id_grupo
+        if filtro:
+            params["filter"] = filtro
+        resp = await self._request("GET", "/protocolomodelo/listar", params=params)
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar modelos: {data.get('mensagem')}")
+        return self._paginated(data, "modelos", data.get("data", []), start, limit)
+
+    # ------------------------------------------------------------------
+    # Marcador — histórico
+    # Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    # ------------------------------------------------------------------
+
+    async def historico_marcador_processo(self, id_procedimento: str) -> list[dict]:
+        """Lista histórico de marcadores de um processo."""
+        resp = await self._request(
+            "GET", f"/marcador/processo/{id_procedimento}/historico/listar"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao listar histórico de marcadores: {data.get('mensagem')}")
+        return data.get("data", [])
 
     # ------------------------------------------------------------------
     # Bloco de assinatura — assinar
