@@ -137,7 +137,13 @@ mcp = FastMCP(
         "Colunas: #, 📄/📎, Tipo do Documento, Protocolo, Unidade, Tamanho, "
         "✍️ Assinado, 🚫 Cancelado, 👁 Visualizar, 🔒 Bloqueado. "
         "Use ✅ para sim e · para não. Se houver múltiplos volumes "
-        "(campo total_volumes > 1), separe visualmente por volume."
+        "(campo total_volumes > 1), separe visualmente por volume. "
+        "VERSÃO: Todos os endpoints funcionam com mod-wssei 2.0.0+ (SEI 4.0.x+), "
+        "exceto sei_listar_relacionamentos que requer mod-wssei 3.0.2+ (SEI 5.0.x). "
+        "Compatibilidade: SEI 4.0.x→mod-wssei 2.0.x | SEI 4.1.1→2.2.0 | SEI 5.0.x→3.0.x. "
+        "Se um endpoint falhar com erro inesperado (404, método não encontrado), "
+        "use sei_versao para verificar a versão e informe ao usuário qual versão "
+        "do SEI/mod-wssei é necessária. Pergunte a versão do SEI ao usuário caso precise."
     ),
     lifespan=lifespan,
 )
@@ -2389,6 +2395,1090 @@ async def sei_criar_anotacao(
             descricao=descricao,
             prioridade=prioridade,
         )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Endpoints adicionais do mod-wssei v2
+# Todos disponíveis desde mod-wssei 2.0.0 (SEI 4.0.x), exceto:
+#   - sei_listar_relacionamentos → requer mod-wssei 3.0.2+ (SEI 5.0.x)
+# Se um endpoint falhar, use sei_versao para verificar a versão instalada.
+# Compatibilidade: SEI 4.0.x=mod-wssei 2.0.x | SEI 4.1.1=2.2.0 | SEI 5.0.x=3.0.x
+# ---------------------------------------------------------------------------
+
+
+# -- Sistema / Informações --
+
+
+@mcp.tool()
+async def sei_versao(ctx: Context) -> str:
+    """Retorna a versão do SEI e do módulo wssei instalado.
+
+    Útil para verificar compatibilidade de funcionalidades.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.versao()
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_listar_orgaos(ctx: Context) -> str:
+    """Lista os órgãos cadastrados na instalação do SEI.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_orgaos()
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_listar_contextos(id_orgao: str, ctx: Context) -> str:
+    """Lista os contextos disponíveis para um órgão.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_contextos(id_orgao)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Usuários --
+
+
+@mcp.tool()
+async def sei_pesquisar_usuarios(
+    filtro: str = "",
+    id_orgao: str = "",
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Pesquisa usuários por palavra-chave no órgão.
+
+    Diferente de sei_listar_usuarios (que lista por unidade),
+    este pesquisa no servidor por nome/sigla em todo o órgão.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.pesquisar_usuarios(
+            filtro=filtro, id_orgao=id_orgao, limit=limit, start=pagina
+        )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Unidades --
+
+
+@mcp.tool()
+async def sei_pesquisar_outras_unidades(
+    filtro: str = "",
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Pesquisa unidades excluindo a unidade atual.
+
+    Útil para tramitação — já filtra a unidade do usuário.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.pesquisar_outras_unidades(
+            filtro=filtro, limit=limit, start=pagina
+        )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_pesquisar_textos_padrao(
+    filtro: str = "",
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Pesquisa textos padrão internos disponíveis na unidade.
+
+    Textos padrão são modelos reutilizáveis para preencher documentos
+    automaticamente ao criar um novo documento interno.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.pesquisar_textos_padrao(
+            filtro=filtro, limit=limit, start=pagina
+        )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Documentos --
+
+
+@mcp.tool()
+async def sei_consultar_documento_externo(
+    id_documento: str,
+    ctx: Context = None,
+) -> str:
+    """Consulta metadados de um documento externo pelo ID.
+
+    Retorna informações como tipo, data, nível de acesso, etc.
+    Para baixar o conteúdo use sei_baixar_anexo ou sei_ler_documento.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.consultar_documento_externo(id_documento)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_alterar_documento_interno(
+    id_documento: str,
+    descricao: str = "",
+    nivel_acesso: str = "",
+    hipotese_legal: str = "",
+    ctx: Context = None,
+) -> str:
+    """Altera metadados de um documento interno (não o conteúdo HTML).
+
+    Para alterar o conteúdo, use sei_editar_secao.
+    - id_documento: ID interno do documento
+    - descricao: nova descrição
+    - nivel_acesso: 0=público, 1=restrito, 2=sigiloso
+    - hipotese_legal: ID da hipótese (obrigatório se restrito/sigiloso)
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.alterar_documento_interno(
+            id_documento=id_documento,
+            descricao=descricao,
+            nivel_acesso=nivel_acesso,
+            id_hipotese_legal=hipotese_legal,
+        )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_alterar_documento_externo(
+    id_documento: str,
+    descricao: str = "",
+    nivel_acesso: str = "",
+    hipotese_legal: str = "",
+    arquivo_path: str = "",
+    ctx: Context = None,
+) -> str:
+    """Altera metadados de um documento externo (e opcionalmente substitui o arquivo).
+
+    - id_documento: ID interno do documento
+    - descricao: nova descrição
+    - nivel_acesso: 0=público, 1=restrito, 2=sigiloso
+    - hipotese_legal: ID da hipótese (obrigatório se restrito/sigiloso)
+    - arquivo_path: caminho local de novo arquivo para substituir (opcional)
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.alterar_documento_externo(
+            id_documento=id_documento,
+            descricao=descricao,
+            nivel_acesso=nivel_acesso,
+            id_hipotese_legal=hipotese_legal,
+            arquivo_path=arquivo_path,
+        )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_pesquisar_tipos_conferencia(
+    filtro: str = "",
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Pesquisa tipos de conferência para documentos externos.
+
+    Tipo de conferência indica se o documento externo é cópia autenticada,
+    cópia simples, original, etc.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.pesquisar_tipos_conferencia(
+            filtro=filtro, limit=limit, start=pagina
+        )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_sugestao_assuntos_documento(
+    id_serie: str,
+    ctx: Context = None,
+) -> str:
+    """Lista sugestões de assuntos para um tipo de documento (série).
+
+    Use o id_serie obtido via sei_pesquisar_tipos_documento.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.sugestao_assuntos_documento(id_serie)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_listar_blocos_documento(
+    id_documento: str,
+    ctx: Context = None,
+) -> str:
+    """Lista blocos de assinatura em que um documento está incluído.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_blocos_documento(id_documento)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_pesquisar_tipos_documento_externo(
+    filtro: str = "",
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Pesquisa tipos de documento para documentos externos (séries externas).
+
+    Diferente de sei_pesquisar_tipos_documento que lista todos os tipos,
+    este retorna apenas os tipos aplicáveis a documentos externos.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.pesquisar_tipos_documento_externo(
+            filtro=filtro, limit=limit, start=pagina
+        )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_parametros_upload(ctx: Context) -> str:
+    """Retorna parâmetros de upload do SEI (extensões permitidas, tamanhos máximos).
+
+    Útil antes de criar documentos externos para saber os limites.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.parametros_upload()
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Processos: assuntos, atribuição, acesso, relacionamentos --
+
+
+@mcp.tool()
+async def sei_pesquisar_assuntos(
+    filtro: str = "",
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Pesquisa assuntos disponíveis para processos.
+
+    Use o ID retornado no campo 'assuntos' ao criar processos.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.pesquisar_assuntos(
+            filtro=filtro, limit=limit, start=pagina
+        )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_sugestao_assuntos_processo(
+    id_tipo_processo: str,
+    ctx: Context = None,
+) -> str:
+    """Lista sugestões de assuntos para um tipo de processo.
+
+    Use o id do tipo obtido via sei_pesquisar_tipos_processo.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.sugestao_assuntos_processo(id_tipo_processo)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_consultar_atribuicao(
+    processo: str,
+    ctx: Context = None,
+) -> str:
+    """Consulta a atribuição atual de um processo (quem está responsável).
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.consultar_atribuicao(id_proc)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_verificar_acesso(
+    processo: str,
+    ctx: Context = None,
+) -> str:
+    """Verifica se o usuário tem acesso a um processo.
+
+    Útil para checar permissão antes de operações em processos restritos.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.verificar_acesso(id_proc)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_listar_relacionamentos(
+    processo: str,
+    ctx: Context = None,
+) -> str:
+    """Lista processos relacionados a um processo.
+
+    REQUER mod-wssei 3.0.2+ (SEI 5.0.x). Não disponível em versões anteriores.
+    Se falhar, use sei_versao para verificar. Precisa ser >= 3.0.2.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.listar_relacionamentos(id_proc)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_listar_atividades(
+    processo: str,
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Lista o histórico de atividades/andamentos de um processo.
+
+    Retorna todas as ações registradas no processo (tramitações,
+    assinaturas, edições, etc.).
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.listar_atividades(id_proc, limit=limit, start=pagina)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Acompanhamento: meus, da unidade, alterar --
+
+
+@mcp.tool()
+async def sei_listar_meus_acompanhamentos(
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Lista processos que o usuário está acompanhando (acompanhamento especial).
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_meus_acompanhamentos(limit=limit, start=pagina)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_listar_acompanhamentos_unidade(
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Lista processos com acompanhamento especial na unidade atual.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_acompanhamentos_unidade(limit=limit, start=pagina)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_alterar_acompanhamento(
+    processo: str,
+    grupo: str = "",
+    observacao: str = "",
+    ctx: Context = None,
+) -> str:
+    """Altera acompanhamento especial de um processo.
+
+    - processo: protocolo formatado ou IdProcedimento
+    - grupo: novo grupo de acompanhamento
+    - observacao: nova observação
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.alterar_acompanhamento(id_proc, grupo, observacao)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Credenciamento (processos sigilosos) --
+
+
+@mcp.tool()
+async def sei_listar_credenciamentos(
+    processo: str,
+    ctx: Context = None,
+) -> str:
+    """Lista credenciamentos de acesso a um processo sigiloso.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.listar_credenciamentos(id_proc)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_conceder_credenciamento(
+    processo: str,
+    id_usuario: str,
+    ctx: Context = None,
+) -> str:
+    """Concede credenciamento de acesso a um processo sigiloso para um usuário.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.conceder_credenciamento(id_proc, id_usuario)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_renunciar_credenciamento(
+    processo: str,
+    ctx: Context = None,
+) -> str:
+    """Renuncia ao credenciamento de acesso a um processo sigiloso.
+
+    O próprio usuário perde o acesso ao processo.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.renunciar_credenciamento(id_proc)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_cassar_credenciamento(
+    processo: str,
+    id_usuario: str,
+    ctx: Context = None,
+) -> str:
+    """Cassa (revoga) credenciamento de acesso de um usuário a processo sigiloso.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.cassar_credenciamento(id_proc, id_usuario)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Assinantes e Observação --
+
+
+@mcp.tool()
+async def sei_listar_assinantes(ctx: Context) -> str:
+    """Lista signatários (cargos/funções) disponíveis na unidade atual.
+
+    Retorna os cargos que podem ser usados em sei_assinar_documento.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_assinantes()
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_listar_orgaos_assinante(ctx: Context) -> str:
+    """Lista órgãos disponíveis para assinatura.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_orgaos_assinante()
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_criar_observacao(
+    processo: str,
+    descricao: str,
+    ctx: Context = None,
+) -> str:
+    """Cria observação da unidade em um processo.
+
+    Diferente da anotação (post-it individual), a observação é
+    vinculada à unidade e visível por todos os usuários da unidade.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.criar_observacao(id_proc, descricao)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_criar_contato(
+    nome: str,
+    tipo: str = "",
+    email: str = "",
+    telefone: str = "",
+    ctx: Context = None,
+) -> str:
+    """Cria novo contato no SEI.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.criar_contato(
+            nome=nome, tipo=tipo, email=email, telefone=telefone
+        )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Modelos de documento --
+
+
+@mcp.tool()
+async def sei_listar_grupos_modelos(
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Lista grupos de modelos de documento disponíveis.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_grupos_modelos(limit=limit, start=pagina)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_listar_modelos(
+    id_grupo: str = "",
+    filtro: str = "",
+    limit: int = 50,
+    pagina: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Lista modelos de documento disponíveis.
+
+    - id_grupo: filtrar por grupo (use sei_listar_grupos_modelos)
+    - filtro: texto para filtrar por nome
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_modelos(
+            id_grupo=id_grupo, filtro=filtro, limit=limit, start=pagina
+        )
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Marcador: desativar, reativar, histórico --
+
+
+@mcp.tool()
+async def sei_desativar_marcador(
+    ids_marcadores: str,
+    ctx: Context = None,
+) -> str:
+    """Desativa marcador(es) sem excluir. IDs separados por vírgula.
+
+    Marcadores desativados deixam de aparecer nas pesquisas mas
+    mantêm o histórico. Use sei_reativar_marcador para reativar.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.desativar_marcadores(ids_marcadores)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_reativar_marcador(
+    ids_marcadores: str,
+    ctx: Context = None,
+) -> str:
+    """Reativa marcador(es) desativados. IDs separados por vírgula."""
+    try:
+        client = _get_client(ctx)
+        result = await client.reativar_marcadores(ids_marcadores)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_historico_marcador_processo(
+    processo: str,
+    ctx: Context = None,
+) -> str:
+    """Lista histórico de marcadores de um processo.
+
+    Mostra quais marcadores foram aplicados/removidos ao longo do tempo.
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.historico_marcador_processo(id_proc)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Bloco Interno: operações adicionais --
+
+
+@mcp.tool()
+async def sei_listar_processos_bloco_interno(
+    id_bloco: str,
+    ctx: Context = None,
+) -> str:
+    """Lista processos de um bloco interno.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_processos_bloco_interno(id_bloco)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_alterar_bloco_interno(
+    id_bloco: str,
+    descricao: str,
+    ctx: Context = None,
+) -> str:
+    """Altera descrição de um bloco interno.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.alterar_bloco_interno(id_bloco, descricao)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_excluir_bloco_interno(
+    ids_blocos: str,
+    ctx: Context = None,
+) -> str:
+    """Exclui bloco(s) interno(s). IDs separados por vírgula.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.excluir_blocos_internos(ids_blocos)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_concluir_bloco_interno(
+    ids_blocos: str,
+    ctx: Context = None,
+) -> str:
+    """Conclui bloco(s) interno(s). IDs separados por vírgula.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.concluir_blocos_internos(ids_blocos)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_reabrir_bloco_interno(
+    id_bloco: str,
+    ctx: Context = None,
+) -> str:
+    """Reabre bloco interno concluído.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.reabrir_bloco_interno(id_bloco)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_anotar_processo_bloco_interno(
+    id_bloco: str,
+    processo: str,
+    descricao: str,
+    ctx: Context = None,
+) -> str:
+    """Cria anotação em processo dentro de um bloco interno.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.anotar_processo_bloco_interno(id_bloco, id_proc, descricao)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_alterar_anotacao_bloco_interno(
+    id_bloco: str,
+    processo: str,
+    descricao: str,
+    ctx: Context = None,
+) -> str:
+    """Altera anotação de processo em um bloco interno.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.alterar_anotacao_bloco_interno(id_bloco, id_proc, descricao)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+# -- Bloco de Assinatura: operações adicionais --
+
+
+@mcp.tool()
+async def sei_listar_documentos_bloco_assinatura(
+    id_bloco: str,
+    ctx: Context = None,
+) -> str:
+    """Lista documentos de um bloco de assinatura."""
+    try:
+        client = _get_client(ctx)
+        result = await client.listar_documentos_bloco_assinatura(id_bloco)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_retirar_documentos_bloco_assinatura(
+    id_bloco: str,
+    documentos: str,
+    ctx: Context = None,
+) -> str:
+    """Retira documento(s) de um bloco de assinatura.
+
+    - documentos: ID(s) de documento(s) separados por vírgula
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.retirar_documento_bloco_assinatura(id_bloco, documentos)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_alterar_bloco_assinatura(
+    id_bloco: str,
+    descricao: str,
+    ctx: Context = None,
+) -> str:
+    """Altera descrição de um bloco de assinatura.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.alterar_bloco_assinatura(id_bloco, descricao)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_excluir_bloco_assinatura(
+    ids_blocos: str,
+    ctx: Context = None,
+) -> str:
+    """Exclui bloco(s) de assinatura. IDs separados por vírgula.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.excluir_blocos_assinatura(ids_blocos)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_concluir_bloco_assinatura(
+    ids_blocos: str,
+    ctx: Context = None,
+) -> str:
+    """Conclui bloco(s) de assinatura. IDs separados por vírgula.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.concluir_blocos_assinatura(ids_blocos)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_reabrir_bloco_assinatura(
+    id_bloco: str,
+    ctx: Context = None,
+) -> str:
+    """Reabre bloco de assinatura concluído.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.reabrir_bloco_assinatura(id_bloco)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_retornar_bloco_assinatura(
+    id_bloco: str,
+    ctx: Context = None,
+) -> str:
+    """Retorna bloco de assinatura para a unidade de origem.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.retornar_bloco_assinatura(id_bloco)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_anotar_documento_bloco_assinatura(
+    id_bloco: str,
+    documento: str,
+    descricao: str,
+    ctx: Context = None,
+) -> str:
+    """Cria anotação em documento dentro de um bloco de assinatura.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.anotar_documento_bloco_assinatura(id_bloco, documento, descricao)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_alterar_anotacao_bloco_assinatura(
+    id_bloco: str,
+    documento: str,
+    descricao: str,
+    ctx: Context = None,
+) -> str:
+    """Altera anotação de documento em um bloco de assinatura.
+
+    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    """
+    try:
+        client = _get_client(ctx)
+        result = await client.alterar_anotacao_bloco_assinatura(id_bloco, documento, descricao)
         return _json(result)
     except Exception as e:
         return _error(str(e))

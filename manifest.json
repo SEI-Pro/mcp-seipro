@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "seipro",
   "display_name": "SEI Pro",
-  "version": "0.1.0",
-  "description": "64 ferramentas para gerenciar processos, documentos, tramitacao e assinatura no SEI.",
-  "long_description": "Servidor MCP para o Sistema Eletronico de Informacoes (SEI) via API REST mod-wssei v2. Cobre processos, documentos, tramitacao, assinatura, blocos, marcadores e acompanhamento. Funciona com qualquer instancia SEI que tenha o modulo mod-wssei v2.",
+  "version": "0.2.0",
+  "description": "116 ferramentas para gerenciar processos, documentos, tramitacao, assinatura, blocos, marcadores, credenciamento e modelos no SEI.",
+  "long_description": "Servidor MCP para o Sistema Eletronico de Informacoes (SEI) via API REST mod-wssei v2. Cobre processos, documentos, tramitacao, assinatura, blocos, marcadores, acompanhamento, credenciamento (sigilosos), modelos de documento, historico de atividades e muito mais. Funciona com qualquer instancia SEI que tenha o modulo mod-wssei v2 (compat: SEI 4.0.x=mod-wssei 2.0.x | SEI 4.1.1=2.2.0 | SEI 5.0.x=3.0.x). Um unico endpoint (relacionamentos) requer mod-wssei 3.0.2+.",
   "author": {
     "name": "Pedro Soares",
     "email": "pedro.soares@antaq.gov.br",
