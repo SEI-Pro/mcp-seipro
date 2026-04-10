@@ -571,6 +571,31 @@ def parse_arvore_nos(html: str) -> list[dict]:
     return out
 
 
+_RE_TOOLTIP = re.compile(
+    r"infraTooltipMostrar\(\s*'([^']*)'\s*,\s*'([^']*)'\s*\)"
+)
+
+
+def _extract_tooltip(link_tag, row: dict) -> None:
+    """Extrai especificacao e tipo do onmouseover do link do processo.
+
+    O SEI renderiza um tooltip JS em TODOS os links de processo da inbox:
+        onmouseover="return infraTooltipMostrar('Especificação','Tipo Processual')"
+
+    Esse tooltip contém a especificação INDEPENDENTE de a coluna estar
+    habilitada no painel — é sempre renderizado.
+    """
+    mouseover = link_tag.get("onmouseover", "")
+    m = _RE_TOOLTIP.search(mouseover)
+    if m:
+        especificacao = m.group(1).strip()
+        tipo_tooltip = m.group(2).strip()
+        if especificacao:
+            row["especificacao"] = especificacao
+        if tipo_tooltip and "Tipo" not in row:
+            row["tipo"] = tipo_tooltip
+
+
 def parse_inbox(html: str) -> tuple[str, list[dict]]:
     """Parseia o HTML de procedimento_controlar.php e extrai lista de processos.
 
@@ -609,6 +634,10 @@ def parse_inbox(html: str) -> tuple[str, list[dict]]:
             link = tr.find("a", href=re.compile(r"acao=procedimento_trabalhar"))
             if link is not None:
                 row["protocolo"] = link.get_text(" ", strip=True)
+                # Especificação + tipo estão no tooltip do link do processo:
+                # onmouseover="return infraTooltipMostrar('Especificação','Tipo')"
+                # Disponível INDEPENDENTE de a coluna estar habilitada no painel.
+                _extract_tooltip(link, row)
             if len(tds) >= 2:
                 icones = []
                 for img in tds[1].find_all("img"):
@@ -646,6 +675,7 @@ def parse_inbox(html: str) -> tuple[str, list[dict]]:
             link = tr.find("a", href=re.compile(r"acao=procedimento_trabalhar"))
             if link is not None:
                 row["protocolo"] = link.get_text(" ", strip=True)
+                _extract_tooltip(link, row)
             if len(tds) >= 2:
                 icones = []
                 for img in tds[1].find_all("img"):
