@@ -99,8 +99,14 @@ class SEIClient:
         return data.get("data", [])
 
     async def consultar_processo(self, protocolo_formatado: str) -> dict:
-        """Consulta processo pelo número formatado.
-        Retorna: {IdProcedimento, ProtocoloProcedimentoFormatado, NomeTipoProcedimento, ...}
+        """Consulta processo pelo número formatado (versão minimalista).
+
+        Endpoint mod-wssei: GET /processo/consultar?protocoloFormatado=
+        Backend: ProcedimentoINT::pesquisarDigitadoRI1023()
+
+        Retorna apenas: {IdProcedimento, ProtocoloProcedimentoFormatado, NomeTipoProcedimento}.
+        Para dados completos (especificacao, assuntos, interessados, etc.) use
+        `consultar_processo_completo()`.
         """
         resp = await self._request(
             "GET",
@@ -111,6 +117,48 @@ class SEIClient:
         if not data.get("sucesso"):
             raise Exception(f"Erro ao consultar processo: {data.get('mensagem')}")
         return data["data"]
+
+    async def consultar_processo_completo(self, protocolo_formatado: str) -> dict:
+        """Consulta processo com TODOS os campos disponíveis na REST.
+
+        Faz a sequência de 2 chamadas que o mod-wssei expõe:
+
+        1. GET /processo/consultar?protocoloFormatado=  → id + nome do tipo
+           (apiConsultarProcessoDigitado, ~3 campos)
+        2. GET /processo/consultar/{id}                  → especificacao,
+           assuntos, interessados, observacoes, nivelAcesso, hipoteseLegal,
+           grauSigilo (consultarProcessoConectado, ~8 campos)
+
+        Combina ambos em um único dict. Use quando precisar de dados ricos
+        do processo (a chamada minimalista `consultar_processo` retorna
+        apenas 3 campos).
+        """
+        # call 1
+        resp1 = await self._request(
+            "GET",
+            "/processo/consultar",
+            params={"protocoloFormatado": protocolo_formatado},
+        )
+        j1 = resp1.json()
+        if not j1.get("sucesso"):
+            raise Exception(f"Erro ao consultar processo: {j1.get('mensagem')}")
+        d1 = j1["data"]
+
+        id_proc = d1.get("IdProcedimento")
+        if not id_proc:
+            return d1
+
+        # call 2 — endpoint /consultar/{id} retorna o conjunto rico
+        resp2 = await self._request("GET", f"/processo/consultar/{id_proc}")
+        j2 = resp2.json()
+        if not j2.get("sucesso"):
+            # se a segunda call falhar, retorna pelo menos a primeira
+            return d1
+        rich = j2.get("data", {}) or {}
+
+        # merge: rich tem campos como especificacao, assuntos, interessados, ...
+        # d1 tem IdProcedimento, ProtocoloProcedimentoFormatado, NomeTipoProcedimento
+        return {**d1, **rich}
 
     async def listar_documentos(
         self, id_procedimento: str, limit: int = 200, start: int = 0
