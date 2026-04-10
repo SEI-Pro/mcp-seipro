@@ -1,5 +1,6 @@
 """MCP Server genérico para o SEI (Sistema Eletrônico de Informações)."""
 
+import asyncio
 import base64
 import json
 import logging
@@ -11,6 +12,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.transport_security import TransportSecuritySettings
 
 from mcp_seipro.sei_client import SEIClient
+from mcp_seipro.sei_web_client import SEIWebClient
 from mcp_seipro.html_utils import (
     html_to_text, html_to_markdown,
     pdf_to_text, pdf_to_markdown,
@@ -33,19 +35,21 @@ _http_port = int(os.environ.get("PORT", 8000))
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     if _http_mode:
-        # Modo HTTP: SEIClient criado por request com credenciais do token OAuth
-        yield {"sei": None}
+        # Modo HTTP: clients criados por request com credenciais do token OAuth
+        yield {"sei": None, "sei_web": None}
     else:
-        # Modo stdio: SEIClient com credenciais das env vars
+        # Modo stdio: clients com credenciais das env vars
         client = SEIClient()
+        web_client = SEIWebClient()
         try:
-            yield {"sei": client}
+            yield {"sei": client, "sei_web": web_client}
         finally:
             await client.close()
+            await web_client.close()
 
 
 def _get_client(ctx: Context) -> SEIClient:
-    """Obtém o SEIClient, criando sob demanda em modo HTTP."""
+    """Obtém o SEIClient REST, criando sob demanda em modo HTTP."""
     client = ctx.request_context.lifespan_context.get("sei")
     if client is not None:
         return client
@@ -68,6 +72,33 @@ def _get_client(ctx: Context) -> SEIClient:
         return client
 
     raise ValueError("SEIClient nao configurado. Verifique as variaveis de ambiente.")
+
+
+def _get_web_client(ctx: Context) -> SEIWebClient:
+    """Obtém o SEIWebClient (scraper), criando sob demanda em modo HTTP.
+
+    O scraper mantém estado de sessão (cookies + infra_hash) e por isso é
+    instanciado uma vez por contexto, não por chamada.
+    """
+    client = ctx.request_context.lifespan_context.get("sei_web")
+    if client is not None:
+        return client
+
+    if _http_mode:
+        from mcp.server.auth.middleware.auth_context import get_access_token
+        from mcp_seipro.auth import get_sei_credentials_from_token
+
+        access_token = get_access_token()
+        if not access_token:
+            raise ValueError("Autenticacao necessaria. Reconecte o MCP.")
+        creds = get_sei_credentials_from_token(access_token.token)
+        if not creds:
+            raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
+        client = SEIWebClient(**creds)
+        ctx.request_context.lifespan_context["sei_web"] = client
+        return client
+
+    raise ValueError("SEIWebClient nao configurado.")
 
 
 _http_kwargs = {}
@@ -263,13 +294,64 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
 
     Exemplo de protocolo: 50300.000123/2025-00
 
-    Retorna metadados do processo incluindo o IdProcedimento,
-    necessário para listar documentos e outras operações.
+    Implementação **híbrida**: combina REST mod-wssei (campos estruturados)
+    com scraper do frontend web (lista completa de documentos da árvore).
+    As duas fontes rodam em paralelo via asyncio.gather.
+
+    Campos da REST (`/processo/consultar` + `/processo/consultar/{id}`):
+    - IdProcedimento, ProtocoloProcedimentoFormatado, NomeTipoProcedimento
+    - especificacao, assuntos[], interessados[], observacoes[]
+    - nivelAcesso, hipoteseLegal, grauSigilo
+
+    Campos do scraper web (`procedimento_visualizar` / arvore_montar.php):
+    - documentos[]: lista completa de documentos com id, label, tipo
+    - relacionados[]: processos relacionados (cards na sidebar)
+
+    Se o scraper web falhar (ex: processo não está na inbox da unidade atual),
+    a tool ainda retorna os campos REST. Se a REST falhar, retorna pelo menos
+    o que o scraper conseguiu extrair.
     """
     try:
         client = _get_client(ctx)
-        result = await client.consultar_processo(protocolo_formatado)
-        return _json(result)
+        web = _get_web_client(ctx)
+        if web._inbox_url is None:
+            try:
+                await web.login()
+            except Exception as e:
+                logger.warning(f"web login falhou, seguindo só com REST: {e}")
+
+        # roda REST completo e web em paralelo; suporta falha individual
+        rest_task = asyncio.create_task(client.consultar_processo_completo(protocolo_formatado))
+        web_task = asyncio.create_task(web.consultar_processo(protocolo_formatado))
+        rest_result, web_result = await asyncio.gather(
+            rest_task, web_task, return_exceptions=True
+        )
+
+        merged: dict = {}
+        warnings: list[str] = []
+
+        if isinstance(rest_result, Exception):
+            warnings.append(f"REST falhou: {rest_result}")
+        else:
+            merged.update(rest_result)
+
+        if isinstance(web_result, Exception):
+            warnings.append(f"Web scraper falhou: {web_result}")
+        else:
+            # Web traz documentos[], relacionados[] e id_procedimento (snake_case).
+            # Não sobrescreve campos da REST que tenham nomes parecidos —
+            # REST é a fonte canônica para metadata; web complementa com docs.
+            for k, v in web_result.items():
+                if k not in merged:
+                    merged[k] = v
+
+        if not merged:
+            return _error("Ambas as fontes (REST e Web) falharam: " + " | ".join(warnings))
+
+        if warnings:
+            merged["_warnings"] = warnings
+
+        return _json(merged)
     except Exception as e:
         return _error(str(e))
 
@@ -842,50 +924,53 @@ async def sei_editar_secao(
 
 @mcp.tool()
 async def sei_listar_processos(
-    limit: int = 50,
     pagina: int = 0,
-    tipo: str = "",
     apenas_meus: str = "",
+    tipo: str = "",
     filtro: str = "",
-    todas_paginas: bool = False,
     ctx: Context = None,
 ) -> str:
-    """Lista processos da caixa da unidade atual no SEI.
+    """Lista processos da caixa da unidade atual no SEI (Controle de Processos).
+
+    Implementação via scraper do frontend web (~20× mais rápida que a REST API).
+    Retorna a página inteira de uma vez (a paginação é controlada pelo SEI;
+    para a maioria das unidades todos os processos cabem em poucas páginas).
 
     Parâmetros:
-    - limit: quantidade por página (padrão 50)
     - pagina: número da página (0=primeira, 1=segunda, etc.)
-    - tipo: filtrar por tipo de processo
-    - apenas_meus: "S" para apenas processos atribuídos ao usuário
-    - filtro: texto para filtrar processos
-    - todas_paginas: se True, busca TODAS as páginas automaticamente
-      (pode ser lento para caixas com muitos processos)
+    - apenas_meus: "S" para apenas processos atribuídos ao usuário logado
+      (filtro server-side via hdnMeusProcessos=M)
+    - tipo: substring (case-insensitive) para filtrar pelo nome do tipo processual
+      (filtro client-side, sobre a coluna "Tipo")
+    - filtro: substring (case-insensitive) aplicada a qualquer campo do processo
+      (protocolo, tipo, especificação, interessados — filtro client-side)
 
-    NOTA: processos sobrestados e concluídos não aparecem nesta listagem.
-    Use sei_consultar_processo para verificar o estado de um processo específico.
+    Campos retornados por processo (visualização Detalhada):
+    - id_procedimento: id interno do SEI
+    - protocolo: número formatado (ex: 50300.007186/2026-69)
+    - Tipo: tipo processual
+    - atribuicao: usuário ao qual está atribuído
+    - Especificação, Interessados, Marcadores, etc. — conforme as colunas
+      configuradas no painel da unidade
+
+    NOTAS:
+    - Processos sobrestados e concluídos não aparecem nesta listagem.
+    - Para agrupamento estatístico (sei_resumo_processos) usa-se a REST API
+      diretamente (que tem flags estruturadas como tramitação, sobrestamento,
+      acesso, etc.).
+    - Login web é executado uma vez por sessão (~3 s); listagens subsequentes
+      custam ~600 ms cada, contra ~14 s da REST API.
     """
     try:
-        client = _get_client(ctx)
-        if todas_paginas:
-            todos = []
-            pg = 0
-            while True:
-                result = await client.listar_processos(
-                    limit=200, start=pg, tipo=tipo,
-                    apenas_meus=apenas_meus, filtro=filtro,
-                )
-                todos.extend(result["processos"])
-                if not result.get("tem_proxima"):
-                    break
-                pg += 1
-            return _json({
-                "processos": todos,
-                "total_itens": len(todos),
-                "todas_paginas": True,
-            })
-        result = await client.listar_processos(
-            limit=limit, start=pagina, tipo=tipo,
-            apenas_meus=apenas_meus, filtro=filtro,
+        web = _get_web_client(ctx)
+        if web._inbox_url is None:
+            await web.login()
+        result = await web.listar_processos(
+            detalhada=True,
+            pagina=pagina,
+            apenas_meus=(apenas_meus.upper() == "S"),
+            tipo=tipo,
+            filtro=filtro,
         )
         return _json(result)
     except Exception as e:
