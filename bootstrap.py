@@ -41,7 +41,13 @@ def main():
     if not MCP_SEIPRO.exists():
         setup()
 
-    os.execv(str(MCP_SEIPRO), [str(MCP_SEIPRO)])
+    if IS_WINDOWS:
+        # No Windows, os.execv cria um processo novo e mata o atual.
+        # O cliente MCP monitora o PID original e fecha ao detectar a saída.
+        # subprocess.call mantém o processo-pai vivo enquanto o filho roda.
+        sys.exit(subprocess.call([str(MCP_SEIPRO)]))
+    else:
+        os.execv(str(MCP_SEIPRO), [str(MCP_SEIPRO)])
 
 
 if __name__ == "__main__":
