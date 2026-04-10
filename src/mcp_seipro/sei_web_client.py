@@ -434,6 +434,128 @@ class SEIWebClient:
 
         return result
 
+    async def listar_documentos(self, protocolo_formatado: str) -> dict:
+        """Lista documentos de um processo via web scraper (arvore_montar).
+
+        Chama `consultar_processo()` internamente e parseia os labels dos nós
+        para extrair tipo do documento, sigla da unidade e número SEI.
+
+        Retorna:
+            {
+              "processo": {"protocolo": str, "id_procedimento": str, "tipo": str},
+              "total_documentos": int,
+              "documentos": [{ordem, id, nome_composto, tipo_documento, sigla_unidade,
+                              numero_sei, tipo_no, icone}, ...],
+            }
+
+        ~10× mais rápido que a REST /documento/listar (9.7 s → ~1 s).
+        """
+        proc = await self.consultar_processo(protocolo_formatado)
+
+        docs_raw = proc.get("documentos", [])
+        docs = []
+        for i, d in enumerate(docs_raw):
+            label = d.get("label", "")
+            parsed = _parse_doc_label(label)
+            docs.append({
+                "ordem": i + 1,
+                "id": d["id"],
+                "nome_composto": label,
+                **parsed,
+                "tipo_no": d.get("tipo_no", ""),
+                "icone": d.get("icone", ""),
+            })
+
+        return {
+            "processo": {
+                "protocolo": protocolo_formatado,
+                "id_procedimento": proc.get("id_procedimento", ""),
+                "tipo": proc.get("tipo", ""),
+            },
+            "total_documentos": len(docs),
+            "documentos": docs,
+        }
+
+    async def listar_atividades(self, protocolo_formatado: str) -> dict:
+        """Lista andamentos/atividades de um processo via web scraper.
+
+        Scrape de `procedimento_consultar_historico.php` (~370 ms, vs ~2.5 s REST).
+        Precisa da URL assinada do histórico que está na árvore do processo.
+
+        Retorna:
+            {
+              "processo": {"protocolo": str, "id_procedimento": str},
+              "total_andamentos": int,
+              "andamentos": [{data_hora, unidade, usuario, descricao}, ...],
+            }
+        """
+        if self._inbox_url is None:
+            raise RuntimeError("login() não foi chamado")
+
+        # garante que o protocolo está no cache
+        if protocolo_formatado not in self._trabalhar_links:
+            await self.fetch_inbox(detalhada=False)
+            if protocolo_formatado not in self._trabalhar_links:
+                raise RuntimeError(
+                    f"Protocolo {protocolo_formatado!r} não encontrado na inbox"
+                )
+
+        trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
+
+        # frameset → arvore
+        r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
+        if r1.status_code != 200:
+            raise RuntimeError(f"trabalhar status={r1.status_code}")
+        soup_fs = BeautifulSoup(r1.text, "html.parser")
+        ifr = soup_fs.find("iframe", id="ifrArvore")
+        if not ifr:
+            raise RuntimeError("ifrArvore não encontrado")
+        arvore_url = urljoin(str(r1.url), ifr.get("src", "").replace("&amp;", "&"))
+
+        m_id = re.search(r"id_procedimento=(\d+)", str(r1.url))
+        id_proc = m_id.group(1) if m_id else ""
+
+        # fetch arvore para pegar o link do histórico
+        r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
+        if r2.status_code != 200:
+            raise RuntimeError(f"arvore status={r2.status_code}")
+
+        m_hist = re.search(
+            r"(controlador\.php\?acao=procedimento_consultar_historico[^\"']*infra_hash=[a-f0-9]+)",
+            r2.text,
+        )
+        if not m_hist:
+            raise RuntimeError("Link procedimento_consultar_historico não encontrado na árvore")
+        hist_url = urljoin(str(r2.url), m_hist.group(1).replace("&amp;", "&"))
+
+        # fetch histórico
+        r3 = await self._http.get(hist_url, headers={"Referer": str(r2.url)})
+        if r3.status_code != 200:
+            raise RuntimeError(f"histórico status={r3.status_code}")
+
+        soup_h = BeautifulSoup(r3.text, "html.parser")
+        tbl = soup_h.find("table", id="tblHistorico")
+        andamentos: list[dict[str, str]] = []
+        if tbl:
+            for tr in tbl.find_all("tr")[1:]:  # pula header
+                tds = tr.find_all("td")
+                if len(tds) >= 4:
+                    andamentos.append({
+                        "data_hora": tds[0].get_text(" ", strip=True),
+                        "unidade": tds[1].get_text(" ", strip=True),
+                        "usuario": tds[2].get_text(" ", strip=True),
+                        "descricao": tds[3].get_text(" ", strip=True),
+                    })
+
+        return {
+            "processo": {
+                "protocolo": protocolo_formatado,
+                "id_procedimento": id_proc,
+            },
+            "total_andamentos": len(andamentos),
+            "andamentos": andamentos,
+        }
+
     async def listar_processos(
         self,
         detalhada: bool = True,
@@ -572,11 +694,64 @@ def parse_arvore_nos(html: str) -> list[dict]:
 
 
 _RE_PARENS = re.compile(r"^\s*\(\s*|\s*\)\s*$")
+# Parseia label de documento: "Despacho GPF 2874369" ou "Relatório (2869849)"
+_RE_DOC_LABEL = re.compile(
+    r"^(.+?)\s+([A-Z][A-Z0-9/_-]+)\s+(\d+)$"           # interno: Tipo SIGLA NUMERO
+    r"|^(.+?)\s+\((\d+)\)$"                               # externo: Tipo (NUMERO)
+    r"|^(.+?)\s+([A-Z][A-Z0-9/_-]+)\s+(\d+)\s+\((\d+)\)$"  # misto: Tipo SIGLA NUMERO (SEI)
+)
 
 
 _RE_TOOLTIP = re.compile(
     r"infraTooltipMostrar\(\s*'([^']*)'\s*,\s*'([^']*)'\s*\)"
 )
+
+
+def _parse_doc_label(label: str) -> dict:
+    """Parseia o label de um nó DOCUMENTO da árvore do SEI.
+
+    Formatos conhecidos:
+    - Interno: "Despacho GPF 2874369"  → tipo=Despacho, sigla=GPF, numero=2874369
+    - Externo: "Relatório Geral (2869849)" → tipo=Relatório Geral, numero=2869849
+    - Misto:   "Comprovante de envio e-CGU - SA 4 (2869849)"
+
+    Retorna dict com chaves opcionais: tipo_documento, sigla_unidade, numero_sei.
+    """
+    result: dict[str, str] = {}
+    if not label:
+        return result
+
+    # Tenta formato interno: "Tipo SIGLA NUMERO"
+    m = re.match(r"^(.+?)\s+([A-Z][A-Z0-9/_-]+)\s+(\d+)$", label)
+    if m:
+        result["tipo_documento"] = m.group(1).strip()
+        result["sigla_unidade"] = m.group(2)
+        result["numero_sei"] = m.group(3)
+        return result
+
+    # Tenta formato com parênteses: "Tipo (NUMERO)" ou "Tipo SIGLA (NUMERO)"
+    m = re.match(r"^(.+?)\s+\((\d+)\)$", label)
+    if m:
+        corpo = m.group(1).strip()
+        result["numero_sei"] = m.group(2)
+        # tenta extrair sigla do corpo: "Comprovante e-CGU - SA 4"
+        m2 = re.match(r"^(.+?)\s+([A-Z][A-Z0-9/_-]+)\s+\d*$", corpo)
+        if m2:
+            result["tipo_documento"] = m2.group(1).strip()
+            result["sigla_unidade"] = m2.group(2)
+        else:
+            result["tipo_documento"] = corpo
+        return result
+
+    # fallback: label inteiro como tipo
+    # tenta ao menos extrair o número no final
+    m = re.search(r"(\d{5,})$", label)
+    if m:
+        result["numero_sei"] = m.group(1)
+        result["tipo_documento"] = label[: m.start()].strip()
+    else:
+        result["tipo_documento"] = label
+    return result
 
 
 def _extract_tooltip(link_tag, row: dict) -> None:

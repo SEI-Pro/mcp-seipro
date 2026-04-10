@@ -363,104 +363,42 @@ async def sei_arvore_processo(
 ) -> str:
     """Mostra a árvore completa de documentos de um processo SEI.
 
-    Consulta o processo pelo protocolo formatado e retorna todos os
-    documentos com metadados relevantes, prontos para exibição em tabela:
-
-    | # | Tipo | Tipo do Documento | Protocolo | Unidade | Tamanho | Assinado | Cancelado | Visualizar | Bloqueado |
+    Implementação via scraper web (~10× mais rápido que REST: ~1 s vs ~12 s).
+    Parseia arvore_montar.php para extrair id, tipo, sigla da unidade geradora
+    e número SEI de cada documento.
 
     Aceita o protocolo formatado (ex: 50300.000123/2025-00).
+
+    Para ler o conteúdo de um documento, use sei_ler_documento com o id.
     """
     try:
-        client = _get_client(ctx)
-        proc = await client.consultar_processo(protocolo_formatado)
-        id_proc = str(proc.get("IdProcedimento", ""))
-        if not id_proc:
-            return _error(f"IdProcedimento não encontrado para {protocolo_formatado}")
-
-        # Buscar todos os documentos (paginar se necessário)
-        todos_docs = []
-        pg = 0
-        while True:
-            docs = await client.listar_documentos(id_proc, limit=200, start=pg)
-            todos_docs.extend(docs)
-            if len(docs) < 200:
-                break
-            pg += 1
-
-        # Montar resposta estruturada com indicação de volume
-        DOCS_POR_VOLUME = 20
-        total_volumes = (len(todos_docs) - 1) // DOCS_POR_VOLUME + 1 if todos_docs else 0
-
-        arvore = []
-        for i, d in enumerate(todos_docs):
-            a = d.get("atributos", {})
-            s = a.get("status", {})
-            tam = a.get("tamanho", "")
-            if tam:
-                try:
-                    kb = int(tam) / 1024
-                    tamanho = f"{kb:.0f} KB" if kb < 1024 else f"{kb / 1024:.1f} MB"
-                except ValueError:
-                    tamanho = tam
-            else:
-                tamanho = None
-
-            volume = i // DOCS_POR_VOLUME + 1
-            ordem_no_volume = i % DOCS_POR_VOLUME + 1
-
-            arvore.append({
-                "ordem": i + 1,
-                "volume": volume,
-                "ordem_no_volume": ordem_no_volume,
-                "id": d.get("id"),
-                "tipo_documento": a.get("tipoDocumento", ""),
-                "tipo_nome": a.get("tipo", ""),
-                "protocolo": a.get("protocoloFormatado", ""),
-                "nome_composto": a.get("nomeComposto", ""),
-                "nome_arquivo": a.get("nome", "") or None,
-                "unidade": a.get("siglaUnidade", ""),
-                "tamanho": tamanho,
-                "assinado": s.get("documentoAssinado") == "S",
-                "cancelado": s.get("documentoCancelado") == "S",
-                "pode_visualizar": s.get("podeVisualizarDocumento") == "S",
-                "bloqueado": s.get("sinBloqueado") == "S",
-                "restrito": s.get("documentoRestrito") == "S",
-                "publicado": s.get("documentoPublicado") == "S",
-            })
-
-        return _json({
-            "processo": {
-                "protocolo": protocolo_formatado,
-                "id_procedimento": id_proc,
-                "tipo": proc.get("NomeTipoProcedimento", ""),
-            },
-            "total_documentos": len(arvore),
-            "total_volumes": total_volumes,
-            "documentos": arvore,
-        })
+        web = _get_web_client(ctx)
+        if web._inbox_url is None:
+            await web.login()
+        result = await web.listar_documentos(protocolo_formatado)
+        return _json(result)
     except Exception as e:
         return _error(str(e))
 
 
 @mcp.tool()
 async def sei_listar_documentos(
-    id_procedimento: str,
-    limit: int = 200,
-    pagina: int = 0,
+    protocolo_formatado: str,
     ctx: Context = None,
 ) -> str:
     """Lista todos os documentos de um processo SEI.
 
-    Requer o IdProcedimento (número interno obtido via sei_consultar_processo).
-    Cada documento tem: id, tipoDocumento (I=interno, X=externo), tipo (nome),
-    protocoloFormatado, nome do arquivo, e status.
+    Implementação via scraper web (~10× mais rápido que REST).
+    Aceita o protocolo formatado (ex: 50300.000123/2025-00).
 
-    Para ler o conteúdo, use sei_ler_documento (tipo I) ou sei_baixar_anexo (tipo X).
-    Paginação: pagina=0 é a primeira página, pagina=1 a segunda, etc.
+    Cada documento tem: id, nome_composto, tipo_documento, sigla_unidade,
+    numero_sei. Para ler o conteúdo, use sei_ler_documento com o id.
     """
     try:
-        client = _get_client(ctx)
-        result = await client.listar_documentos(id_procedimento, limit, pagina)
+        web = _get_web_client(ctx)
+        if web._inbox_url is None:
+            await web.login()
+        result = await web.listar_documentos(protocolo_formatado)
         return _json(result)
     except Exception as e:
         return _error(str(e))
@@ -2917,21 +2855,21 @@ async def sei_listar_relacionamentos(
 @mcp.tool()
 async def sei_listar_atividades(
     processo: str,
-    limit: int = 50,
-    pagina: int = 0,
     ctx: Context = None,
 ) -> str:
     """Lista o histórico de atividades/andamentos de um processo.
 
-    Retorna todas as ações registradas no processo (tramitações,
-    assinaturas, edições, etc.).
-    Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
-    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+    Implementação via scraper web (procedimento_consultar_historico.php).
+    Retorna todas as ações registradas (tramitações, assinaturas, edições, etc.)
+    com data/hora, unidade, usuário e descrição.
+
+    Aceita protocolo formatado (ex: 50300.000123/2025-00).
     """
     try:
-        client = _get_client(ctx)
-        id_proc = await _resolver_processo(client, processo)
-        result = await client.listar_atividades(id_proc, limit=limit, start=pagina)
+        web = _get_web_client(ctx)
+        if web._inbox_url is None:
+            await web.login()
+        result = await web.listar_atividades(processo)
         return _json(result)
     except Exception as e:
         return _error(str(e))

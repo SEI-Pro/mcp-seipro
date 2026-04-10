@@ -4,7 +4,8 @@ import base64
 import json
 import logging
 import os
-from typing import Optional
+import time
+from typing import Any, Optional
 
 import httpx
 
@@ -22,6 +23,10 @@ class SEIClient:
         self._contexto = kwargs.get("sei_contexto", os.environ.get("SEI_CONTEXTO", ""))
         self._token: Optional[str] = None
         self._unidade_ativa: Optional[str] = None
+        # Cache de metadados estáticos (TTL 1 hora). Evita chamadas REST
+        # repetidas de ~3-5 s cada para dados que raramente mudam.
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._cache_ttl: float = 3600.0  # 1 hora
 
         verify_ssl = kwargs.get("sei_verify_ssl", os.environ.get("SEI_VERIFY_SSL", "true"))
         if isinstance(verify_ssl, str):
@@ -30,6 +35,20 @@ class SEIClient:
             timeout=httpx.Timeout(120.0, connect=10.0, read=90.0),
             verify=verify_ssl,
         )
+
+    def _cache_get(self, key: str) -> Any:
+        """Retorna valor cacheado se TTL não expirou, senão None."""
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        ts, val = entry
+        if time.monotonic() - ts > self._cache_ttl:
+            del self._cache[key]
+            return None
+        return val
+
+    def _cache_set(self, key: str, val: Any) -> None:
+        self._cache[key] = (time.monotonic(), val)
 
     async def _get_headers(self) -> dict:
         if not self._token:
@@ -435,12 +454,18 @@ class SEIClient:
     # ------------------------------------------------------------------
 
     async def listar_unidades_usuario(self) -> list[dict]:
-        """Lista unidades às quais o usuário autenticado tem acesso."""
+        """Lista unidades às quais o usuário autenticado tem acesso.
+        Resultado cacheado por 1 hora (raramente muda)."""
+        cached = self._cache_get("unidades_usuario")
+        if cached is not None:
+            return cached
         resp = await self._request("GET", "/usuario/unidades")
         data = resp.json()
         if not data.get("sucesso"):
             raise Exception(f"Erro ao listar unidades: {data.get('mensagem')}")
-        return data.get("data", [])
+        result = data.get("data", [])
+        self._cache_set("unidades_usuario", result)
+        return result
 
     async def pesquisar_usuarios(
         self, filtro: str = "", id_orgao: str = "", limit: int = 50, start: int = 0
@@ -682,7 +707,13 @@ class SEIClient:
     async def pesquisar_tipos_processo(
         self, filtro: str = "", favoritos: str = "", limit: int = 50, start: int = 0
     ) -> dict:
-        """Pesquisa tipos de processo disponíveis."""
+        """Pesquisa tipos de processo disponíveis.
+        Resultado cacheado por 1 hora quando chamado sem filtros (metadado estático)."""
+        cache_key = f"tipos_processo:{filtro}:{favoritos}:{limit}:{start}"
+        if not filtro and not favoritos:
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                return cached
         params: dict = {"limit": limit, "start": start}
         if filtro:
             params["filter"] = filtro
@@ -692,7 +723,10 @@ class SEIClient:
         data = resp.json()
         if not data.get("sucesso"):
             raise Exception(f"Erro ao pesquisar tipos de processo: {data.get('mensagem')}")
-        return self._paginated(data, "tipos", data.get("data", []), start, limit)
+        result = self._paginated(data, "tipos", data.get("data", []), start, limit)
+        if not filtro and not favoritos:
+            self._cache_set(cache_key, result)
+        return result
 
     async def criar_processo(
         self,
@@ -977,7 +1011,13 @@ class SEIClient:
     # ------------------------------------------------------------------
 
     async def pesquisar_marcadores(self, filtro: str = "", limit: int = 50, start: int = 0) -> dict:
-        """Pesquisa marcadores disponíveis na unidade."""
+        """Pesquisa marcadores disponíveis na unidade.
+        Resultado cacheado por 1 hora quando chamado sem filtros."""
+        cache_key = f"marcadores:{filtro}:{limit}:{start}"
+        if not filtro:
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                return cached
         params: dict = {"limit": limit, "start": start}
         if filtro:
             params["filter"] = filtro
@@ -985,7 +1025,10 @@ class SEIClient:
         data = resp.json()
         if not data.get("sucesso"):
             raise Exception(f"Erro ao pesquisar marcadores: {data.get('mensagem')}")
-        return self._paginated(data, "marcadores", data.get("data", []), start, limit)
+        result = self._paginated(data, "marcadores", data.get("data", []), start, limit)
+        if not filtro:
+            self._cache_set(cache_key, result)
+        return result
 
     async def listar_cores_marcador(self) -> list[dict]:
         """Lista cores disponíveis para marcadores."""
