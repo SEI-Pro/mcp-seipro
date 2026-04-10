@@ -4,9 +4,9 @@
 [![Python](https://img.shields.io/pypi/pyversions/mcp-seipro)](https://pypi.org/project/mcp-seipro/)
 [![License](https://img.shields.io/pypi/l/mcp-seipro)](https://pypi.org/project/mcp-seipro/)
 
-MCP Server do **[SEI Pro](https://sei-pro.github.io/sei-pro/)** para o SEI (Sistema Eletrônico de Informações) via API REST mod-wssei v2.
+MCP Server do **[SEI Pro](https://sei-pro.github.io/sei-pro/)** para o SEI (Sistema Eletrônico de Informações) via API REST mod-wssei v2 + scraper do frontend web (modo híbrido).
 
-**116 tools** para gerenciar processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais em qualquer instância do SEI. Cobertura completa da API mod-wssei v2 oficial ([pengovbr/mod-wssei](https://github.com/pengovbr/mod-wssei)).
+**116 tools** para gerenciar processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais em qualquer instância do SEI. Cobertura completa da API mod-wssei v2 oficial ([pengovbr/mod-wssei](https://github.com/pengovbr/mod-wssei)) **mais um scraper HTTP do frontend web** que dá ganhos de até **23×** em operações de listagem (`sei_listar_processos` cai de ~14 s para ~600 ms warm).
 
 ## Instalação
 
@@ -149,10 +149,10 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 
 | Tool | Descrição |
 |------|-----------|
-| `sei_listar_processos` | Lista caixa da unidade (`todas_paginas=true`) |
+| `sei_listar_processos` | Lista caixa da unidade via scraper web (~23× mais rápido que REST). Suporta `apenas_meus`, `tipo`, `filtro` |
 | `sei_pesquisar_processos` | Pesquisa por texto, descrição ou datas |
-| `sei_consultar_processo` | Consulta processo pelo protocolo formatado |
-| `sei_resumo_processos` | Resumo agrupado por 17 campos |
+| `sei_consultar_processo` | **Híbrido**: REST (especificacao, assuntos, interessados, observacoes) + Web (lista de documentos da árvore) em paralelo |
+| `sei_resumo_processos` | Resumo agrupado por 17 campos (usa REST direto para flags estruturadas) |
 | `sei_listar_unidades_processo` | Lista unidades onde o processo está aberto |
 | `sei_consultar_atribuicao` | Consulta quem é responsável pelo processo |
 | `sei_verificar_acesso` | Verifica se o usuário tem acesso ao processo |
@@ -346,6 +346,25 @@ Tabela de compatibilidade SEI ↔ mod-wssei:
 Se algum endpoint falhar com erro inesperado, use `sei_versao` para verificar a versão do mod-wssei instalada na sua instância do SEI.
 
 > **Nota:** a API mod-wssei v2 não expõe endpoint para **cancelar assinatura** de documentos em nenhuma versão (verificado até v3.0.2). A função existe no core do SEI (`DocumentoRN::cancelarAssinaturaInternoControlado`) mas não está exposta via REST. O `sei_cancelar_assinatura` usa o workaround de forçar uma edição mínima no documento.
+
+## Arquitetura híbrida REST + Web scraper
+
+A maioria das tools usa a **REST mod-wssei v2** (estável, oficial, disponível desde SEI 4.0.x). Mas duas operações críticas para latência ganham com um caminho alternativo via **scraping HTTP do frontend web do SEI**:
+
+| Tool | Estratégia | Ganho medido |
+|---|---|---|
+| `sei_listar_processos` | Scraper web puro (`procedimento_controlar.php` em modo Detalhada) | ~14.7 s → ~625 ms warm (**23×**) |
+| `sei_consultar_processo` | Híbrido: REST `/processo/consultar/{id}` (estruturado) + scraper `arvore_montar.php` (lista de documentos) em paralelo via `asyncio.gather` | combina dados que nenhum dos métodos sozinho fornece |
+
+O scraper:
+
+- Mantém uma **sessão SIP autenticada** persistente (login custa ~3 s, uma vez por conexão MCP).
+- Reaproveita o `infra_hash` capturado da cadeia de redirects pós-login (válido enquanto a sessão SIP viver).
+- Cacheia o action e os hidden fields do form principal de `procedimento_controlar` para POSTs subsequentes.
+- Re-loga automaticamente se detectar que a sessão expirou.
+- Funciona com qualquer instância SEI 4.0+/5.0+ que use o módulo `Infra` v1.5x+ (a maioria das instalações modernas).
+
+A REST mod-wssei continua sendo o caminho **padrão** para todas as outras operações e o **fallback** se o scraper falhar (ex: CAPTCHA após muitas tentativas, 2FA habilitado, mudança de layout no SEI). O método REST de `listar_processos` permanece disponível em [`SEIClient.listar_processos`](src/mcp_seipro/sei_client.py) — não exposto como tool MCP, mas usado internamente pelo `sei_resumo_processos` (que precisa dos flags estruturados de status).
 
 ## Funcionalidades
 

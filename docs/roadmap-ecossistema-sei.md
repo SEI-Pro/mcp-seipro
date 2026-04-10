@@ -12,6 +12,61 @@ Criar um ecossistema completo em torno do SEI composto por:
 
 ---
 
+## Marco Técnico — Scraper Web Híbrido (abril/2026)
+
+A REST mod-wssei v2 é estável e completa, mas em testes de carga a operação mais usada (`listar_processos`) ficou prohibitivamente lenta — chamadas warm levavam ~14.7 s para retornar uma página de 50 processos. Investigamos a causa e implementamos um **scraper HTTP do frontend web do SEI** como caminho alternativo para as operações onde o ganho compensa.
+
+### Resultados medidos (sei.antaq.gov.br)
+
+| Operação | REST mod-wssei | Scraper Web | Speedup |
+|---|---:|---:|---:|
+| `listar_processos` warm median (n=5) | 14.721 ms | 625 ms | **23.6×** |
+| `listar_processos` cold | 15.500 ms | 1.227 ms | 12.6× |
+| `consultar_processo` REST completo (2 calls) | 5.853 ms | n/a | — |
+| `consultar_processo` Web (trabalhar+arvore) | n/a | 934 ms | — |
+| `consultar_processo` **Híbrido (paralelo)** | combinado | 5.054 ms | 17 campos no merged total |
+
+### Arquitetura
+
+- **Novo módulo**: [`src/mcp_seipro/sei_web_client.py`](../src/mcp_seipro/sei_web_client.py) com `SEIWebClient`.
+- **Login**: formulário SIP via POST com CSRF token (`hdnToken<hash>`) capturado do GET inicial e o **par crítico `sbmLogin=Acessar`** (sem ele, o backend PHP não dispara o flow de autenticação — descoberto empiricamente).
+- **Navegação**: cadeia de redirects sip/login → sei/inicializar → sei/controlador captura o `infra_hash` da inbox URL automaticamente. O hash é reaproveitado enquanto a sessão SIP viver.
+- **Visualização Detalhada**: forçada via POST `hdnTipoVisualizacao=D` no form principal de `procedimento_controlar.php` (server salva como preferência).
+- **Filtros**: `apenas_meus` server-side via `hdnMeusProcessos=M`; `tipo` e `filtro` client-side por substring.
+- **Paginação**: via POST `hdnInfraPaginaAtual=N` + `hdnInfraHashCriterios` (cacheado da resposta anterior).
+
+### Tools migradas
+
+| Tool | Estratégia | Status |
+|---|---|---|
+| `sei_listar_processos` | **100% scraper web** | ✅ migrado |
+| `sei_consultar_processo` | **Híbrido**: REST `/processo/consultar/{id}` (especificacao, assuntos, interessados, observacoes) + scraper `arvore_montar.php` (lista de documentos) em paralelo via `asyncio.gather` | ✅ migrado |
+| `sei_resumo_processos` | **Mantém REST direto** (precisa dos flags estruturados de status) | ✅ sem alteração |
+| Outras 113 tools | REST mod-wssei | ✅ sem alteração |
+
+### Limitações conhecidas
+
+- O scraper aborta com erro claro se detectar **CAPTCHA** (após N falhas de login) ou **2FA** habilitado para o usuário.
+- Algumas colunas da Detalhada (Especificação, Marcadores) só aparecem se o usuário tiver configurado o painel da unidade para exibi-las. Sem isso, o web só retorna o subconjunto visível.
+- O endpoint REST `/processo/consultar/{id}` ainda é o caminho crítico do `consultar_processo` híbrido (~4 s) — o paralelismo só economiza quando alguma das fontes é mais lenta.
+
+### Backup REST
+
+A implementação REST original de `listar_processos` permanece em [`SEIClient.listar_processos`](../src/mcp_seipro/sei_client.py) (não exposta como tool MCP, mas usada internamente pelo `sei_resumo_processos`). Isso permite alternar de volta sem mudanças de código se o scraper falhar em alguma instância SEI específica.
+
+### Benchmarks reproduzíveis
+
+Os scripts de PoC ficam em [`scripts/`](../scripts/) e podem ser rodados localmente:
+
+```bash
+python scripts/bench_listar_processos.py --warm 5 --paginas 3
+python scripts/bench_consultar_processo.py --warm 3 --com-historico
+```
+
+Saída: relatório markdown com timing lado-a-lado, contagem de campos, diff REST vs Web, e samples de dados.
+
+---
+
 ## Fase 1 — Publicação do mcp-sei (Semana 1-2)
 
 ### 1.1 Preparar para publicação
