@@ -157,7 +157,7 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 | `sei_consultar_atribuicao` | Consulta quem é responsável pelo processo |
 | `sei_verificar_acesso` | Verifica se o usuário tem acesso ao processo |
 | `sei_listar_relacionamentos` | Lista processos relacionados (mod-wssei 3.0.2+) |
-| `sei_listar_atividades` | Histórico completo de atividades/andamentos |
+| `sei_listar_atividades` | Histórico de atividades/andamentos via scraper web (~2× mais rápido) |
 | `sei_listar_interessados` | Lista interessados do processo |
 | `sei_listar_sobrestamentos` | Lista histórico de sobrestamentos |
 
@@ -199,9 +199,9 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 
 | Tool | Descrição |
 |------|-----------|
-| `sei_arvore_processo` | Árvore completa com metadados, volumes e emojis |
+| `sei_arvore_processo` | Árvore completa via scraper web (~10× mais rápido que REST). Aceita protocolo formatado |
 | `sei_buscar_documento` | Busca documento pelo número SEI (via Solr) |
-| `sei_listar_documentos` | Lista documentos de um processo |
+| `sei_listar_documentos` | Lista documentos via scraper web (~10× mais rápido). Aceita protocolo formatado |
 | `sei_ler_documento` | Lê documento (HTML ou PDF/OCR) em Markdown |
 | `sei_baixar_anexo` | Baixa documento externo em base64 (max 10MB) |
 | `sei_consultar_documento_externo` | Consulta metadados de documento externo |
@@ -353,8 +353,14 @@ A maioria das tools usa a **REST mod-wssei v2** (estável, oficial, disponível 
 
 | Tool | Estratégia | Ganho medido |
 |---|---|---|
-| `sei_listar_processos` | Scraper web puro (`procedimento_controlar.php` em modo Detalhada) | ~14.7 s → ~625 ms warm (**23×**) |
-| `sei_consultar_processo` | Híbrido: REST `/processo/consultar/{id}` (estruturado) + scraper `arvore_montar.php` (lista de documentos) em paralelo via `asyncio.gather` | combina dados que nenhum dos métodos sozinho fornece |
+| `sei_listar_processos` | Scraper web puro (`procedimento_controlar.php` em modo Detalhada) | ~14.7 s → ~625 ms (**23×**) |
+| `sei_consultar_processo` | Híbrido: REST `/processo/consultar/{id}` + scraper `arvore_montar.php` em paralelo | combina dados complementares |
+| `sei_arvore_processo` | Scraper web (`arvore_montar.php`) | ~12 s → ~1.1 s (**10×**) |
+| `sei_listar_documentos` | Scraper web (`arvore_montar.php`) | ~9.7 s → ~1.1 s (**10×**) |
+| `sei_listar_atividades` | Scraper web (`procedimento_consultar_historico.php`) | ~2.5 s → ~1.2 s (**2×**) |
+| `pesquisar_tipos_processo` | Cache in-memory TTL 1h | ~4.2 s → instant |
+| `listar_unidades_usuario` | Cache in-memory TTL 1h | ~3.0 s → instant |
+| `pesquisar_marcadores` | Cache in-memory TTL 1h | ~2.6 s → instant |
 
 O scraper:
 
