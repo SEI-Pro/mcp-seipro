@@ -571,6 +571,9 @@ def parse_arvore_nos(html: str) -> list[dict]:
     return out
 
 
+_RE_PARENS = re.compile(r"^\s*\(\s*|\s*\)\s*$")
+
+
 _RE_TOOLTIP = re.compile(
     r"infraTooltipMostrar\(\s*'([^']*)'\s*,\s*'([^']*)'\s*\)"
 )
@@ -652,6 +655,8 @@ def parse_inbox(html: str) -> tuple[str, list[dict]]:
                 if i < len(tds):
                     val = tds[i].get_text(" ", strip=True)
                     if val:
+                        if name == "atribuicao":
+                            val = _RE_PARENS.sub("", val).strip()
                         row[name] = val
             rows.append(row)
         return ("detalhada", rows)
@@ -685,7 +690,7 @@ def parse_inbox(html: str) -> tuple[str, list[dict]]:
                 if icones:
                     row["icones"] = icones
             if len(tds) >= 4:
-                atrib_text = tds[-1].get_text(" ", strip=True)
+                atrib_text = _RE_PARENS.sub("", tds[-1].get_text(" ", strip=True)).strip()
                 if atrib_text:
                     row["atribuicao"] = atrib_text
             rows.append(row)
