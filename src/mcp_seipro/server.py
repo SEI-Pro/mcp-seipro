@@ -1574,14 +1574,14 @@ async def sei_assinar_documento(
         login = client._usuario
         senha = client._senha
 
-        # Resolver número SEI → id interno se necessário
+        # Resolver número SEI → id interno (sempre, pois ambos são numéricos
+        # e indistinguíveis pelo formato; o resolver tenta Solr primeiro
+        # e só cai para id direto se Solr não achar)
         doc_id = id_documento.strip()
-        if not doc_id.isdigit() or len(doc_id) < 7:
-            # Pode ser número SEI, resolver
-            try:
-                doc_id, _ = await _resolver_documento(client, doc_id)
-            except Exception:
-                doc_id = id_documento  # Manter original se falhar
+        try:
+            doc_id, _ = await _resolver_documento(client, doc_id)
+        except Exception:
+            doc_id = id_documento.strip()  # Manter original se resolver falhar
 
         # Se cargo não informado, listar opções e pedir ao usuário
         if not cargo:
