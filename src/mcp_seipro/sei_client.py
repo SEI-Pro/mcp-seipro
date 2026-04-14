@@ -23,6 +23,8 @@ class SEIClient:
         self._contexto = kwargs.get("sei_contexto", os.environ.get("SEI_CONTEXTO", ""))
         self._token: Optional[str] = None
         self._unidade_ativa: Optional[str] = None
+        self._id_usuario: Optional[str] = None
+        self._id_orgao_usuario: Optional[str] = None
         # Cache de metadados estáticos (TTL 1 hora). Evita chamadas REST
         # repetidas de ~3-5 s cada para dados que raramente mudam.
         self._cache: dict[str, tuple[float, Any]] = {}
@@ -83,7 +85,15 @@ class SEIClient:
         data = resp.json()
         if not data.get("sucesso"):
             raise Exception(f"Falha na autenticação SEI: {data.get('mensagem')}")
-        self._token = data["data"]["token"]
+        payload = data["data"]
+        self._token = payload["token"]
+        login_data = payload.get("loginData") or {}
+        id_usuario = login_data.get("IdUsuario") or login_data.get("idUsuario")
+        if id_usuario is not None:
+            self._id_usuario = str(id_usuario)
+        id_orgao_usuario = login_data.get("IdOrgao") or login_data.get("idOrgao")
+        if id_orgao_usuario is not None:
+            self._id_orgao_usuario = str(id_orgao_usuario)
         logger.info("Autenticação SEI bem-sucedida")
         return self._token
 
@@ -615,6 +625,10 @@ class SEIClient:
         busca_rapida: str = "",
         data_inicio: str = "",
         data_fim: str = "",
+        sta_tipo_data: str = "",
+        id_unidade_geradora: str = "",
+        id_assunto: str = "",
+        grupo: str = "",
         limit: int = 50,
         start: int = 0,
     ) -> dict:
@@ -632,6 +646,14 @@ class SEIClient:
             params["dataInicio"] = data_inicio
         if data_fim:
             params["dataFim"] = data_fim
+        if sta_tipo_data:
+            params["staTipoData"] = sta_tipo_data
+        if id_unidade_geradora:
+            params["idUnidadeGeradora"] = id_unidade_geradora
+        if id_assunto:
+            params["idAssunto"] = id_assunto
+        if grupo:
+            params["grupo"] = grupo
         resp = await self._request("GET", "/processo/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
