@@ -1109,14 +1109,26 @@ async def sei_pesquisar_processos(
     busca_rapida: str = "",
     data_inicio: str = "",
     data_fim: str = "",
+    sta_tipo_data: str = "",
+    id_unidade_geradora: str = "",
+    id_assunto: str = "",
+    grupo: str = "",
     limit: int = 50,
     pagina: int = 0,
     ctx: Context = None,
 ) -> str:
-    """Pesquisa processos no SEI por texto, descrição ou datas.
+    """Pesquisa processos no SEI por texto, descrição, datas, unidade ou assunto.
 
     Use palavras_chave para busca geral ou busca_rapida para busca simplificada.
     Datas no formato DD/MM/AAAA.
+
+    Filtros adicionais:
+    - sta_tipo_data: tipo de período — "30" (últimos 30 dias), "60" (últimos 60 dias)
+      ou "0" (personalizado, requer data_inicio/data_fim)
+    - id_unidade_geradora: id da unidade que gerou o processo (use sei_listar_unidades)
+    - id_assunto: id do assunto (use sei_pesquisar_assuntos para obter o id)
+    - grupo: id do grupo de acompanhamento (use sei_listar_grupos_acompanhamento)
+
     Paginação: pagina=0 é a primeira página, pagina=1 a segunda, etc.
     """
     try:
@@ -1127,6 +1139,10 @@ async def sei_pesquisar_processos(
             busca_rapida=busca_rapida,
             data_inicio=data_inicio,
             data_fim=data_fim,
+            sta_tipo_data=sta_tipo_data,
+            id_unidade_geradora=id_unidade_geradora,
+            id_assunto=id_assunto,
+            grupo=grupo,
             limit=limit,
             start=pagina,
         )
@@ -1584,13 +1600,20 @@ async def sei_assinar_documento(
                         "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
             })
 
-        # Buscar id_usuario
-        result = await client.listar_usuarios(filtro=login, apenas_unidade=False)
-        id_usuario = ""
-        for u in result.get("usuarios", []):
-            if u.get("sigla", "").lower() == login.lower():
-                id_usuario = u.get("id_usuario", "")
-                break
+        # Garante que a autenticação rodou e captura IdUsuario da sessão
+        await client._get_headers()
+        id_usuario = client._id_usuario or ""
+
+        # Fallback: procurar via /usuario/listar caso loginData não traga o id
+        if not id_usuario:
+            try:
+                result = await client.listar_usuarios(filtro=login, apenas_unidade=False)
+                for u in result.get("usuarios", []):
+                    if u.get("sigla", "").lower() == login.lower():
+                        id_usuario = str(u.get("id_usuario") or "")
+                        break
+            except Exception:
+                pass
 
         result = await client.assinar_documento(
             id_documento=doc_id,
@@ -1598,6 +1621,7 @@ async def sei_assinar_documento(
             senha=senha,
             cargo=cargo,
             orgao=orgao,
+            id_usuario=id_usuario,
         )
         return _json(result)
     except Exception as e:
