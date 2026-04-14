@@ -2,8 +2,8 @@
   "manifest_version": "0.3",
   "name": "seipro",
   "display_name": "SEI Pro",
-  "version": "0.3.1",
-  "description": "116 ferramentas para o SEI com scraper web hibrido — listagem de processos 23x mais rapida. Fix: compatibilidade Windows.",
+  "version": "0.3.2",
+  "description": "116 ferramentas para o SEI com scraper web hibrido — listagem de processos 23x mais rapida. Fix: assinatura de documentos (IdUsuario + resolucao de numero SEI).",
   "long_description": "Servidor MCP para o Sistema Eletronico de Informacoes (SEI) via API REST mod-wssei v2 + scraper HTTP do frontend web. Cobre processos, documentos, tramitacao, assinatura, blocos, marcadores, acompanhamento, credenciamento (sigilosos), modelos e mais. Operacoes de leitura criticas usam scraper web para ganhos de ate 23x (listar_processos: 14s->0.6s, arvore/documentos: 12s->1s). Metadados estaticos cacheados em memoria (TTL 1h). Funciona com qualquer instancia SEI 4.0+ com mod-wssei v2.",
   "author": {
     "name": "Pedro Soares",
