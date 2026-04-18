@@ -150,7 +150,7 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 | Tool | Descrição |
 |------|-----------|
 | `sei_listar_processos` | Lista caixa da unidade via scraper web (~23× mais rápido que REST). Suporta `apenas_meus`, `tipo`, `filtro` |
-| `sei_pesquisar_processos` | Pesquisa por texto, descrição ou datas |
+| `sei_pesquisar_processos` | Pesquisa por texto, descrição, datas, unidade geradora, assunto ou grupo de acompanhamento |
 | `sei_consultar_processo` | **Híbrido**: REST (especificacao, assuntos, interessados, observacoes) + Web (lista de documentos da árvore) em paralelo |
 | `sei_resumo_processos` | Resumo agrupado por 17 campos (usa REST direto para flags estruturadas) |
 | `sei_listar_unidades_processo` | Lista unidades onde o processo está aberto |
@@ -403,7 +403,7 @@ O servidor pode rodar em modo HTTP para uso via Claude no celular, na web ou em 
 
 ### O que é o Railway
 
-O [Railway](https://railway.com?referralCode=jJJ7Xz) é uma plataforma de deploy na nuvem que facilita colocar aplicações no ar. Você faz push do código e o Railway cuida de build, domínio, SSL e escalabilidade. O plano gratuito (Trial) oferece US$ 5 de crédito, suficiente para testar. O plano Hobby custa US$ 5/mês.
+O [Railway](https://railway.com?referralCode=jJJ7Xz) é uma plataforma de deploy na nuvem que facilita colocar aplicações no ar. Você faz push do código e o Railway cuida de build, domínio, SSL e escalabilidade.
 
 ### 1. Criar conta no Railway
 
