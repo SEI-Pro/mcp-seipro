@@ -24,8 +24,7 @@ env/
 .DS_Store
 
 # Docs e uploads internos
-docs/*
-!docs/roadmap-ecossistema-sei.md
+docs/
 uploads/
 
 # Claude Code
