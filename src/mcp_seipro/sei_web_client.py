@@ -338,6 +338,8 @@ class SEIWebClient:
            id_procedimento e captura a URL assinada do iframe da árvore.
         3. GET procedimento_visualizar / arvore_montar.php (~1 s) — extrai o
            array Nos[] do JS e popula a lista de documentos.
+        4. Se houver PASTA colapsadas, faz GET com abrir_pastas=1 para expandir
+           todos os processos relacionados.
 
         Retorna:
             {
@@ -399,6 +401,23 @@ class SEIWebClient:
             raise RuntimeError(f"procedimento_visualizar status={r2.status_code}")
 
         nos = parse_arvore_nos(r2.text)
+        arvore_html = r2.text
+
+        # Step 3: Se houver PASTA colapsadas, fetch novamente com abrir_pastas=1
+        has_collapsed = len(nos) > 1 and any(n.get("tipo_no") == "PASTA" for n in nos[1:])
+        if has_collapsed:
+            arvore_url_str = str(arvore_url)
+            if "abrir_pastas=" not in arvore_url_str:
+                sep = "&" if "?" in arvore_url_str else "?"
+                arvore_url_expandida = f"{arvore_url_str}{sep}abrir_pastas=1"
+            else:
+                arvore_url_expandida = re.sub(r"abrir_pastas=0", "abrir_pastas=1", arvore_url_str)
+
+            r3 = await self._http.get(arvore_url_expandida, headers={"Referer": trab_url})
+            if r3.status_code == 200:
+                nos = parse_arvore_nos(r3.text)
+                arvore_html = r3.text
+                logger.debug("Pastas expandidas via abrir_pastas=1")
 
         result: dict[str, Any] = {
             "id_procedimento": id_proc or "",
@@ -423,7 +442,7 @@ class SEIWebClient:
             result["total_documentos"] = len(docs)
 
         # processos relacionados (cards na sidebar do arvore_montar)
-        soup_arv = BeautifulSoup(r2.text, "html.parser")
+        soup_arv = BeautifulSoup(arvore_html, "html.parser")
         rels: list[str] = []
         for div_rel in soup_arv.find_all("div", class_=re.compile(r"cardRelacionado")):
             link_rel = div_rel.find("a")
