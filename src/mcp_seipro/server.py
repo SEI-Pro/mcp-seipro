@@ -22,6 +22,7 @@ from mcp_seipro.sei_styles import (
     SEI_STYLES, STYLE_SHORTCUTS,
     html_referencia_sei, html_destinatario,
 )
+from mcp_seipro import access_control
 
 logger = logging.getLogger(__name__)
 
@@ -351,6 +352,13 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
         if warnings:
             merged["_warnings"] = warnings
 
+        nivel, hipotese = access_control.extrair_nivel(merged)
+        if access_control.precisa_disclaimer(nivel):
+            merged["_aviso_acesso"] = access_control.construir_disclaimer_acompanhante(
+                nivel, hipotese,
+                alvo={"tipo": "processo", "protocolo": protocolo_formatado},
+            )
+
         return _json(merged)
     except Exception as e:
         return _error(str(e))
@@ -549,6 +557,7 @@ async def sei_ler_documento(
     id_documento: str,
     tipo_documento: Literal["auto", "I", "X"] = "auto",
     formato: Literal["markdown", "texto", "html"] = "markdown",
+    confirmar_acesso_restrito: bool = False,
     ctx: Context = None,
 ) -> str:
     """Lê o conteúdo de um documento do SEI e retorna texto legível.
@@ -563,6 +572,11 @@ async def sei_ler_documento(
     - formato='markdown': Markdown formatado (padrão, ideal para chat)
     - formato='texto': texto plano sem formatação
     - formato='html': HTML original (só para internos)
+
+    - confirmar_acesso_restrito=true: consentimento explícito para receber
+      conteúdo de documento restrito/sigiloso (nivelAcesso 1 ou 2). Sem
+      essa flag (ou sem SEI_PERMITIR_RESTRITOS=true no servidor), o MCP
+      retorna apenas um aviso sem o conteúdo bruto.
 
     PDFs escaneados são processados via OCR automaticamente.
     """
@@ -582,6 +596,31 @@ async def sei_ler_documento(
                             "do processo e seus IDs.",
                 })
 
+        # Detectar nível de acesso ANTES de baixar conteúdo
+        try:
+            if tipo_documento == "X":
+                meta = await client.consultar_documento_externo(id_documento)
+            else:
+                meta = await client.consultar_documento_interno(id_documento)
+        except Exception as e:
+            msg = str(e)
+            if "não autorizado" in msg.lower() or "nao autorizado" in msg.lower():
+                return _json({
+                    "error": msg,
+                    "dica": "Acesso negado. Troque para a unidade geradora "
+                            "com sei_trocar_unidade.",
+                })
+            return _error(f"Falha ao consultar metadados do documento: {msg}")
+
+        nivel, hipotese = access_control.extrair_nivel(meta)
+        decisao, disclaimer = access_control.avaliar_acesso(
+            nivel, hipotese,
+            confirmou=confirmar_acesso_restrito,
+            alvo={"tipo": "documento", "id": str(id_documento), "tipo_documento": tipo_documento},
+        )
+        if decisao == "bloquear":
+            return _json(disclaimer)
+
         if tipo_documento == "X":
             content = await client.baixar_anexo(id_documento)
             if len(content) > MAX_BINARY_SIZE:
@@ -595,15 +634,29 @@ async def sei_ler_documento(
                     "para obter o arquivo em base64."
                 )
             if formato == "markdown":
-                return pdf_to_markdown(content)
-            return pdf_to_text(content)
+                resultado = pdf_to_markdown(content)
+                if disclaimer:
+                    resultado = access_control.prefixar_markdown(disclaimer, resultado)
+                return resultado
+            resultado = pdf_to_text(content)
+            if disclaimer:
+                resultado = access_control.prefixar_texto(disclaimer, resultado)
+            return resultado
 
         # Documento interno (I)
         raw = await client.visualizar_documento_interno(id_documento)
         if formato == "markdown":
-            return html_to_markdown(raw)
+            resultado = html_to_markdown(raw)
+            if disclaimer:
+                resultado = access_control.prefixar_markdown(disclaimer, resultado)
+            return resultado
         if formato == "texto":
-            return html_to_text(raw)
+            resultado = html_to_text(raw)
+            if disclaimer:
+                resultado = access_control.prefixar_texto(disclaimer, resultado)
+            return resultado
+        if disclaimer:
+            return access_control.envelopar_html(disclaimer, raw)
         return raw
     except Exception as e:
         msg = str(e)
@@ -617,7 +670,11 @@ async def sei_ler_documento(
 
 
 @mcp.tool()
-async def sei_baixar_anexo(id_documento: str, ctx: Context = None) -> str:
+async def sei_baixar_anexo(
+    id_documento: str,
+    confirmar_acesso_restrito: bool = False,
+    ctx: Context = None,
+) -> str:
     """Baixa um documento externo (anexo) do SEI em base64.
 
     Use para documentos com tipoDocumento='X' (📎).
@@ -625,19 +682,43 @@ async def sei_baixar_anexo(id_documento: str, ctx: Context = None) -> str:
     que já extrai o texto legível.
 
     Retorna base64 + tamanho. Limite: 10 MB.
+
+    confirmar_acesso_restrito=true: consentimento explícito para receber
+    o base64 de documento restrito/sigiloso. Sem essa flag (ou sem
+    SEI_PERMITIR_RESTRITOS=true no servidor), o MCP retorna apenas um
+    aviso sem o conteúdo binário.
     """
     try:
         client = _get_client(ctx)
+
+        # Detectar nível ANTES de baixar
+        try:
+            meta = await client.consultar_documento_externo(id_documento)
+        except Exception as e:
+            return _error(f"Falha ao consultar metadados do documento: {e}")
+
+        nivel, hipotese = access_control.extrair_nivel(meta)
+        decisao, disclaimer = access_control.avaliar_acesso(
+            nivel, hipotese,
+            confirmou=confirmar_acesso_restrito,
+            alvo={"tipo": "documento", "id": str(id_documento), "tipo_documento": "X"},
+        )
+        if decisao == "bloquear":
+            return _json(disclaimer)
+
         content = await client.baixar_anexo(id_documento)
         if len(content) > MAX_BINARY_SIZE:
             return _error(
                 f"Documento muito grande ({len(content)} bytes, limite {MAX_BINARY_SIZE}). "
                 "Baixe manualmente pelo SEI."
             )
-        return _json({
+        resposta = {
             "base64": base64.b64encode(content).decode(),
             "size_bytes": len(content),
-        })
+        }
+        if disclaimer:
+            resposta["aviso_acesso"] = disclaimer
+        return _json(resposta)
     except Exception as e:
         return _error(str(e))
 
@@ -2601,6 +2682,12 @@ async def sei_consultar_documento_externo(
     try:
         client = _get_client(ctx)
         result = await client.consultar_documento_externo(id_documento)
+        nivel, hipotese = access_control.extrair_nivel(result)
+        if access_control.precisa_disclaimer(nivel):
+            result["_aviso_acesso"] = access_control.construir_disclaimer_acompanhante(
+                nivel, hipotese,
+                alvo={"tipo": "documento", "id": str(id_documento), "tipo_documento": "X"},
+            )
         return _json(result)
     except Exception as e:
         return _error(str(e))

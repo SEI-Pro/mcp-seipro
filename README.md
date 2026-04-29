@@ -43,6 +43,7 @@ O script pergunta suas credenciais, instala o pacote e configura o Claude Deskto
 | `SEI_CONTEXTO` | Não | Contexto opcional |
 | `SEI_VERIFY_SSL` | Não | `true` (padrão) ou `false` |
 | `SEI_OCR_LANG` | Não | Idioma do OCR (padrão: `por`) |
+| `SEI_PERMITIR_RESTRITOS` | Não | `false` (padrão) ou `true`. Ver "Privacidade e dados restritos" |
 
 > **Dica: como obter `SEI_URL` e `SEI_ORGAO` direto pelo SEI**
 >
@@ -396,6 +397,30 @@ A REST mod-wssei continua sendo o caminho **padrão** para todas as outras opera
 **Notas Técnicas:** `Item_Nivel1/2/3/4` (H1/H2/H3/H4), `Item_Alinea_Letra` (a, b, c), `Item_Inciso_Romano` (I, II, III)
 
 **Regra:** toda numeração usa classes CSS, nunca texto manual.
+
+## Privacidade e dados restritos
+
+O SEI classifica processos e documentos em três níveis: público (`nivelAcesso=0`), restrito (`1`) e sigiloso (`2`). O MCP usa as credenciais do usuário, então acessa o que o usuário enxergaria no SEI — incluindo restritos. Sigilosos exigem credenciamento prévio no próprio SEI.
+
+Como conteúdo restrito pode trafegar para um provedor LLM (que talvez logue, retenha ou treine modelos com ele), o MCP impõe um **gate de consentimento** nas duas tools que entregam conteúdo bruto:
+
+- `sei_ler_documento` — markdown/texto/HTML do documento
+- `sei_baixar_anexo` — base64 do arquivo
+
+**Comportamento padrão (mais seguro):** se o documento tem `nivelAcesso` 1 ou 2 e a chamada **não** trouxe `confirmar_acesso_restrito=true`, o MCP responde com um JSON estruturado em pt-BR (`consentimento_necessario=true`, lista de `riscos[]` cobrindo LGPD/LAI/treinamento de modelos/sigilo funcional, e `como_liberar`). **O conteúdo bruto não é entregue.**
+
+Existem duas formas de liberar:
+
+| Forma | Escopo | Quando usar |
+|-------|--------|-------------|
+| `confirmar_acesso_restrito=true` na chamada | Per-call | Decisão pontual do usuário ao usar o LLM |
+| `SEI_PERMITIR_RESTRITOS=true` (env var) | Servidor inteiro | Operador do MCP libera previamente |
+
+Em ambos os casos, o conteúdo entregue vem com um **disclaimer prefixado** lembrando o nível de acesso, a hipótese legal e os riscos.
+
+As demais tools (`sei_consultar_processo`, `sei_consultar_documento_externo`, etc.) **não bloqueiam metadados** — apenas anexam um campo `_aviso_acesso` quando detectam restrição, para o LLM repassar a informação ao usuário.
+
+> O gate trata restrito e sigiloso de forma idêntica. Sigiloso já tem proteção adicional do SEI (credenciamento). Se quiser regras diferentes, abra um issue.
 
 ## Deploy remoto (Railway)
 
