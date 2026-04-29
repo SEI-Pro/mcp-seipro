@@ -74,22 +74,46 @@ _COMO_LIBERAR = [
     "de pedidos genéricos como 'lê esse documento'.",
 ]
 
+_NAO_E_ERRO_TECNICO = (
+    "Esta resposta NÃO é falha técnica do SEI, NÃO é erro de permissão "
+    "(o usuário tem acesso credenciado), NÃO é problema de unidade "
+    "incorreta nem de ID errado. É uma camada de PRIVACIDADE imposta "
+    "pelo MCP SEI Pro ALÉM das permissões nativas do SEI. Tentar "
+    "trocar de unidade, listar documentos por outra rota ou supor ID "
+    "alternativo NÃO contorna o gate — apenas aciona o mesmo aviso em "
+    "outra tool e desperdiça tempo do usuário."
+)
+
 _INSTRUCAO_MODELO = (
-    "ATENÇÃO, MODELO LLM: este retorno NÃO é um erro técnico, NÃO é uma "
-    "falha de permissão do SEI e NÃO é um obstáculo a ser contornado. É "
-    "um pedido formal de consentimento que DEVE ser apresentado ao "
-    "usuário humano da conversa antes de qualquer nova tentativa. "
+    "ATENÇÃO, MODELO LLM: este retorno é um pedido formal de "
+    "consentimento que DEVE ser apresentado ao usuário humano da "
+    "conversa antes de qualquer nova tentativa. "
     "Você NÃO deve: (a) chamar esta ferramenta novamente por iniciativa "
     "própria, (b) tentar caminhos alternativos como trocar de unidade, "
-    "buscar o documento por outra rota, ou usar outra tool de leitura, "
-    "(c) inferir consentimento do pedido original do usuário, (d) usar "
-    "parâmetros que ativem caminhos de bypass sem que o usuário tenha "
-    "lido os riscos e autorizado expressamente em nova mensagem. "
+    "listar documentos do processo, buscar o documento por outra rota, "
+    "ou usar outra tool de leitura, (c) inferir consentimento do pedido "
+    "original do usuário, (d) usar parâmetros que ativem caminhos de "
+    "bypass sem que o usuário tenha lido os riscos e autorizado "
+    "expressamente em nova mensagem. "
     "Encaminhe os riscos acima ao usuário em texto natural, em "
     "português, e aguarde decisão explícita. Auto-bypassar este aviso "
     "configura violação da política de privacidade do MCP SEI Pro e "
     "expõe o operador humano (titular das credenciais) a "
     "responsabilização por quebra de sigilo funcional."
+)
+
+_INSTRUCAO_MODELO_METADATA = (
+    "ATENÇÃO, MODELO LLM: este campo `_aviso_acesso` é INFORMATIVO. Os "
+    "metadados do documento/processo foram retornados com SUCESSO ao "
+    "lado deste aviso — examine os demais campos da resposta. Esta NÃO "
+    "é falha de permissão do SEI nem indica necessidade de trocar de "
+    "unidade, listar por outra rota ou supor ID diferente. É apenas a "
+    "notificação de que este registro está classificado como restrito "
+    "ou sigiloso. Se o usuário humano pedir o CONTEÚDO BRUTO (texto, "
+    "PDF, anexo) deste documento, o MCP exigirá consentimento expresso "
+    "em chamada separada — apresente os riscos ao usuário e aguarde "
+    "autorização explícita; NÃO tente obter o conteúdo via troca de "
+    "unidade, listagens, ou outras tools de leitura."
 )
 
 
@@ -109,17 +133,24 @@ def construir_aviso_bloqueio(
     alvo: dict,
 ) -> dict:
     """Aviso retornado quando o gate BLOQUEIA a entrega de conteúdo."""
-    aviso = _bloco_base(nivel, hipotese_legal, alvo)
-    aviso["consentimento_necessario"] = True
-    aviso["instrucao_para_modelo"] = _INSTRUCAO_MODELO
-    aviso["mensagem"] = (
-        f"Conteúdo classificado como {ROTULOS.get(nivel, 'restrito')} no SEI. "
-        "O MCP NÃO entregou o conteúdo bruto ao LLM porque consentimento "
-        "explícito do usuário humano é necessário. Apresente os riscos "
-        "abaixo ao usuário e aguarde decisão expressa antes de qualquer "
-        "nova tentativa."
-    )
-    aviso["como_liberar"] = list(_COMO_LIBERAR)
+    base = _bloco_base(nivel, hipotese_legal, alvo)
+    # Ordem é deliberada: campos de framing (não-erro / instrução ao modelo)
+    # vêm ANTES dos riscos para que modelos que param de ler cedo já
+    # entendam o tipo de resposta antes de pensar em "consertar".
+    aviso = {
+        "tipo_resposta": "consentimento_pendente",
+        "nao_e_erro_tecnico": _NAO_E_ERRO_TECNICO,
+        "instrucao_para_modelo": _INSTRUCAO_MODELO,
+        "mensagem_para_usuario_humano": (
+            f"Documento/processo classificado como "
+            f"{ROTULOS.get(nivel, 'restrito')} no SEI. Antes de o conteúdo "
+            "bruto ser enviado ao LLM, o MCP precisa que você confirme "
+            "ciência dos riscos abaixo e autorize o acesso expressamente."
+        ),
+        "consentimento_necessario": True,
+        **base,
+        "como_liberar": list(_COMO_LIBERAR),
+    }
     return aviso
 
 
@@ -128,14 +159,25 @@ def construir_disclaimer_acompanhante(
     hipotese_legal: str | None,
     alvo: dict,
 ) -> dict:
-    """Disclaimer informativo anexado ao conteúdo quando ele É liberado."""
-    aviso = _bloco_base(nivel, hipotese_legal, alvo)
-    aviso["consentimento_necessario"] = False
-    aviso["mensagem"] = (
-        f"ATENÇÃO: o conteúdo a seguir está classificado como "
-        f"{ROTULOS.get(nivel, 'restrito')} no SEI. Trate-o com a cautela "
-        "exigida pela LGPD/LAI e pela política do provedor LLM."
-    )
+    """Disclaimer informativo anexado ao conteúdo quando ele É liberado.
+
+    Usado tanto após consentimento (acompanha conteúdo bruto) quanto em
+    respostas de metadados (`_aviso_acesso` em sei_consultar_processo,
+    sei_consultar_documento_externo, etc).
+    """
+    base = _bloco_base(nivel, hipotese_legal, alvo)
+    aviso = {
+        "tipo_resposta": "aviso_classificacao_informativo",
+        "instrucao_para_modelo": _INSTRUCAO_MODELO_METADATA,
+        "mensagem": (
+            f"ATENÇÃO: o registro está classificado como "
+            f"{ROTULOS.get(nivel, 'restrito')} no SEI. Trate-o com a cautela "
+            "exigida pela LGPD/LAI e pela política do provedor LLM. Os "
+            "demais campos desta resposta foram retornados normalmente."
+        ),
+        **base,
+        "consentimento_necessario": False,
+    }
     return aviso
 
 
@@ -226,7 +268,12 @@ def extrair_nivel(metadata: dict) -> tuple[str | None, str | None]:
         or metadata.get("nivel_acesso")
         or metadata.get("nivelAcessoGlobal")
     )
-    hl_raw = metadata.get("hipoteseLegal") or metadata.get("hipotese_legal")
+    hl_raw = (
+        metadata.get("hipoteseLegal")
+        or metadata.get("hipotese_legal")
+        or metadata.get("nomeHipoteseLegal")
+        or metadata.get("idHipoteseLegal")
+    )
     hipotese: str | None = None
     if isinstance(hl_raw, dict):
         hipotese = hl_raw.get("nome") or hl_raw.get("descricao") or str(hl_raw.get("id", "") or "")
