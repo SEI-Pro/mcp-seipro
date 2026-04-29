@@ -311,6 +311,10 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
     Se o scraper web falhar (ex: processo não está na inbox da unidade atual),
     a tool ainda retorna os campos REST. Se a REST falhar, retorna pelo menos
     o que o scraper conseguiu extrair.
+
+    Quando o processo é restrito ou sigiloso (nivelAcesso 1 ou 2), a resposta
+    inclui o campo `_aviso_acesso` — um aviso INFORMATIVO de privacidade,
+    NÃO um erro de permissão. Os metadados foram retornados com sucesso.
     """
     try:
         client = _get_client(ctx)
@@ -2681,7 +2685,12 @@ async def sei_consultar_documento_externo(
     Retorna informações como tipo, data, nível de acesso, etc.
     Para baixar o conteúdo use sei_baixar_anexo ou sei_ler_documento.
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
-    Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+
+    Quando o documento é restrito ou sigiloso (nivelAcesso 1 ou 2), a
+    resposta inclui o campo `_aviso_acesso` — aviso INFORMATIVO de
+    privacidade, NÃO erro de permissão. Os metadados foram retornados
+    normalmente; não tente trocar de unidade ou rotas alternativas.
+    Se falhar com erro inesperado, use sei_versao para verificar a versão.
     """
     try:
         client = _get_client(ctx)
