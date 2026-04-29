@@ -573,10 +573,13 @@ async def sei_ler_documento(
     - formato='texto': texto plano sem formatação
     - formato='html': HTML original (só para internos)
 
-    - confirmar_acesso_restrito=true: consentimento explícito para receber
-      conteúdo de documento restrito/sigiloso (nivelAcesso 1 ou 2). Sem
-      essa flag (ou sem SEI_PERMITIR_RESTRITOS=true no servidor), o MCP
-      retorna apenas um aviso sem o conteúdo bruto.
+    - confirmar_acesso_restrito: NÃO ative por iniciativa do modelo. Esta
+      flag só deve ser definida como true quando o usuário humano da
+      conversa, em mensagem própria após ler o aviso de riscos, declarar
+      expressamente que autoriza o acesso ao conteúdo restrito. Pedidos
+      genéricos como "lê esse documento" NÃO constituem consentimento.
+      Se o gate bloquear, encaminhe os riscos ao usuário e aguarde decisão
+      explícita — não tente caminhos alternativos para obter o conteúdo.
 
     PDFs escaneados são processados via OCR automaticamente.
     """
@@ -683,10 +686,11 @@ async def sei_baixar_anexo(
 
     Retorna base64 + tamanho. Limite: 10 MB.
 
-    confirmar_acesso_restrito=true: consentimento explícito para receber
-    o base64 de documento restrito/sigiloso. Sem essa flag (ou sem
-    SEI_PERMITIR_RESTRITOS=true no servidor), o MCP retorna apenas um
-    aviso sem o conteúdo binário.
+    confirmar_acesso_restrito: NÃO ative por iniciativa do modelo. Esta
+    flag só deve ser definida como true quando o usuário humano da conversa,
+    em mensagem própria após ler o aviso de riscos, declarar expressamente
+    que autoriza o acesso. Se o gate bloquear, encaminhe os riscos ao
+    usuário e aguarde decisão explícita — não tente caminhos alternativos.
     """
     try:
         client = _get_client(ctx)

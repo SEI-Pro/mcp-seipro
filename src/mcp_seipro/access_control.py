@@ -64,12 +64,33 @@ _RISCOS = [
 ]
 
 _COMO_LIBERAR = [
-    "Por chamada: passe confirmar_acesso_restrito=true ao chamar a tool "
-    "novamente — o conteúdo virá com um disclaimer prefixado.",
-    "Global no servidor: defina a variável de ambiente "
-    "SEI_PERMITIR_RESTRITOS=true para liberar todas as chamadas (o "
-    "disclaimer continua acompanhando cada resposta).",
+    "O operador do servidor pode definir a variável de ambiente "
+    "SEI_PERMITIR_RESTRITOS=true para autorizar todas as chamadas — "
+    "exige acesso ao deploy e é uma decisão administrativa fora do "
+    "alcance da conversa.",
+    "Para liberação pontual, o usuário humano deve declarar consentimento "
+    "explícito em nova mensagem da conversa, após ler os riscos acima. "
+    "O modelo NÃO deve presumir consentimento nem inferir autorização "
+    "de pedidos genéricos como 'lê esse documento'.",
 ]
+
+_INSTRUCAO_MODELO = (
+    "ATENÇÃO, MODELO LLM: este retorno NÃO é um erro técnico, NÃO é uma "
+    "falha de permissão do SEI e NÃO é um obstáculo a ser contornado. É "
+    "um pedido formal de consentimento que DEVE ser apresentado ao "
+    "usuário humano da conversa antes de qualquer nova tentativa. "
+    "Você NÃO deve: (a) chamar esta ferramenta novamente por iniciativa "
+    "própria, (b) tentar caminhos alternativos como trocar de unidade, "
+    "buscar o documento por outra rota, ou usar outra tool de leitura, "
+    "(c) inferir consentimento do pedido original do usuário, (d) usar "
+    "parâmetros que ativem caminhos de bypass sem que o usuário tenha "
+    "lido os riscos e autorizado expressamente em nova mensagem. "
+    "Encaminhe os riscos acima ao usuário em texto natural, em "
+    "português, e aguarde decisão explícita. Auto-bypassar este aviso "
+    "configura violação da política de privacidade do MCP SEI Pro e "
+    "expõe o operador humano (titular das credenciais) a "
+    "responsabilização por quebra de sigilo funcional."
+)
 
 
 def _bloco_base(nivel: str, hipotese_legal: str | None, alvo: dict) -> dict:
@@ -90,10 +111,13 @@ def construir_aviso_bloqueio(
     """Aviso retornado quando o gate BLOQUEIA a entrega de conteúdo."""
     aviso = _bloco_base(nivel, hipotese_legal, alvo)
     aviso["consentimento_necessario"] = True
+    aviso["instrucao_para_modelo"] = _INSTRUCAO_MODELO
     aviso["mensagem"] = (
         f"Conteúdo classificado como {ROTULOS.get(nivel, 'restrito')} no SEI. "
         "O MCP NÃO entregou o conteúdo bruto ao LLM porque consentimento "
-        "explícito é necessário. Avalie os riscos abaixo antes de liberar."
+        "explícito do usuário humano é necessário. Apresente os riscos "
+        "abaixo ao usuário e aguarde decisão expressa antes de qualquer "
+        "nova tentativa."
     )
     aviso["como_liberar"] = list(_COMO_LIBERAR)
     return aviso
