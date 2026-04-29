@@ -255,6 +255,11 @@ def envelopar_html(disclaimer: dict, conteudo: str) -> str:
     return aside + conteudo
 
 
+def riscos_padrao() -> list[str]:
+    """Lista padrão de riscos exibida em disclaimers e elicit prompts."""
+    return list(_RISCOS)
+
+
 def extrair_nivel(metadata: dict) -> tuple[str | None, str | None]:
     """Extrai (nivel_acesso, hipotese_legal) de um dict de metadados do SEI.
 
