@@ -422,6 +422,14 @@ As demais tools (`sei_consultar_processo`, `sei_consultar_documento_externo`, et
 
 > O gate trata restrito e sigiloso de forma idêntica. Sigiloso já tem proteção adicional do SEI (credenciamento). Se quiser regras diferentes, abra um issue.
 
+### Por que não há um modal nativo de autorização?
+
+O MCP define o protocolo `elicitInput` justamente para isso — o servidor pede input estruturado e o cliente renderiza UI nativa. O servidor SEI Pro implementa esse caminho desde v0.3.7: quando o cliente declara a capability, o gate aparece como modal/formulário no cliente, fora do alcance do modelo.
+
+Hoje, no entanto, **os clientes Anthropic conectados via Streamable HTTP** (`mcp.seipro.io` no `claude.ai`/Claude Desktop com servidor remoto) não declaram a capability nem respondem aos requests de elicit. O servidor detecta isso e cai no JSON gate textual, que continua sendo a barreira efetiva. Quando esse suporte for ativado nos clientes Anthropic, o caminho de elicit começa a funcionar automaticamente — nada precisa mudar no servidor.
+
+O fluxo "sem elicit" (atual): modelo recebe JSON estruturado de bloqueio → traduz os riscos ao usuário em texto → usuário digita autorização explícita → modelo passa `confirmar_acesso_restrito=true` na próxima chamada. Funciona bem com modelos grandes (Opus 4.7) e, com as docstrings + `instrucao_para_modelo` + `nao_e_erro_tecnico` introduzidos nas versões 0.3.5–0.3.7, também com modelos menores (Haiku 4.5).
+
 ## Deploy remoto (Railway)
 
 O servidor pode rodar em modo HTTP para uso via Claude no celular, na web ou em qualquer cliente MCP remoto. Cada órgão faz seu próprio deploy — as credenciais do SEI são informadas pelo usuário na tela de login OAuth e nunca ficam armazenadas no servidor.
