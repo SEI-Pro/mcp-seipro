@@ -10,6 +10,7 @@ from typing import Literal
 
 from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import BaseModel, Field
 
 from mcp_seipro.sei_client import SEIClient
 from mcp_seipro.sei_web_client import SEIWebClient
@@ -179,6 +180,169 @@ mcp = FastMCP(
     ),
     lifespan=lifespan,
 )
+
+
+class _ConsentimentoRestrito(BaseModel):
+    """Schema de elicitInput para consentimento de acesso a documento restrito."""
+    autorizo_acesso: bool = Field(
+        default=False,
+        description=(
+            "Marque para autorizar a leitura do conteúdo restrito. Ao marcar, "
+            "você declara ciência dos riscos de LGPD/LAI/sigilo e assume "
+            "responsabilidade pelo compartilhamento da informação fora do SEI."
+        ),
+    )
+
+
+_ELICIT_TIMEOUT_S = float(os.environ.get("SEI_ELICIT_TIMEOUT_S", "30"))
+
+
+def _cliente_suporta_elicit(ctx: Context) -> bool:
+    """Verifica via MCP capabilities se o cliente declarou suporte a elicit."""
+    if ctx is None:
+        return False
+    try:
+        caps = ctx.request_context.session.client_params.capabilities  # type: ignore[attr-defined]
+    except Exception:
+        return False
+    return getattr(caps, "elicitation", None) is not None
+
+
+async def _solicitar_consentimento_via_elicit(
+    ctx: Context,
+    nivel: str,
+    rotulo: str,
+    hipotese: str | None,
+    alvo: dict,
+) -> str:
+    """Solicita consentimento ao usuário via MCP elicitInput.
+
+    Retorna:
+      - "aceitou": usuário marcou autorizo_acesso=True
+      - "recusou": usuário rejeitou ou desmarcou
+      - "nao_suportado": cliente MCP não implementa elicitInput, ou não
+        respondeu dentro de SEI_ELICIT_TIMEOUT_S — cair no fallback JSON
+    """
+    if not _cliente_suporta_elicit(ctx):
+        return "nao_suportado"
+
+    riscos_txt = "\n".join(f"• {r}" for r in access_control.riscos_padrao())
+    hl_txt = f"\nHipótese legal: {hipotese}" if hipotese else ""
+    alvo_txt = ""
+    if alvo.get("tipo") == "documento":
+        alvo_txt = f"\nDocumento: id {alvo.get('id')} (tipo {alvo.get('tipo_documento','?')})"
+    elif alvo.get("tipo") == "processo":
+        alvo_txt = f"\nProcesso: {alvo.get('protocolo')}"
+
+    message = (
+        f"⚠ Documento/processo classificado como {rotulo} no SEI.{hl_txt}{alvo_txt}\n\n"
+        f"Riscos:\n{riscos_txt}\n\n"
+        "Marque a opção abaixo para autorizar a leitura do conteúdo bruto. "
+        "Se não autorizar, o MCP retornará apenas um aviso ao modelo."
+    )
+
+    try:
+        result = await asyncio.wait_for(
+            ctx.elicit(message=message, schema=_ConsentimentoRestrito),
+            timeout=_ELICIT_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"elicit timeout após {_ELICIT_TIMEOUT_S}s — cliente não respondeu, "
+            "caindo no fallback JSON"
+        )
+        return "nao_suportado"
+    except Exception as e:
+        logger.debug(f"elicit falhou ({type(e).__name__}: {e}) — fallback JSON")
+        return "nao_suportado"
+
+    if result.action == "accept" and result.data and result.data.autorizo_acesso:
+        return "aceitou"
+    return "recusou"
+
+
+async def _aplicar_gate_documento(
+    ctx: Context,
+    client: SEIClient,
+    id_documento: str,
+    tipo_documento: str,
+    confirmou: bool,
+) -> tuple[str, dict | None, str]:
+    """Resolve metadados e aplica o gate de acesso para um documento.
+
+    Retorna (acao, payload, erro):
+      - acao="liberar": prossiga; payload é o disclaimer acompanhante (ou None
+        se público)
+      - acao="bloquear": retorne payload (JSON de bloqueio) ao caller
+      - acao="recusou": retorne payload (JSON de recusa) ao caller
+      - acao="erro": retorne erro (string) ao caller
+    """
+    try:
+        if tipo_documento == "X":
+            meta = await client.consultar_documento_externo(id_documento)
+        else:
+            meta = await client.consultar_documento_interno(id_documento)
+    except Exception as e:
+        msg = str(e)
+        low = msg.lower()
+        if "não autorizado" in low or "nao autorizado" in low:
+            return ("erro", None, (
+                f"SEI retornou 'não autorizado' para o id {id_documento!r}. "
+                "Verifique se você passou o id INTERNO do documento (ex.: 3149544) "
+                "e não o número SEI / protocoloFormatado (ex.: 2867926). "
+                "Se tiver apenas o número SEI, use sei_buscar_documento ou "
+                "sei_ler_documento (que faz auto-resolução)."
+            ))
+        return ("erro", None, f"Falha ao consultar metadados: {msg}")
+
+    nivel, hipotese = access_control.extrair_nivel(meta)
+    alvo = {"tipo": "documento", "id": str(id_documento), "tipo_documento": tipo_documento}
+
+    if not access_control.precisa_disclaimer(nivel):
+        return ("liberar", None, "")
+
+    if confirmou or access_control.env_permite_restritos():
+        return (
+            "liberar",
+            access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo),
+            "",
+        )
+
+    rotulo = access_control.ROTULOS.get(nivel, "Restrito")
+    consent = await _solicitar_consentimento_via_elicit(ctx, nivel, rotulo, hipotese, alvo)
+
+    if consent == "aceitou":
+        return (
+            "liberar",
+            access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo),
+            "",
+        )
+    if consent == "recusou":
+        return (
+            "recusou",
+            {
+                "tipo_resposta": "consentimento_recusado",
+                "mensagem_para_usuario_humano": (
+                    f"Acesso ao conteúdo {rotulo.lower()} NÃO foi autorizado pelo "
+                    "usuário humano. Nenhum conteúdo bruto foi entregue ao modelo."
+                ),
+                "instrucao_para_modelo": (
+                    "O usuário humano recusou expressamente o acesso ao conteúdo "
+                    "restrito via MCP elicitInput. NÃO tente caminhos alternativos "
+                    "(troca de unidade, outras tools de leitura, IDs alternativos). "
+                    "Confirme ao usuário que a recusa foi registrada e ofereça "
+                    "ações que não dependam do conteúdo bruto."
+                ),
+                "alvo": alvo,
+                "nivel_acesso": nivel,
+            },
+            "",
+        )
+    return (
+        "bloquear",
+        access_control.construir_aviso_bloqueio(nivel, hipotese, alvo),
+        "",
+    )
 
 
 async def _resolver_processo(client: SEIClient, referencia: str) -> str:
@@ -603,30 +767,15 @@ async def sei_ler_documento(
                             "do processo e seus IDs.",
                 })
 
-        # Detectar nível de acesso ANTES de baixar conteúdo
-        try:
-            if tipo_documento == "X":
-                meta = await client.consultar_documento_externo(id_documento)
-            else:
-                meta = await client.consultar_documento_interno(id_documento)
-        except Exception as e:
-            msg = str(e)
-            if "não autorizado" in msg.lower() or "nao autorizado" in msg.lower():
-                return _json({
-                    "error": msg,
-                    "dica": "Acesso negado. Troque para a unidade geradora "
-                            "com sei_trocar_unidade.",
-                })
-            return _error(f"Falha ao consultar metadados do documento: {msg}")
-
-        nivel, hipotese = access_control.extrair_nivel(meta)
-        decisao, disclaimer = access_control.avaliar_acesso(
-            nivel, hipotese,
+        acao, payload, erro = await _aplicar_gate_documento(
+            ctx, client, str(id_documento), tipo_documento,
             confirmou=confirmar_acesso_restrito,
-            alvo={"tipo": "documento", "id": str(id_documento), "tipo_documento": tipo_documento},
         )
-        if decisao == "bloquear":
-            return _json(disclaimer)
+        if acao == "erro":
+            return _error(erro)
+        if acao in ("bloquear", "recusou"):
+            return _json(payload)
+        disclaimer = payload  # liberar (None se público, dict se restrito autorizado)
 
         if tipo_documento == "X":
             content = await client.baixar_anexo(id_documento)
@@ -684,6 +833,9 @@ async def sei_baixar_anexo(
 ) -> str:
     """Baixa um documento externo (anexo) do SEI em base64.
 
+    Aceita tanto o id interno (ex: "3149544") quanto o número SEI /
+    protocoloFormatado (ex: "2867926") — auto-resolve via pesquisa Solr.
+
     Use para documentos com tipoDocumento='X' (📎).
     Para PDFs com texto, prefira sei_ler_documento(tipo_documento='X')
     que já extrai o texto legível.
@@ -699,20 +851,26 @@ async def sei_baixar_anexo(
     try:
         client = _get_client(ctx)
 
-        # Detectar nível ANTES de baixar
+        # Auto-resolver número SEI → id interno (igual a sei_ler_documento)
         try:
-            meta = await client.consultar_documento_externo(id_documento)
+            doc_id, _ = await _resolver_documento(client, id_documento)
+            id_documento = doc_id
         except Exception as e:
-            return _error(f"Falha ao consultar metadados do documento: {e}")
+            return _json({
+                "error": str(e),
+                "dica": "Use sei_arvore_processo ou sei_buscar_documento para "
+                        "encontrar o id correto do documento.",
+            })
 
-        nivel, hipotese = access_control.extrair_nivel(meta)
-        decisao, disclaimer = access_control.avaliar_acesso(
-            nivel, hipotese,
+        acao, payload, erro = await _aplicar_gate_documento(
+            ctx, client, str(id_documento), "X",
             confirmou=confirmar_acesso_restrito,
-            alvo={"tipo": "documento", "id": str(id_documento), "tipo_documento": "X"},
         )
-        if decisao == "bloquear":
-            return _json(disclaimer)
+        if acao == "erro":
+            return _error(erro)
+        if acao in ("bloquear", "recusou"):
+            return _json(payload)
+        disclaimer = payload
 
         content = await client.baixar_anexo(id_documento)
         if len(content) > MAX_BINARY_SIZE:
@@ -2682,6 +2840,10 @@ async def sei_consultar_documento_externo(
 ) -> str:
     """Consulta metadados de um documento externo pelo ID.
 
+    Aceita tanto o id interno (ex: "3149544") quanto o número SEI /
+    protocoloFormatado (ex: "2867926") — auto-resolve via pesquisa Solr
+    quando necessário.
+
     Retorna informações como tipo, data, nível de acesso, etc.
     Para baixar o conteúdo use sei_baixar_anexo ou sei_ler_documento.
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
@@ -2694,7 +2856,34 @@ async def sei_consultar_documento_externo(
     """
     try:
         client = _get_client(ctx)
-        result = await client.consultar_documento_externo(id_documento)
+        try:
+            result = await client.consultar_documento_externo(id_documento)
+        except Exception as primeira:
+            msg = str(primeira)
+            low = msg.lower()
+            # Se não autorizado, pode ser id errado (passou número SEI). Tenta resolver.
+            if "não autorizado" in low or "nao autorizado" in low:
+                try:
+                    doc_id, _ = await _resolver_documento(client, id_documento)
+                    if doc_id != id_documento:
+                        id_documento = doc_id
+                        result = await client.consultar_documento_externo(id_documento)
+                    else:
+                        raise primeira
+                except Exception:
+                    return _json({
+                        "error": msg,
+                        "dica": (
+                            "SEI retornou 'não autorizado' para o id "
+                            f"{id_documento!r}. Verifique se você passou o id "
+                            "INTERNO do documento (ex.: 3149544) e não o número "
+                            "SEI / protocoloFormatado (ex.: 2867926). Use "
+                            "sei_buscar_documento para resolver número SEI → id."
+                        ),
+                    })
+            else:
+                raise
+
         nivel, hipotese = access_control.extrair_nivel(result)
         if access_control.precisa_disclaimer(nivel):
             result["_aviso_acesso"] = access_control.construir_disclaimer_acompanhante(
