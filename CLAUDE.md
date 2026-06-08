@@ -68,6 +68,16 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - `sei_resumo_processos` mantém REST direto (precisa dos flags estruturados de status para agrupamento)
 - Cache in-memory TTL 1h no SEIClient para: `pesquisar_tipos_processo`, `listar_unidades_usuario`, `pesquisar_marcadores`
 
+### WAF / Cloudflare (sei.antaq.gov.br) — bloqueio de borda
+- Desde a migração SEI 3.1 → 5 (jun/2026), **todo o domínio sei.antaq.gov.br está atrás de um Cloudflare Managed Challenge** (header `cf-mitigated: challenge`, página "Just a moment...", `server: cloudflare`)
+- Afeta REST (`/sei/modulos/wssei/...`) E o frontend web (`/sip/login.php`, `/sei/`) — as DUAS metades da arquitetura híbrida
+- O 403 vem da BORDA, antes de chegar ao wssei → ocorre com QUALQUER credencial. **Não é erro de login, de versão do mod-wssei nem do MCP** — nenhuma mudança de código resolve
+- Browsers passam automaticamente (executam o JS challenge e obtêm cookie `cf_clearance`); clientes httpx/sem-JS levam 403
+- Diagnóstico rápido: `.venv/bin/python scripts/diag_conectividade.py`
+- Código já detecta e levanta `SEICloudflareBlocked` (REST) / `RuntimeError` claro (web) em vez de 403 opaco
+- **Correção definitiva (lado ANTAQ/infra)**: regra de bypass no Cloudflare para `/sei/modulos/wssei/` (e `/sip/login.php` se usar scraper), idealmente com header secreto; depois configurar `SEI_EXTRA_HEADERS`
+- Escape hatch temporário/frágil: `SEI_CF_CLEARANCE` (cookie do browser, expira e é atrelado a IP+UA)
+
 ### Limitações conhecidas
 - Cancelar assinatura: a função `DocumentoRN::cancelarAssinaturaInternoControlado` existe no core SEI (linha 4026) mas NÃO está exposta na API REST
 - `sei_marcar_nao_lido` usa workaround de enviar processo para a própria unidade

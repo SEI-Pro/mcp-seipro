@@ -17,6 +17,7 @@ Limitações:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -74,19 +75,45 @@ class SEIWebClient:
             f"?sigla_orgao_sistema={self._sigla_orgao}&sigla_sistema={self._sigla_sistema}"
         )
 
+        _headers = {
+            "User-Agent": kwargs.get(
+                "sei_user_agent",
+                os.environ.get(
+                    "SEI_USER_AGENT",
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36",
+                ),
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        }
+        # Header secreto para regra de bypass do WAF (Cloudflare). Mesmo
+        # mecanismo do SEIClient REST — ver SEI_EXTRA_HEADERS.
+        extra = os.environ.get("SEI_EXTRA_HEADERS", "").strip()
+        if extra:
+            if extra.startswith("{"):
+                try:
+                    _headers.update({str(k): str(v) for k, v in json.loads(extra).items()})
+                except (ValueError, AttributeError):
+                    pass
+            else:
+                for pair in extra.split(","):
+                    if ":" in pair:
+                        k, v = pair.split(":", 1)
+                        _headers[k.strip()] = v.strip()
+
+        cookies = None
+        cf_clearance = os.environ.get("SEI_CF_CLEARANCE", "").strip()
+        if cf_clearance:
+            cookies = {"cf_clearance": cf_clearance}
+
         self._http = httpx.AsyncClient(
             verify=verify_ssl,
             follow_redirects=True,
             timeout=httpx.Timeout(60.0, connect=10.0, read=45.0),
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-            },
+            headers=_headers,
+            cookies=cookies,
         )
         self._inbox_url: Optional[httpx.URL] = None
         # cache do form principal de procedimento_controlar (action + hidden fields)
@@ -105,6 +132,17 @@ class SEIWebClient:
     async def login(self) -> None:
         """Faz login via formulário SIP e captura a inbox URL com infra_hash."""
         resp = await self._http.get(self.login_url)
+        if resp.headers.get("cf-mitigated", "").lower() == "challenge" or (
+            "cloudflare" in resp.headers.get("server", "").lower()
+            and resp.status_code in (403, 429, 503)
+            and "just a moment" in (resp.text or "")[:2000].lower()
+        ):
+            raise RuntimeError(
+                "Login web bloqueado por desafio do Cloudflare (Managed Challenge) "
+                "antes de chegar ao SEI. Não é erro de credencial. Solução: regra "
+                "de bypass no Cloudflare para /sip/login.php e /sei/, ou configurar "
+                f"SEI_EXTRA_HEADERS/SEI_CF_CLEARANCE. (cf-ray={resp.headers.get('cf-ray','?')})"
+            )
         if resp.status_code != 200:
             raise RuntimeError(f"GET login.php retornou {resp.status_code}")
 
