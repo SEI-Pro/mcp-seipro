@@ -12,6 +12,16 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+class SEICloudflareBlocked(Exception):
+    """A requisição foi barrada por um desafio do Cloudflare na borda.
+
+    Significa que o tráfego NÃO chegou ao módulo wssei: o 403 vem do WAF do
+    Cloudflare (Managed Challenge / JS challenge), não do SEI nem do MCP. Por
+    isso ocorre com qualquer credencial. Correção fica do lado da ANTAQ/infra
+    (regra de bypass no Cloudflare), não no código.
+    """
+
+
 class SEIClient:
     """Cliente REST assíncrono para qualquer instância do SEI com mod-wssei v2."""
 
@@ -33,9 +43,94 @@ class SEIClient:
         verify_ssl = kwargs.get("sei_verify_ssl", os.environ.get("SEI_VERIFY_SSL", "true"))
         if isinstance(verify_ssl, str):
             verify_ssl = verify_ssl.lower() != "false"
+
+        # User-Agent de browser + headers extras. SEI_EXTRA_HEADERS permite
+        # enviar um header secreto combinado numa regra de bypass do WAF
+        # (Cloudflare) — solução correta quando o domínio está atrás de
+        # Managed Challenge. Aceita JSON {"X-Chave":"..."} ou "K:V,K2:V2".
+        default_headers = {
+            "User-Agent": kwargs.get(
+                "sei_user_agent",
+                os.environ.get(
+                    "SEI_USER_AGENT",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                ),
+            ),
+        }
+        default_headers.update(
+            self._parse_extra_headers(
+                kwargs.get("sei_extra_headers", os.environ.get("SEI_EXTRA_HEADERS", ""))
+            )
+        )
+
+        # Escape hatch temporário: cookie cf_clearance obtido manualmente num
+        # browser para atravessar o desafio do Cloudflare. Frágil (expira e é
+        # atrelado a IP+UA) — a solução correta é a regra de bypass no WAF.
+        cookies = None
+        cf_clearance = kwargs.get("sei_cf_clearance", os.environ.get("SEI_CF_CLEARANCE", ""))
+        if cf_clearance:
+            cookies = {"cf_clearance": cf_clearance}
+
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(120.0, connect=10.0, read=90.0),
             verify=verify_ssl,
+            headers=default_headers,
+            cookies=cookies,
+        )
+
+    @staticmethod
+    def _parse_extra_headers(raw: str) -> dict:
+        """Converte SEI_EXTRA_HEADERS (JSON ou 'K:V,K2:V2') em dict de headers."""
+        if not raw:
+            return {}
+        raw = raw.strip()
+        if raw.startswith("{"):
+            try:
+                obj = json.loads(raw)
+                return {str(k): str(v) for k, v in obj.items()}
+            except (ValueError, AttributeError):
+                logger.warning("SEI_EXTRA_HEADERS não é JSON válido — ignorado")
+                return {}
+        headers = {}
+        for pair in raw.split(","):
+            if ":" in pair:
+                k, v = pair.split(":", 1)
+                headers[k.strip()] = v.strip()
+        return headers
+
+    @staticmethod
+    def _is_cloudflare_challenge(resp: httpx.Response) -> bool:
+        """Detecta o desafio (Managed Challenge / JS) do Cloudflare."""
+        if resp.headers.get("cf-mitigated", "").lower() == "challenge":
+            return True
+        if (
+            "cloudflare" in resp.headers.get("server", "").lower()
+            and resp.status_code in (403, 429, 503)
+        ):
+            snippet = (resp.text or "")[:2000].lower()
+            return (
+                "just a moment" in snippet
+                or "challenges.cloudflare.com" in snippet
+                or "cf-chl" in snippet
+            )
+        return False
+
+    def _raise_if_cloudflare(self, resp: httpx.Response) -> None:
+        """Se a resposta for um desafio do Cloudflare, levanta erro claro."""
+        if not self._is_cloudflare_challenge(resp):
+            return
+        raise SEICloudflareBlocked(
+            "O domínio do SEI está protegido por um desafio do Cloudflare "
+            "(Managed Challenge). A requisição foi bloqueada na BORDA, antes de "
+            "chegar ao módulo wssei — por isso o 403 ocorre com qualquer "
+            "credencial. Não é erro de login, de versão do wssei nem do MCP.\n"
+            "Correção (lado ANTAQ/infra): criar uma regra de bypass no Cloudflare "
+            "para o caminho /sei/modulos/wssei/ (e /sip/login.php se usar o "
+            "scraper web), de preferência combinada com um header secreto. "
+            "Configure então esse header em SEI_EXTRA_HEADERS. Alternativa "
+            "temporária: cookie cf_clearance em SEI_CF_CLEARANCE. "
+            f"(cf-ray={resp.headers.get('cf-ray', '?')})"
         )
 
     def _cache_get(self, key: str) -> Any:
@@ -62,11 +157,13 @@ class SEIClient:
         headers = await self._get_headers()
         kwargs.setdefault("headers", {}).update(headers)
         resp = await self._client.request(method, f"{self.base_url}{path}", **kwargs)
+        self._raise_if_cloudflare(resp)
         if resp.status_code in (401, 403):
             logger.info("Token expirado, re-autenticando...")
             await self.autenticar()
             kwargs["headers"].update({"token": self._token})
             resp = await self._client.request(method, f"{self.base_url}{path}", **kwargs)
+            self._raise_if_cloudflare(resp)
         resp.raise_for_status()
         return resp
 
@@ -81,6 +178,7 @@ class SEIClient:
                 "contexto": self._contexto,
             },
         )
+        self._raise_if_cloudflare(resp)
         resp.raise_for_status()
         data = resp.json()
         if not data.get("sucesso"):
