@@ -77,6 +77,12 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - Código já detecta e levanta `SEICloudflareBlocked` (REST) / `RuntimeError` claro (web) em vez de 403 opaco
 - **Correção definitiva (lado ANTAQ/infra)**: regra de bypass no Cloudflare para `/sei/modulos/wssei/` (e `/sip/login.php` se usar scraper), idealmente com header secreto; depois configurar `SEI_EXTRA_HEADERS`
 - Escape hatch temporário/frágil: `SEI_CF_CLEARANCE` (cookie do browser, expira e é atrelado a IP+UA)
+- **Contingência — transporte via browser** (`SEI_TRANSPORT=browser`): `src/mcp_seipro/browser_transport.py` roteia o REST por um Chromium real (Playwright), que resolve o desafio sozinho. Provado contornar o CF da ANTAQ (headless). Opt-in, pesado, serializa chamadas. Extra `playwright` + `playwright install chromium`; no Railway, build com `--build-arg INSTALL_BROWSER=true`. Validação: `scripts/diag_browser_transport.py`. Cobre só o SEIClient REST — o SEIWebClient (scraper) ainda cai no CF nesse modo.
+
+### Bug de instalação do wssei no SEI 5 da ANTAQ (lado servidor)
+- Pós-migração SEI 5 (jun/2026), `POST /autenticar` retorna **500** mesmo passando o Cloudflare: `Class "ConfiguracaoMdWSSEI" not found` em `MdWsSeiUsuarioRN.php:88` (`getTokenSecret()`)
+- Causa: o arquivo de config do módulo (`<raiz>/sei/config/mod-wssei/ConfiguracaoMdWSSEI.php`) não foi recriado na migração — não é versionado (`.gitignore` do pengovbr/mod-wssei), é criado copiando `ConfiguracaoMdWSSEI.exemplo.php` (passo 6 do `docs/INSTALACAO.md`)
+- Ocorre ANTES de validar credenciais → "falha com qualquer credencial". **Correção é da TI da ANTAQ** (recriar o arquivo em `/opt/sei/config/mod-wssei/`, preencher o array incl. secret do token, permissão de leitura). Quebra também integrações oficiais
 
 ### Limitações conhecidas
 - Cancelar assinatura: a função `DocumentoRN::cancelarAssinaturaInternoControlado` existe no core SEI (linha 4026) mas NÃO está exposta na API REST

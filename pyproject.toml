@@ -21,6 +21,11 @@ dependencies = [
     "uvicorn[standard]>=0.30",
 ]
 
+[project.optional-dependencies]
+# Transporte via browser (SEI_TRANSPORT=browser) para contornar WAF/Cloudflare.
+# Após instalar: `playwright install chromium`.
+browser = ["playwright>=1.40"]
+
 [project.scripts]
 mcp-seipro = "mcp_seipro.server:main"
 

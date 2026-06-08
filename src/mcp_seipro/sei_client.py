@@ -72,12 +72,28 @@ class SEIClient:
         if cf_clearance:
             cookies = {"cf_clearance": cf_clearance}
 
-        self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(120.0, connect=10.0, read=90.0),
-            verify=verify_ssl,
-            headers=default_headers,
-            cookies=cookies,
-        )
+        # Seleção de transporte. SEI_TRANSPORT=browser roteia tudo por um
+        # Chromium real (Playwright) — contorna o desafio do Cloudflare quando
+        # não há regra de bypass no WAF. Pesado; use como contingência.
+        transport = kwargs.get("sei_transport", os.environ.get("SEI_TRANSPORT", "httpx")).lower()
+        if transport == "browser":
+            from .browser_transport import BrowserClient
+            self._client = BrowserClient(
+                self.base_url,
+                user_agent=default_headers["User-Agent"],
+                verify=verify_ssl,
+                extra_headers=self._parse_extra_headers(
+                    kwargs.get("sei_extra_headers", os.environ.get("SEI_EXTRA_HEADERS", ""))
+                ),
+            )
+            logger.info("SEIClient usando transporte via browser (Playwright/Chromium)")
+        else:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(120.0, connect=10.0, read=90.0),
+                verify=verify_ssl,
+                headers=default_headers,
+                cookies=cookies,
+            )
 
     @staticmethod
     def _parse_extra_headers(raw: str) -> dict:
