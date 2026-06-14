@@ -31,6 +31,7 @@ from bs4 import BeautifulSoup, Tag
 
 from todos.exceptions import (
     SEIAuthError,
+    SEICaptchaError,
     SEIConnectionError,
     SEIError,
     SEINotFoundError,
@@ -88,13 +89,15 @@ def _extrair_erro_sei(html: str) -> str | None:
             txt = el.get_text(" ", strip=True)
             if txt:
                 return txt
-    # JavaScript alert("mensagem de erro") — busca apenas em <script>,
-    # excluindo onclick/href e scripts que constroem HTML dinamicamente
-    # (document.write com âncoras de assinantes).
+    # JavaScript alert("mensagem de erro") — busca apenas em <script>.
+    # Scripts de validação de formulário definem funções com alert() para feedback
+    # do usuário — não são erros do servidor. Scripts de erro SEI são bare (sem funções).
     for script in soup.find_all("script"):
         if not isinstance(script, Tag):
             continue
         src = script.get_text()
+        if re.search(r"\bfunction\s+\w+\s*\(", src):
+            continue
         # [^<>'"]{10,300} evita match de HTML embutido nos scripts (nomes de assinantes)
         m = re.search(r"alert\(['\"]([^<>'\"]{10,300})['\"]", src)
         if m:
@@ -115,6 +118,37 @@ def _extrair_submit_btn(form: Tag) -> tuple[str, str] | None:
             value = _tag_str(btn, "value") or btn.get_text(strip=True) or "Enviar"
             return name, value
     return None
+
+
+def _coletar_estado_form(form: Tag) -> dict[str, str]:
+    """Coleta o estado atual de todos os campos de um form para reenvio.
+
+    Inclui inputs (exceto submit; radios/checkboxes apenas se marcados),
+    a opção selecionada de cada select e o conteúdo de cada textarea. O
+    chamador sobrescreve apenas os campos que deseja alterar.
+    """
+    estado: dict[str, str] = {}
+    for inp in form.find_all("input"):
+        name = _tag_str(inp, "name")
+        if not name:
+            continue
+        itype = _tag_str(inp, "type", "text").lower()
+        if itype in {"radio", "checkbox"}:
+            if inp.has_attr("checked"):
+                estado[name] = _tag_str(inp, "value")
+        elif itype != "submit":
+            estado[name] = _tag_str(inp, "value")
+    for sel in form.find_all("select"):
+        name = _tag_str(sel, "name")
+        if not name:
+            continue
+        opt = sel.find("option", selected=True)
+        estado[name] = _tag_str(opt, "value") if isinstance(opt, Tag) else ""
+    for ta in form.find_all("textarea"):
+        name = _tag_str(ta, "name")
+        if name:
+            estado[name] = ta.get_text()
+    return estado
 
 
 class SEIWebClient:
@@ -322,9 +356,15 @@ class SEIWebClient:
             or 'name="txtInfraCaptcha"' in html
             or 'id="txtInfraCaptcha"' in html
         ):
-            raise SEIAuthError("CAPTCHA presente no login — abortando.")
+            raise SEICaptchaError(
+                "CAPTCHA presente no login — o scraper não resolve CAPTCHA. "
+                "Acesse o SEI pelo navegador uma vez para liberar a sessão."
+            )
         if 'name="txtCodigo2FA"' in html or 'id="txtCodigo2FA"' in html:
-            raise SEIAuthError("2FA solicitado no login — não suportado.")
+            raise SEICaptchaError(
+                "2FA solicitado no login — não suportado pelo scraper. "
+                "Conclua o 2FA pelo navegador e tente novamente."
+            )
 
         soup = BeautifulSoup(html, "html.parser")
         usuario_input = soup.find("input", attrs={"name": "txtUsuario"})
@@ -1209,14 +1249,27 @@ class SEIWebClient:
         if form is not None:
             action = _tag_str(form, "action").replace("&amp;", "&")
             post_url = urljoin(str(r.url), action) if action else str(r.url)
-            post_data: dict[str, str] = {}
-            for inp in form.find_all("input"):
-                n = _tag_str(inp, "name")
-                if n:
-                    post_data[n] = _tag_str(inp, "value")
+            post_data = _coletar_estado_form(form)
+            # O PHP do SEI ignora o POST silenciosamente sem o par name=value do
+            # botão submit; muitos forms de ação usam <button type=submit>, que
+            # não é capturado como campo do form.
+            sbm = _extrair_submit_btn(form)
+            if sbm:
+                post_data[sbm[0]] = sbm[1]
             if campos_extras:
                 post_data.update(campos_extras)
-            r2 = await self._http.post(post_url, data=post_data, headers={"Referer": str(r.url)})
+            # POST em ISO-8859-1 (charset do SEI); `data=` usaria UTF-8 (httpx
+            # default) e gravaria texto acentuado como mojibake.
+            r2 = await self._http.post(
+                post_url,
+                content=urlencode(post_data, encoding="iso-8859-1", errors="replace").encode(
+                    "ascii"
+                ),
+                headers={
+                    "Referer": str(r.url),
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
             _check(r2)
             body2 = r2.content.decode("iso-8859-1", "replace")
             erro2 = _extrair_erro_sei(body2)
@@ -1301,6 +1354,225 @@ class SEIWebClient:
                 textareas.append(n)
 
         return {"campos": campos, "selects": selects, "textareas": textareas}
+
+    async def remover_sobrestamento_web(self, protocolo: str) -> dict:
+        """Remove o sobrestamento de um processo via a lista de sobrestados.
+
+        A ação `procedimento_remover_sobrestamento` não tem link estático na
+        árvore do processo (é acionada por JS a partir do menu). O caminho
+        confiável é a tela `procedimento_sobrestado_listar`: ela traz o form
+        `frmProcedimentoSobrestar` e, por linha, o id do processo. Setamos
+        `hdnInfraItemId` com esse id e submetemos para a URL assinada de remoção.
+        """
+        await self.ensure_authenticated()
+        listar_url = await self._obter_link_toolbar("procedimento_sobrestado_listar")
+        r = await self._http.get(listar_url, headers={"Referer": str(self._inbox_url)})
+        _check(r)
+        body = r.content.decode("iso-8859-1", "replace")
+        alvo = protocolo.strip()
+        m_row = re.search(
+            rf"acaoRemoverSobrestamento\('(\d+)','{re.escape(alvo)}'\)",
+            body,
+        )
+        if not m_row:
+            raise SEINotFoundError(
+                f"Processo {protocolo} não está na lista de sobrestados da unidade atual."
+            )
+        id_proc = m_row.group(1)
+        soup = BeautifulSoup(body, "html.parser")
+        form = soup.find("form", id="frmProcedimentoSobrestar") or soup.find("form")
+        if form is None:
+            raise SEIParseError("Form frmProcedimentoSobrestar não encontrado.")
+        m_url = re.search(
+            r"controlador\.php\?acao=procedimento_remover_sobrestamento[^\"'\s)]*infra_hash=[a-f0-9]+",
+            body,
+        )
+        if not m_url:
+            raise SEIParseError(
+                "URL assinada de procedimento_remover_sobrestamento não encontrada."
+            )
+        post_url = urljoin(f"{self.sei_root}/sei/", m_url.group(0).replace("&amp;", "&"))
+        dados = _coletar_estado_form(form)
+        dados["hdnInfraItemId"] = id_proc
+        r2 = await self._http.post(
+            post_url,
+            content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+            headers={"Referer": str(r.url), "Content-Type": "application/x-www-form-urlencoded"},
+        )
+        _check(r2)
+        erro = _extrair_erro_sei(r2.content.decode("iso-8859-1", "replace"))
+        if erro:
+            raise SEIConnectionError(erro)
+        self._invalidar_arvore(protocolo)
+        return {"ok": True, "mensagem": "Sobrestamento removido.", "protocolo": protocolo}
+
+    async def _pagina_visualizacao_processo(self, protocolo: str) -> tuple[str, str]:
+        """Retorna (html, url) da página de visualização do nó raiz do processo.
+
+        É a página carregada no frame de conteúdo (`ifrVisualizacao`) ao abrir o
+        processo. Diferente da árvore (lado esquerdo), o HEAD dela declara as
+        variáveis JS `link<Acao>` com as URLs ASSINADAS das ações acionadas por
+        JS no frontend (reabrir, remover sobrestamento, excluir documento,
+        assinar, dar ciência, etc.) — que não têm link estático na árvore.
+        """
+        html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
+        m = re.search(
+            r'Nos\[0\][^;]*?"(controlador\.php\?acao=arvore_visualizar[^"]+)"',
+            html_arvore,
+        )
+        if not m:
+            raise SEIParseError("Link do nó raiz do processo não encontrado na árvore.")
+        url = urljoin(url_arvore, m.group(1).replace("&amp;", "&"))
+        r = await self._http.get(url, headers={"Referer": url_arvore})
+        _check(r)
+        return r.content.decode("iso-8859-1", "replace"), str(r.url)
+
+    async def _link_acao_visualizacao(self, protocolo: str, nome_var: str) -> str | None:
+        """Extrai a URL assinada de uma ação JS (`var link<Acao> = '...'`).
+
+        Retorna None se a variável não existir (ação indisponível no estado atual
+        do processo — ex.: `linkReabrirProcesso` só aparece em concluídos).
+        """
+        body, base = await self._pagina_visualizacao_processo(protocolo)
+        m = re.search(rf"var\s+{re.escape(nome_var)}\s*=\s*'([^']+)'", body)
+        if not m:
+            return None
+        return urljoin(base, m.group(1).replace("&amp;", "&"))
+
+    async def reabrir_processo_web(self, protocolo: str) -> dict:
+        """Reabre um processo concluído na unidade atual.
+
+        A reabertura no frontend é o JS `reabrirProcesso()`, que apenas navega
+        para a URL assinada da variável `linkReabrirProcesso` (declarada no HEAD
+        da página de visualização do processo). Replicamos: obtemos essa URL e
+        fazemos o GET.
+        """
+        await self.ensure_authenticated()
+        url = await self._link_acao_visualizacao(protocolo, "linkReabrirProcesso")
+        if url is None:
+            raise SEINotFoundError(
+                f"Reabertura indisponível para {protocolo}: o processo não está "
+                "concluído na unidade atual (ou sem permissão para reabrir)."
+            )
+        r = await self._http.get(url, headers={"Referer": str(self._inbox_url)})
+        _check(r)
+        erro = _extrair_erro_sei(r.content.decode("iso-8859-1", "replace"))
+        if erro:
+            raise SEIConnectionError(erro)
+        self._invalidar_arvore(protocolo)
+        return {"ok": True, "mensagem": "Processo reaberto.", "protocolo": protocolo}
+
+    async def _pagina_marcador(self, protocolo: str) -> tuple[str, BeautifulSoup, str]:
+        """Retorna (body, soup, referer) da tela gerenciar marcadores do processo.
+
+        A tela `andamento_marcador_gerenciar` traz o form `frmGerenciarMarcador`,
+        a tabela dos marcadores aplicados (cada `acaoRemover('<id>','<desc>')`) e
+        a URL assinada de `andamento_marcador_remover`.
+        """
+        html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
+        m = re.search(
+            r"(controlador\.php\?acao=andamento_marcador_gerenciar[^\"'\s]*infra_hash=[a-f0-9]+)",
+            html_arvore,
+        )
+        if not m:
+            raise SEINotFoundError("Ação de marcador não disponível para este processo.")
+        url = urljoin(f"{self.sei_root}/sei/", m.group(1).replace("&amp;", "&"))
+        r = await self._http.get(url, headers={"Referer": url_arvore})
+        _check(r)
+        body = r.content.decode("iso-8859-1", "replace")
+        return body, BeautifulSoup(body, "html.parser"), url_arvore
+
+    @staticmethod
+    def _split_marcador_desc(desc: str) -> tuple[str, str]:
+        """Separa "Nome #rrggbb" em (nome, cor-hex)."""
+        m_cor = re.search(r"#([0-9a-fA-F]{6})", desc)
+        cor = m_cor.group(1) if m_cor else ""
+        nome = desc.split("#", 1)[0].strip() if "#" in desc else desc.strip()
+        return nome, cor
+
+    async def consultar_marcador_processo_web(self, protocolo: str) -> dict:
+        """Lista os marcadores atualmente aplicados a um processo (scraper web)."""
+        await self.ensure_authenticated()
+        body, _, _ = await self._pagina_marcador(protocolo)
+        aplicados: list[dict[str, str]] = []
+        for mid, desc in re.findall(r"acaoRemover\('(\d+)','([^']*)'\)", body):
+            nome, cor = self._split_marcador_desc(desc)
+            aplicados.append({"id": mid, "nome": nome, "cor": cor})
+        return {"marcadores": aplicados, "total_itens": len(aplicados)}
+
+    async def desmarcar_processo_web(self, protocolo: str, marcador: str = "") -> dict:
+        """Remove marcador(es) de um processo via `andamento_marcador_remover`.
+
+        `marcador` pode ser o id numérico ou parte do nome (case-insensitive).
+        Vazio remove TODOS os marcadores aplicados. Como o hash do form muda a
+        cada remoção, a tela é relida a cada iteração.
+        """
+        await self.ensure_authenticated()
+        alvo = marcador.strip().lower()
+        tentados: dict[str, str] = {}  # mid -> nome (cada mid é tentado uma vez)
+        for _ in range(20):  # trava de segurança
+            body, soup, referer = await self._pagina_marcador(protocolo)
+            aplicados = re.findall(r"acaoRemover\('(\d+)','([^']*)'\)", body)
+            # Casa por id exato OU substring do NOME (sem a cor #rrggbb, que
+            # senão poderia casar um filtro numérico/parcial no marcador errado).
+            # Ignora ids já tentados para não re-postar num no-op em loop.
+            prox = next(
+                (
+                    (mid, desc)
+                    for mid, desc in aplicados
+                    if mid not in tentados
+                    and (
+                        not alvo
+                        or mid == marcador.strip()
+                        or alvo in self._split_marcador_desc(desc)[0].lower()
+                    )
+                ),
+                None,
+            )
+            if prox is None:
+                break
+            mid, desc = prox
+            form = soup.find("form", id="frmGerenciarMarcador") or soup.find("form")
+            m_url = re.search(
+                r"controlador\.php\?acao=andamento_marcador_remover[^\"'\s)]*infra_hash=[a-f0-9]+",
+                body,
+            )
+            if form is None or m_url is None:
+                raise SEIParseError("Mecanismo de remoção de marcador não encontrado.")
+            post_url = urljoin(f"{self.sei_root}/sei/", m_url.group(0).replace("&amp;", "&"))
+            dados = _coletar_estado_form(form)
+            dados["hdnInfraItemId"] = mid
+            rr = await self._http.post(
+                post_url,
+                content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+                headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+            )
+            _check(rr)
+            erro = _extrair_erro_sei(rr.content.decode("iso-8859-1", "replace"))
+            if erro:
+                raise SEIConnectionError(erro)
+            tentados[mid] = self._split_marcador_desc(desc)[0]
+            self._invalidar_arvore(protocolo)
+        if not tentados:
+            qual = f'"{marcador}" ' if marcador else ""
+            raise SEINotFoundError(f"Marcador {qual}não está aplicado em {protocolo}.")
+        # Verifica de fato: relê e confere quais ids sumiram (POST pode ser no-op
+        # silencioso). Conta como removido só o que realmente saiu.
+        body_final, _, _ = await self._pagina_marcador(protocolo)
+        ainda = set(re.findall(r"acaoRemover\('(\d+)'", body_final))
+        removidos = [nome for mid, nome in tentados.items() if mid not in ainda]
+        falhas = [nome for mid, nome in tentados.items() if mid in ainda]
+        if falhas:
+            raise SEIConnectionError(
+                f"Marcador(es) ainda aplicado(s) após a remoção: {', '.join(falhas)}."
+            )
+        return {"ok": True, "removidos": removidos, "protocolo": protocolo}
+
+    async def remover_anotacao_web(self, protocolo: str) -> dict:
+        """Remove a anotação (post-it) de um processo registrando texto vazio."""
+        await self.ensure_authenticated()
+        await self.executar_acao_processo(protocolo, "anotacao_registrar", {"txaDescricao": ""})
+        return {"ok": True, "mensagem": "Anotação removida.", "protocolo": protocolo}
 
     # ------------------------------------------------------------------
     # Read scrapers — PR #4
@@ -1590,59 +1862,11 @@ class SEIWebClient:
             }
         """
         await self.ensure_authenticated()
+        hist_url, id_proc, referer = await self._navegar_historico(protocolo_formatado)
 
-        # garante que o protocolo está no cache
-        if protocolo_formatado not in self._trabalhar_links:
-            await self.fetch_inbox(detalhada=False)
-        if protocolo_formatado not in self._trabalhar_links:
-            await self.pesquisar_processo(protocolo_formatado)
-
-        trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
-
-        # frameset → arvore
-        r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
-        _check(r1)
-        soup_fs = BeautifulSoup(r1.text, "html.parser")
-        ifr = soup_fs.find("iframe", id="ifrArvore")
-        if not ifr:
-            raise SEIParseError("ifrArvore não encontrado")
-        arvore_url = urljoin(str(r1.url), _tag_str(ifr, "src").replace("&amp;", "&"))
-
-        m_id = re.search(r"id_procedimento=(\d+)", str(r1.url))
-        id_proc = m_id.group(1) if m_id else ""
-
-        # fetch arvore para pegar o link do histórico
-        r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
-        _check(r2)
-
-        m_hist = re.search(
-            r"(controlador\.php\?acao=procedimento_consultar_historico[^\"']*infra_hash=[a-f0-9]+)",
-            r2.text,
-        )
-        if not m_hist:
-            raise SEINotFoundError("Link procedimento_consultar_historico não encontrado na árvore")
-        hist_url = urljoin(str(r2.url), m_hist.group(1).replace("&amp;", "&"))
-
-        # fetch histórico
-        r3 = await self._http.get(hist_url, headers={"Referer": str(r2.url)})
+        r3 = await self._http.get(hist_url, headers={"Referer": referer})
         _check(r3)
-
-        soup_h = BeautifulSoup(r3.text, "html.parser")
-        tbl = soup_h.find("table", id="tblHistorico")
-        andamentos: list[dict[str, str]] = []
-        if tbl:
-            for tr in tbl.find_all("tr")[1:]:  # pula header
-                tds = tr.find_all("td")
-                if len(tds) >= 4:
-                    andamentos.append(
-                        {
-                            "data_hora": tds[0].get_text(" ", strip=True),
-                            "unidade": tds[1].get_text(" ", strip=True),
-                            "usuario": tds[2].get_text(" ", strip=True),
-                            "descricao": tds[3].get_text(" ", strip=True),
-                        }
-                    )
-
+        andamentos = self._parse_tabela_historico(r3.text)
         return {
             "processo": {
                 "protocolo": protocolo_formatado,
@@ -1650,6 +1874,120 @@ class SEIWebClient:
             },
             "total_andamentos": len(andamentos),
             "andamentos": andamentos,
+        }
+
+    async def _navegar_historico(self, protocolo_formatado: str) -> tuple[str, str, str]:
+        """Navega até o histórico do processo; retorna (hist_url, id_proc, referer)."""
+        if protocolo_formatado not in self._trabalhar_links:
+            await self.fetch_inbox(detalhada=False)
+        if protocolo_formatado not in self._trabalhar_links:
+            await self.pesquisar_processo(protocolo_formatado)
+        trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
+        r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
+        _check(r1)
+        soup_fs = BeautifulSoup(r1.text, "html.parser")
+        ifr = soup_fs.find("iframe", id="ifrArvore")
+        if not ifr:
+            raise SEIParseError("ifrArvore não encontrado")
+        arvore_url = urljoin(str(r1.url), _tag_str(ifr, "src").replace("&amp;", "&"))
+        m_id = re.search(r"id_procedimento=(\d+)", str(r1.url))
+        id_proc = m_id.group(1) if m_id else ""
+        r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
+        _check(r2)
+        m_hist = re.search(
+            r"(controlador\.php\?acao=procedimento_consultar_historico[^\"']*infra_hash=[a-f0-9]+)",
+            r2.text,
+        )
+        if not m_hist:
+            raise SEINotFoundError("Link procedimento_consultar_historico não encontrado na árvore")
+        hist_url = urljoin(str(r2.url), m_hist.group(1).replace("&amp;", "&"))
+        return hist_url, id_proc, str(r2.url)
+
+    @staticmethod
+    def _parse_tabela_historico(html: str) -> list[dict[str, str]]:
+        """Extrai as linhas (data_hora, unidade, usuario, descricao) de tblHistorico."""
+        tbl = BeautifulSoup(html, "html.parser").find("table", id="tblHistorico")
+        linhas: list[dict[str, str]] = []
+        if tbl:
+            for tr in tbl.find_all("tr")[1:]:  # pula header
+                tds = tr.find_all("td")
+                if len(tds) >= 4:
+                    linhas.append(
+                        {
+                            "data_hora": tds[0].get_text(" ", strip=True),
+                            "unidade": tds[1].get_text(" ", strip=True),
+                            "usuario": tds[2].get_text(" ", strip=True),
+                            "descricao": tds[3].get_text(" ", strip=True),
+                        }
+                    )
+        return linhas
+
+    async def listar_historico_atribuicoes_web(self, protocolo_formatado: str) -> dict:
+        """Histórico de atribuições do processo (do histórico COMPLETO, tipo 'P').
+
+        As atribuições não aparecem no histórico resumido; o completo registra
+        "Processo atribuído para <login>" e "Removida atribuição do processo".
+        Retorna eventos em ordem cronológica + derivações úteis:
+        - `atribuidos`: logins distintos a quem o processo já foi atribuído
+        - `atual`: login atualmente atribuído (vazio se a última ação foi remoção)
+        - `anterior`: login atribuído imediatamente antes do atual
+        """
+        await self.ensure_authenticated()
+        hist_url, id_proc, referer = await self._navegar_historico(protocolo_formatado)
+        r = await self._http.get(hist_url, headers={"Referer": referer})
+        _check(r)
+        form = BeautifulSoup(r.text, "html.parser").find("form")
+        if form is None:
+            raise SEIParseError("Form do histórico não encontrado.")
+        dados = _coletar_estado_form(form)
+        dados["hdnTipoHistorico"] = "P"
+        action = urljoin(hist_url, _tag_str(form, "action").replace("&amp;", "&"))
+        r2 = await self._http.post(
+            action,
+            content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+            headers={"Referer": hist_url, "Content-Type": "application/x-www-form-urlencoded"},
+        )
+        _check(r2)
+
+        eventos: list[dict[str, str]] = []
+        for linha in self._parse_tabela_historico(r2.text):
+            desc = linha["descricao"]
+            m_at = re.search(r"[Pp]rocesso atribu[ií]do para\s+(.+?)\.?\s*$", desc)
+            if m_at:
+                eventos.append(
+                    {
+                        "data_hora": linha["data_hora"],
+                        "tipo": "atribuido",
+                        "usuario": m_at.group(1).strip(),
+                    }
+                )
+            elif re.search(r"[Rr]emovida atribui[çc][ãa]o", desc):
+                eventos.append({"data_hora": linha["data_hora"], "tipo": "removido", "usuario": ""})
+
+        eventos_cron = list(reversed(eventos))  # tabela vem do mais novo p/ o mais antigo
+        atribuicoes = [e["usuario"] for e in eventos_cron if e["tipo"] == "atribuido"]
+        distintos: list[str] = []
+        for u in atribuicoes:
+            if u not in distintos:
+                distintos.append(u)
+        atual = (
+            eventos_cron[-1]["usuario"]
+            if eventos_cron and eventos_cron[-1]["tipo"] == "atribuido"
+            else ""
+        )
+        anterior = ""
+        anteriores = atribuicoes[:-1] if atual else atribuicoes
+        for u in reversed(anteriores):
+            if u != atual:
+                anterior = u
+                break
+        return {
+            "processo": {"protocolo": protocolo_formatado, "id_procedimento": id_proc},
+            "eventos": eventos_cron,
+            "atribuidos": distintos,
+            "atual": atual,
+            "anterior": anterior,
+            "total": len(eventos_cron),
         }
 
     # ------------------------------------------------------------------
@@ -1834,7 +2172,7 @@ class SEIWebClient:
         *,
         apenas_unidade: bool = True,
     ) -> dict:
-        """Lista usuários da unidade via scrape do form atribuicao_salvar.
+        """Lista usuários da unidade via scrape do form de atribuição.
 
         Requer ao menos um processo na inbox para acessar o form.
         O parâmetro `apenas_unidade` é ignorado — o form mostra apenas
@@ -1850,7 +2188,7 @@ class SEIWebClient:
                 "_aviso": "Inbox vazia; não foi possível carregar usuários.",
             }
         protocolo = next(iter(self._trabalhar_links))
-        form_info = await self.obter_form_acao(protocolo, "atribuicao_salvar")
+        form_info = await self.obter_form_acao(protocolo, "procedimento_atribuicao_cadastrar")
         opcoes = form_info.get("selects", {}).get("selAtribuicao", [])
         usuarios: list[dict[str, str]] = []
         for opt in opcoes:
@@ -1918,11 +2256,10 @@ class SEIWebClient:
         Requer filtro não-vazio — o endpoint AJAX não retorna resultados sem termo.
         """
         if not filtro:
-            return {
-                "unidades": [],
-                "total_itens": 0,
-                "_aviso": "Em modo web, filtro é obrigatório (mínimo 1 caractere).",
-            }
+            raise SEIValidationError(
+                "Em modo web (sem mod-wssei), filtro é obrigatório para pesquisar unidades. "
+                "Informe pelo menos 1 caractere (sigla ou nome da unidade)."
+            )
         resultados = await self.autocomplete_unidades(filtro)
         resultados = resultados[:limit]
         return {"unidades": resultados, "total_itens": len(resultados)}
@@ -2178,11 +2515,10 @@ class SEIWebClient:
     async def pesquisar_assuntos_web(self, filtro: str = "", limit: int = 50) -> dict:
         """Pesquisa assuntos via AJAX assunto_auto_completar."""
         if not filtro:
-            return {
-                "assuntos": [],
-                "total_itens": 0,
-                "_aviso": "Em modo web, filtro é obrigatório (mínimo 1 caractere).",
-            }
+            raise SEIValidationError(
+                "Em modo web (sem mod-wssei), filtro é obrigatório para pesquisar assuntos. "
+                "Informe pelo menos 1 caractere (nome ou código do assunto)."
+            )
         raw = await self._autocomplete_ajax("assunto_auto_completar", filtro)
         assuntos: list[dict[str, str]] = []
         for item in raw[:limit]:
@@ -2196,6 +2532,27 @@ class SEIWebClient:
                 }
             )
         return {"assuntos": assuntos, "total_itens": len(assuntos)}
+
+    async def pesquisar_contatos_web(self, filtro: str = "", limit: int = 50) -> dict:
+        """Pesquisa contatos via AJAX contato_auto_completar."""
+        if not filtro:
+            raise SEIValidationError(
+                "Em modo web (sem mod-wssei), filtro é obrigatório para pesquisar contatos. "
+                "Informe pelo menos 1 caractere (nome ou CPF/CNPJ)."
+            )
+        raw = await self._autocomplete_ajax("contato_auto_completar", filtro)
+        contatos: list[dict[str, str]] = []
+        for item in raw[:limit]:
+            if not isinstance(item, dict):
+                continue
+            contatos.append(
+                {
+                    "id": str(item.get("id", item.get("value", ""))),
+                    "nome": str(item.get("nome", item.get("descricao", item.get("label", "")))),
+                    "sigla": str(item.get("sigla", "")),
+                }
+            )
+        return {"contatos": contatos, "total_itens": len(contatos)}
 
     async def pesquisar_textos_padrao_web(self, filtro: str = "", limit: int = 50) -> dict:
         """Pesquisa textos padrão via AJAX texto_padrao_auto_completar."""
@@ -2217,46 +2574,45 @@ class SEIWebClient:
         return {"textos": textos, "total_itens": len(textos)}
 
     async def consultar_atribuicao_web(self, protocolo: str) -> dict:
-        """Retorna o usuário atualmente atribuído ao processo via form atribuicao_salvar."""
+        """Retorna o usuário atualmente atribuído ao processo.
+
+        Lê a coluna "Atribuição" da visualização detalhada da caixa da unidade —
+        diferente do form de atribuição (que serve para *definir*, não exibe o
+        atual). Requer que o processo esteja aberto na unidade atual; varre as
+        páginas da caixa até encontrá-lo.
+        """
         await self.ensure_authenticated()
-        html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
-        sei_base = f"{self.sei_root}/sei/"
-        m = re.search(
-            r"(controlador\.php\?acao=atribuicao_salvar[^\"'\s]*infra_hash=[a-f0-9]+)",
-            html_arvore,
-        )
-        if not m:
-            return {
-                "id_usuario": "",
-                "nome": "",
-                "_aviso": "Ação atribuicao_salvar não disponível para este processo.",
-            }
-        acao_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
-        r = await self._http.get(acao_url, headers={"Referer": url_arvore})
-        _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
-        soup = BeautifulSoup(body, "html.parser")
-        form = soup.find("form")
-        if form is None:
-            return {"id_usuario": "", "nome": ""}
-        sel = form.find("select", {"name": "selAtribuicao"})
-        if sel is None:
-            return {"id_usuario": "", "nome": ""}
-        selected_opt = sel.find("option", {"selected": True})
-        if selected_opt is None:
-            selected_opt = sel.find("option", {"selected": "selected"})
-        if selected_opt is None:
-            return {"id_usuario": "", "nome": "", "_aviso": "Processo não atribuído."}
-        v = _tag_str(selected_opt, "value")
-        t = selected_opt.get_text(strip=True)
-        mb = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", t)
-        if mb:
-            nome = mb.group(1).strip()
-            sigla = mb.group(2).strip()
-        else:
-            nome = t.strip()
-            sigla = ""
-        return {"id_usuario": v, "nome": nome, "sigla": sigla}
+        alvo = re.sub(r"\s", "", protocolo)
+        seen = 0
+        max_paginas = 50  # trava de segurança contra loop infinito
+        for pagina in range(max_paginas):
+            _, html = await self.fetch_inbox(detalhada=True, pagina=pagina)
+            _, rows = parse_inbox(html)
+            for row in rows:
+                proto = re.sub(r"\s", "", row.get("protocolo", "") or row.get("Processo", ""))
+                if proto == alvo:
+                    atrib = (row.get("Atribuição", "") or "").strip()
+                    return {
+                        "id_usuario": atrib,
+                        "nome": atrib,
+                        "atribuido": bool(atrib),
+                    }
+            seen += len(rows)
+            total = int(self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0")
+            # `total == 0` quando o hidden não existe nesta instância — nesse caso
+            # pagina até esvaziar (senão `seen >= 0` quebraria já na página 0).
+            if not rows or (total > 0 and seen >= total):
+                break
+        return {
+            "id_usuario": "",
+            "nome": "",
+            "atribuido": False,
+            "_aviso": (
+                "Processo não encontrado na caixa da unidade atual (pode estar "
+                "concluído ou em outra unidade). A atribuição só é legível para "
+                "processos abertos na unidade."
+            ),
+        }
 
     async def pesquisar_hipoteses_legais_web(self, filtro: str = "") -> dict:
         """Extrai hipóteses legais do select selHipoteseLegal em procedimento_cadastrar."""
@@ -2288,9 +2644,14 @@ class SEIWebClient:
             await self.fetch_inbox(detalhada=False)
         if not self._trabalhar_links:
             return {"marcadores": [], "total_itens": 0}
-        protocolo = next(iter(self._trabalhar_links))
-        form_info = await self.obter_form_acao(protocolo, "marcacao_salvar")
-        opcoes = form_info.get("selects", {}).get("selMarcador", [])
+        opcoes: list[dict[str, str]] = []
+        for protocolo in self._trabalhar_links:
+            try:
+                form_info = await self.obter_form_acao(protocolo, "marcacao_salvar")
+                opcoes = form_info.get("selects", {}).get("selMarcador", [])
+                break
+            except SEIParseError:
+                continue
         marcadores: list[dict[str, str]] = []
         for opt in opcoes:
             v = opt.get("value", "")
@@ -2311,23 +2672,9 @@ class SEIWebClient:
         html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
         sei_base = f"{self.sei_root}/sei/"
 
-        acoes_html = ""
-        for pat in (
-            r"(?s)Nos\[0\]\.acoes\s*=\s*'((?:[^'\\]|\\.)*)'",
-            r'(?s)Nos\[0\]\.acoes\s*=\s*"((?:[^"\\]|\\.)*)"',
-        ):
-            m = re.search(pat, html_arvore)
-            if m:
-                acoes_html = (
-                    m.group(1).replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
-                )
-                break
-        if not acoes_html:
-            raise SEIParseError("Nos[0].acoes não encontrado na arvore")
-
-        soup_acoes = BeautifulSoup(acoes_html, "html.parser")
+        soup_arvore = BeautifulSoup(html_arvore, "html.parser")
         incluir_href: str | None = None
-        for a in soup_acoes.find_all("a", href=re.compile(r"documento_escolher_tipo")):
+        for a in soup_arvore.find_all("a", href=re.compile(r"documento_escolher_tipo")):
             incluir_href = _tag_str(a, "href").replace("&amp;", "&")
             break
         if not incluir_href:
@@ -2363,8 +2710,15 @@ class SEIWebClient:
             await self.fetch_inbox(detalhada=False)
         if not self._trabalhar_links:
             return {"tipos": [], "total_itens": 0}
-        protocolo = next(iter(self._trabalhar_links))
-        soup = await self._obter_soup_documento_receber(protocolo)
+        soup: BeautifulSoup | None = None
+        for protocolo in self._trabalhar_links:
+            try:
+                soup = await self._obter_soup_documento_receber(protocolo)
+                break
+            except SEIParseError:
+                continue
+        if soup is None:
+            return {"tipos": [], "total_itens": 0}
         sel = soup.find("select", {"name": "selSerie"})
         tipos: list[dict[str, str]] = []
         if sel is not None:
@@ -2385,8 +2739,15 @@ class SEIWebClient:
             await self.fetch_inbox(detalhada=False)
         if not self._trabalhar_links:
             return {"tipos": [], "total_itens": 0}
-        protocolo = next(iter(self._trabalhar_links))
-        soup = await self._obter_soup_documento_receber(protocolo)
+        soup: BeautifulSoup | None = None
+        for protocolo in self._trabalhar_links:
+            try:
+                soup = await self._obter_soup_documento_receber(protocolo)
+                break
+            except SEIParseError:
+                continue
+        if soup is None:
+            return {"tipos": [], "total_itens": 0}
         sel = soup.find("select", {"name": re.compile(r"selTipoConferencia", re.IGNORECASE)})
         tipos: list[dict[str, str]] = []
         if sel is not None:
@@ -2400,6 +2761,111 @@ class SEIWebClient:
                 tipos.append({"id": v, "nome": t})
         return {"tipos": tipos, "total_itens": len(tipos)}
 
+    async def _post_form_preservando(
+        self, form: Tag, base_url: str, overrides: dict[str, str], referer: str
+    ) -> httpx.Response:
+        """Reenvia um form preservando seu estado atual, sobrescrevendo `overrides`.
+
+        Codifica em ISO-8859-1 (charset do SEI) e força bytes ASCII para evitar
+        double-encoding pelo httpx dos separadores `±`/`¥` dos campos multivalor.
+        """
+        action = _tag_str(form, "action").replace("&amp;", "&")
+        post_url = urljoin(base_url, action) if action else base_url
+        dados = _coletar_estado_form(form)
+        dados.update(overrides)
+        return await self._http.post(
+            post_url,
+            content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+            headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+    async def _abrir_form_cadastro_processo(self, tipo_processo: str) -> tuple[Tag, str]:
+        """Navega até o form `frmProcedimentoCadastro` retornando (form, url_atual).
+
+        Lida com os dois fluxos do SEI para iniciar processo:
+        - `procedimento_escolher_tipo` (SEI moderno): escolhe o tipo primeiro
+          (mostra todos os tipos via hdnFiltroTipoProcedimento='T', depois envia
+          hdnIdTipoProcedimento) e então recebe o form de cadastro;
+        - `procedimento_cadastrar` (instâncias antigas): abre o form direto.
+        """
+        try:
+            escolher_url = await self._obter_link_toolbar("procedimento_escolher_tipo")
+        except SEINotFoundError:
+            escolher_url = None
+
+        if escolher_url is not None:
+            r = await self._http.get(escolher_url, headers={"Referer": str(self._inbox_url)})
+            _check(r)
+            soup = BeautifulSoup(r.content.decode("iso-8859-1", "replace"), "html.parser")
+            form = soup.find("form", id="frmProcedimentoEscolherTipo")
+            if form is None:
+                raise SEIParseError("Form procedimento_escolher_tipo não encontrado.")
+            # Mostra todos os tipos (não só os favoritos da unidade).
+            r = await self._post_form_preservando(
+                form,
+                str(r.url),
+                {"hdnFiltroTipoProcedimento": "T", "hdnIdTipoProcedimento": ""},
+                str(r.url),
+            )
+            soup = BeautifulSoup(r.content.decode("iso-8859-1", "replace"), "html.parser")
+            form = soup.find("form", id="frmProcedimentoEscolherTipo")
+            if form is None:
+                raise SEIParseError("Form de escolha de tipo não recarregou.")
+            # Seleciona o tipo desejado → recebe o form de cadastro.
+            r = await self._post_form_preservando(
+                form, str(r.url), {"hdnIdTipoProcedimento": tipo_processo}, str(r.url)
+            )
+            soup = BeautifulSoup(r.content.decode("iso-8859-1", "replace"), "html.parser")
+            form = soup.find("form", id="frmProcedimentoCadastro")
+            if form is None:
+                erro = _extrair_erro_sei(r.content.decode("iso-8859-1", "replace"))
+                raise SEIParseError(
+                    erro or f"Form de cadastro não retornou para o tipo {tipo_processo}."
+                )
+            return form, str(r.url)
+
+        cadastrar_url = await self._obter_link_toolbar("procedimento_cadastrar")
+        r = await self._http.get(cadastrar_url, headers={"Referer": str(self._inbox_url)})
+        _check(r)
+        body = r.content.decode("iso-8859-1", "replace")
+        erro = _extrair_erro_sei(body)
+        if erro:
+            raise SEIConnectionError(erro)
+        form = BeautifulSoup(body, "html.parser").find("form")
+        if form is None:
+            raise SEIParseError("Form procedimento_cadastrar não encontrado.")
+        return form, str(r.url)
+
+    @staticmethod
+    def _serializar_assuntos(form: Tag, assuntos_ids: list[str]) -> str:
+        """Serializa os assuntos no formato `hdnAssuntos` do SEI: `id±texto` por `¥`.
+
+        Resolve cada id contra as opções pré-carregadas de `selAssuntos` (os
+        assuntos sugeridos para o tipo). Quando `assuntos_ids` é vazio, usa todas
+        as sugestões pré-carregadas — o mesmo default que o usuário recebe no form.
+        """
+        sel = form.find("select", {"name": "selAssuntos"})
+        opcoes = {
+            _tag_str(o, "value"): o.get_text(strip=True)
+            for o in (sel.find_all("option") if isinstance(sel, Tag) else [])
+            if _tag_str(o, "value")
+        }
+        if assuntos_ids:
+            itens: list[tuple[str, str]] = []
+            for aid in assuntos_ids:
+                texto = opcoes.get(aid)
+                if texto is None:
+                    disponiveis = ", ".join(f"{v} ({t})" for v, t in opcoes.items()) or "nenhum"
+                    raise SEIValidationError(
+                        f"Assunto '{aid}' não está entre as sugestões do tipo de processo. "
+                        f"Sugeridos: {disponiveis}. A criação web só aceita os assuntos "
+                        "sugeridos para o tipo."
+                    )
+                itens.append((aid, texto))
+        else:
+            itens = list(opcoes.items())
+        return "¥".join(f"{aid}±{texto}" for aid, texto in itens)
+
     async def criar_processo_web(
         self,
         tipo_processo: str,
@@ -2411,81 +2877,83 @@ class SEIWebClient:
     ) -> dict:
         """Cria novo processo via scraper web do SEI.
 
-        Fluxo: toolbar(procedimento_cadastrar) → GET form → POST.
+        Fluxo: toolbar(escolher_tipo|cadastrar) → form de cadastro → POST salvar.
+
+        Detalhes do form de cadastro que tornam o POST aceito pelo backend PHP:
+        - `hdnFlagProcedimentoCadastro` deve ser '2' (o JS o vira de '1'→'2' antes
+          de submeter; com '1' o servidor apenas re-exibe o form, sem salvar);
+        - assuntos são obrigatórios e vão em `hdnAssuntos` no formato `id±texto`
+          (ver `_serializar_assuntos`), não em `hdnIdAssunto`;
+        - nível de acesso vai em `rdoNivelAcesso` (0=público, 1=restrito, 2=sigiloso);
+        - `txtDescricao` é a especificação (máx. 100 caracteres).
         """
         await self.ensure_authenticated()
-        sei_base = f"{self.sei_root}/sei/"
 
-        cadastrar_url = await self._obter_link_toolbar("procedimento_cadastrar")
-        r = await self._http.get(cadastrar_url, headers={"Referer": str(self._inbox_url)})
-        _check(r)
+        form, url_atual = await self._abrir_form_cadastro_processo(tipo_processo)
 
+        overrides: dict[str, str] = {
+            "hdnFlagProcedimentoCadastro": "2",
+            "rdoNivelAcesso": nivel_acesso,
+            "hdnAssuntos": self._serializar_assuntos(form, assuntos_ids or []),
+            # Comunica o tipo nos dois fluxos: no escolher_tipo o
+            # hdnIdTipoProcedimento já vem setado; no form direto
+            # (procedimento_cadastrar, instâncias antigas) o servidor lê
+            # selTipoProcedimento. Setar ambos é inócuo no fluxo moderno.
+            "selTipoProcedimento": tipo_processo,
+            "hdnIdTipoProcedimento": tipo_processo,
+        }
+        if especificacao:
+            overrides["txtDescricao"] = especificacao
+        if hipotese_legal and nivel_acesso in ("1", "2"):
+            overrides["selHipoteseLegal"] = hipotese_legal
+        if interessados_ids:
+            # Interessados usam o mesmo infraLupaSelect dos assuntos
+            # (selInteressadosProcedimento → hdnInteressadosProcedimento): itens
+            # `id±rótulo` separados por `¥`. O servidor vincula pelo id (o rótulo
+            # é re-derivado), então usamos o id como rótulo. Um POST malformado é
+            # detectado abaixo (form re-exibido) — nunca é silencioso.
+            overrides["hdnInteressadosProcedimento"] = "¥".join(
+                f"{iid}±{iid}" for iid in interessados_ids
+            )
+
+        sbm = next((b for b in form.find_all("button") if _tag_str(b, "name") == "btnSalvar"), None)
+        if sbm is not None:
+            overrides["btnSalvar"] = _tag_str(sbm, "value") or "Salvar"
+        else:
+            par = _extrair_submit_btn(form)
+            if par:
+                overrides[par[0]] = par[1]
+
+        r = await self._post_form_preservando(form, url_atual, overrides, url_atual)
+        if r.status_code not in (200, 302):
+            raise SEIConnectionError(f"POST de cadastro falhou com status={r.status_code}")
         body = r.content.decode("iso-8859-1", "replace")
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
 
         soup = BeautifulSoup(body, "html.parser")
-        form = soup.find("form")
-        if form is None:
-            raise SEIParseError("Form procedimento_cadastrar não encontrado.")
-
-        action = _tag_str(form, "action").replace("&amp;", "&")
-        post_url = urljoin(sei_base, action) if action else cadastrar_url
-
-        post_data: list[tuple[str, str]] = []
-        for inp in form.find_all("input", type="hidden"):
-            name = _tag_str(inp, "name")
-            if name:
-                post_data.append((name, _tag_str(inp, "value")))
-
-        # Botão submit obrigatório (PHP ignora POST sem ele silenciosamente)
-        sbm = _extrair_submit_btn(form)
-        if sbm:
-            post_data.append(sbm)
-
-        post_data.append(("selTipoProcedimento", tipo_processo))
-        if especificacao:
-            post_data.append(("txtDescricao", especificacao))
-        post_data.append(("selNivelAcesso", nivel_acesso))
-        if hipotese_legal and nivel_acesso in ("1", "2"):
-            post_data.append(("selHipoteseLegal", hipotese_legal))
-        post_data.extend(("hdnIdAssunto", aid) for aid in (assuntos_ids or []))
-        post_data.extend(("hdnIdInteressado", iid) for iid in (interessados_ids or []))
-
-        r2 = await self._http.post(
-            post_url,
-            content=urlencode(post_data).encode(),
-            headers={"Referer": cadastrar_url, "Content-Type": "application/x-www-form-urlencoded"},
-        )
-        if r2.status_code not in (200, 302):
-            raise SEIConnectionError(
-                f"POST procedimento_cadastrar falhou com status={r2.status_code}"
-            )
-        body2 = r2.content.decode("iso-8859-1", "replace")
-        erro2 = _extrair_erro_sei(body2)
-        if erro2:
-            raise SEIConnectionError(erro2)
-
-        # Extrai o IdProcedimento e protocoloFormatado da resposta
-        id_proc = ""
-        protocolo = ""
-        m_id = re.search(r"IdProcedimento[\"']?\s*[:=]\s*[\"']?(\d+)", body2)
-        if m_id:
-            id_proc = m_id.group(1)
-        m_proto = re.search(r"ProtocoloFormatado[\"']?\s*[:=]\s*[\"']([^\"']+)", body2)
-        if m_proto:
-            protocolo = m_proto.group(1)
-
-        # Fallback: final URL may carry the id
-        if not id_proc:
-            m_url = re.search(r"id_procedimento=(\d+)", str(r2.url))
-            if m_url:
-                id_proc = m_url.group(1)
-
-        if not id_proc:
+        # Sucesso: o servidor redireciona para procedimento_trabalhar (a árvore do
+        # novo processo). Se ainda estamos no form de cadastro, o save foi rejeitado.
+        if soup.find("form", id="frmProcedimentoCadastro") is not None:
             raise SEIParseError(
-                "Processo aparentemente criado mas idProcedimento não pôde ser extraído da resposta."
+                "Cadastro rejeitado pelo SEI (form re-exibido). Verifique tipo de "
+                "processo, assuntos e nível de acesso."
+            )
+
+        protocolo = ""
+        m_proto = re.search(r"(\d{4,5}\.\s?\d{6}/\d{4}-\d{2})", body)
+        if m_proto:
+            protocolo = m_proto.group(1).replace(" ", "")
+        id_proc = ""
+        m_url = re.search(r"id_procedimento=(\d+)", str(r.url))
+        if m_url:
+            id_proc = m_url.group(1)
+
+        if not id_proc and not protocolo:
+            raise SEIParseError(
+                "Processo aparentemente criado mas idProcedimento/protocolo não "
+                "puderam ser extraídos da resposta."
             )
 
         return {
@@ -2494,6 +2962,88 @@ class SEIWebClient:
             "protocoloFormatado": protocolo,
             "mensagem": "Processo criado com sucesso.",
         }
+
+    async def alterar_processo_web(
+        self,
+        protocolo: str,
+        especificacao: str = "",
+        nivel_acesso: str = "",
+        hipotese_legal: str = "",
+        observacao: str = "",
+    ) -> dict:
+        """Altera metadados de um processo via form procedimento_alterar (scraper web).
+
+        Preserva TODOS os campos atuais do form (inputs/selects/textareas/hidden) e
+        sobrescreve apenas os informados: especificação (txtDescricao), nível de
+        acesso (rdoNivelAcesso), hipótese legal (selHipoteseLegal), observação
+        (txaObservacoes). Campos vazios deixam o valor atual inalterado.
+        """
+        await self.ensure_authenticated()
+        html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
+        sei_base = f"{self.sei_root}/sei/"
+        m = re.search(
+            r"(controlador\.php\?acao=procedimento_alterar[^\"'\s]*infra_hash=[a-f0-9]+)",
+            html_arvore,
+        )
+        if not m:
+            raise SEINotFoundError(
+                "Ação 'procedimento_alterar' não encontrada no menu do processo. "
+                "Verifique permissão e se o processo está aberto na unidade atual."
+            )
+        form_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
+        r = await self._http.get(form_url, headers={"Referer": url_arvore})
+        _check(r)
+        body = r.content.decode("iso-8859-1", "replace")
+        erro = _extrair_erro_sei(body)
+        if erro:
+            raise SEIConnectionError(erro)
+        soup = BeautifulSoup(body, "html.parser")
+        form = soup.find("form")
+        if form is None:
+            raise SEIParseError("Form procedimento_alterar não encontrado.")
+
+        # Sobrescreve apenas os campos informados; o resto é preservado por
+        # _post_form_preservando (que coleta o estado atual do form).
+        overrides: dict[str, str] = {
+            # O JS do SEI vira este flag de '1'→'2' ao submeter; sem '2' o servidor
+            # apenas re-exibe o form (a alteração não é salva).
+            "hdnFlagProcedimentoCadastro": "2",
+            # Assuntos são obrigatórios: re-serializa os já vinculados (senão o
+            # servidor rejeita com "Informe os Assuntos").
+            "hdnAssuntos": self._serializar_assuntos(form, []),
+        }
+        if especificacao:
+            overrides["txtDescricao"] = especificacao
+        if nivel_acesso:
+            overrides["rdoNivelAcesso"] = nivel_acesso
+            # JS do SEI sincroniza este hidden ao mudar o rádio — replicamos.
+            overrides["hdnStaNivelAcessoGlobal"] = nivel_acesso
+        if hipotese_legal:
+            overrides["selHipoteseLegal"] = hipotese_legal
+        if observacao:
+            overrides["txaObservacoes"] = observacao
+
+        sbm = _extrair_submit_btn(form)
+        if sbm:
+            overrides[sbm[0]] = sbm[1]
+
+        r2 = await self._post_form_preservando(form, str(r.url), overrides, str(r.url))
+        if r2.status_code not in {200, 302}:
+            raise SEIConnectionError(f"POST procedimento_alterar status={r2.status_code}")
+        body2 = r2.content.decode("iso-8859-1", "replace")
+        erro2 = _extrair_erro_sei(body2)
+        if erro2:
+            raise SEIConnectionError(erro2)
+        if (
+            BeautifulSoup(body2, "html.parser").find("form", id="frmProcedimentoCadastro")
+            is not None
+        ):
+            raise SEIParseError(
+                "Alteração rejeitada pelo SEI (form re-exibido). Verifique nível de "
+                "acesso, hipótese legal e assuntos do processo."
+            )
+        self._invalidar_arvore(protocolo)
+        return {"ok": True, "mensagem": "Processo alterado com sucesso.", "protocolo": protocolo}
 
     async def criar_documento_interno_web(
         self,
@@ -3138,21 +3688,102 @@ class SEIWebClient:
         processos = self._parse_acompanhamento_tabela(tbl, limit)
         return {"processos": processos, "total_itens": len(processos)}
 
+    async def listar_grupos_acompanhamento_web(self, filtro: str = "") -> dict:
+        """Extrai grupos de acompanhamento do select selGrupoAcompanhamento (acompanhamento_gerenciar)."""
+        await self.ensure_authenticated()
+        if not self._trabalhar_links:
+            await self.fetch_inbox(detalhada=False)
+        if not self._trabalhar_links:
+            return {"grupos": [], "total_itens": 0}
+        opcoes: list[dict[str, str]] = []
+        for protocolo in self._trabalhar_links:
+            try:
+                form_info = await self.obter_form_acao(protocolo, "acompanhamento_gerenciar")
+                opcoes = form_info.get("selects", {}).get("selGrupoAcompanhamento", [])
+                break
+            except (SEIParseError, SEINotFoundError):
+                continue
+        grupos: list[dict[str, str]] = []
+        for opt in opcoes:
+            v = opt.get("value", "")
+            t = opt.get("texto", "")
+            if not v:
+                continue
+            if filtro and filtro.lower() not in t.lower():
+                continue
+            grupos.append({"id": v, "nome": t})
+        return {"grupos": grupos, "total_itens": len(grupos)}
+
     async def alterar_acompanhamento_web(
         self, protocolo: str, grupo: str = "", observacao: str = ""
     ) -> dict:
-        """Altera acompanhamento especial de um processo via form acompanhamento_registrar."""
+        """Altera acompanhamento especial de um processo via form acompanhamento_gerenciar."""
         campos: dict[str, str] = {}
         if grupo:
             campos["selGrupoAcompanhamento"] = grupo
         if observacao:
             campos["txaObservacao"] = observacao
-        await self.executar_acao_processo(protocolo, "acompanhamento_registrar", campos)
+        await self.executar_acao_processo(protocolo, "acompanhamento_gerenciar", campos)
         return {
             "ok": True,
             "protocolo": protocolo,
             "mensagem": "Acompanhamento alterado com sucesso.",
         }
+
+    async def remover_acompanhamento_web(self, protocolo: str) -> dict:
+        """Remove o(s) acompanhamento(s) especial(is) de um processo.
+
+        Lê a tela `acompanhamento_gerenciar`, encontra cada `acaoExcluir('<id>')`,
+        seta `hdnInfraItemId` e submete `frmGerenciarAcompanhamento` para a URL
+        assinada de `acompanhamento_excluir`. Relê a cada remoção (o hash muda).
+        """
+        await self.ensure_authenticated()
+        sei_base = f"{self.sei_root}/sei/"
+        removidos = 0
+        for _ in range(20):  # trava de segurança
+            html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
+            m = re.search(
+                r"(controlador\.php\?acao=acompanhamento_gerenciar[^\"'\s]*infra_hash=[a-f0-9]+)",
+                html_arvore,
+            )
+            if not m:
+                raise SEINotFoundError("Ação de acompanhamento não disponível para este processo.")
+            r = await self._http.get(
+                urljoin(sei_base, m.group(1).replace("&amp;", "&")), headers={"Referer": url_arvore}
+            )
+            _check(r)
+            body = r.content.decode("iso-8859-1", "replace")
+            ids = re.findall(r"acaoExcluir\('(\d+)'", body)
+            if not ids:
+                break
+            soup = BeautifulSoup(body, "html.parser")
+            form = soup.find("form", id="frmGerenciarAcompanhamento") or soup.find("form")
+            m_url = re.search(
+                r"controlador\.php\?acao=acompanhamento_excluir[^\"'\s)]*infra_hash=[a-f0-9]+",
+                body,
+            )
+            if form is None or m_url is None:
+                raise SEIParseError("Mecanismo de remoção de acompanhamento não encontrado.")
+            post_url = urljoin(sei_base, m_url.group(0).replace("&amp;", "&"))
+            dados = _coletar_estado_form(form)
+            dados["hdnInfraItemId"] = ids[0]
+            rr = await self._http.post(
+                post_url,
+                content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+                headers={
+                    "Referer": str(r.url),
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            _check(rr)
+            erro = _extrair_erro_sei(rr.content.decode("iso-8859-1", "replace"))
+            if erro:
+                raise SEIConnectionError(erro)
+            removidos += 1
+            self._invalidar_arvore(protocolo)
+        if removidos == 0:
+            raise SEINotFoundError(f"Nenhum acompanhamento especial aplicado em {protocolo}.")
+        return {"ok": True, "removidos": removidos, "protocolo": protocolo}
 
     async def listar_grupos_modelos_web(self, filtro: str = "") -> dict:
         """Lista grupos de modelos de documento via scraper web."""

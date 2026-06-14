@@ -1,0 +1,260 @@
+"""Mixin REST — documentos internos, externos, seções, assinaturas e ciências.
+
+Os erros específicos deste domínio são definidos aqui (subclasses das categorias
+de `todos.exceptions`) e levantados pelos métodos que conhecem o contexto, via
+`try/except … raise XxxError from e` (com re-raise do erro original quando não há
+condição conhecida).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, TypeVar
+
+import httpx
+
+from todos.backends.rest._session import _RestMixin
+from todos.exceptions import SEIError, SEIPermissionError, SEIValidationError
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
+    from todos.backends.models import NovoDocumentoExterno, NovoDocumentoInterno
+
+_T = TypeVar("_T")
+
+
+class DocumentoAssinadoError(SEIValidationError):
+    """Documento já assinado — não pode ser alterado sem cancelar a assinatura."""
+
+
+class DocumentoNaoAutorizadoError(SEIPermissionError):
+    """Acesso ao documento negado — em geral id interno vs número SEI, ou permissão."""
+
+
+def _traduzir_erro_documento(e: SEIError) -> SEIError | None:
+    """Mapeia um erro de documento numa exceção específica, ou None se desconhecido."""
+    low = str(e).lower()
+    if "assinad" in low:
+        return DocumentoAssinadoError(
+            "Documento já assinado — cancele a assinatura (sei_cancelar_assinatura) "
+            "ou edite pela interface web do SEI antes de alterar."
+        )
+    if "não autorizado" in low or "nao autorizado" in low:
+        return DocumentoNaoAutorizadoError(
+            "Acesso ao documento negado. Confirme se passou o id INTERNO do documento "
+            "(ex.: 3149544) e não o número SEI / protocoloFormatado — use "
+            "sei_buscar_documento para resolver —, ou verifique seu nível de acesso."
+        )
+    return None
+
+
+class DocumentosRest(_RestMixin):
+    """Operações REST de documentos."""
+
+    async def _doc(self, coro: Awaitable[_T]) -> _T:
+        """Executa uma chamada de documento, traduzindo erros conhecidos do SEI."""
+        try:
+            return await coro
+        except SEIError as e:
+            especifico = _traduzir_erro_documento(e)
+            if especifico is not None:
+                raise especifico from e
+            raise
+
+    async def buscar_documento(self, numero_sei: str, processo: str = "") -> dict:
+        """Busca um documento pelo número SEI via pesquisa textual REST (Solr)."""
+        numero_sei = numero_sei.strip()
+
+        def _match(proto: str) -> bool:
+            return proto == numero_sei or proto.lstrip("0") == numero_sei.lstrip("0")
+
+        if processo:
+            id_procedimento = await self._resolver_processo(processo)
+            docs = await self._rest.listar_documentos(id_procedimento, limit=200)
+            for d in docs:
+                if _match(d.get("atributos", {}).get("protocoloFormatado", "")):
+                    return {"encontrado": True, "id_procedimento": id_procedimento, "documento": d}
+            return {
+                "encontrado": False,
+                "mensagem": f"SEI {numero_sei} não encontrado no processo {id_procedimento}",
+            }
+
+        result = await self._rest.pesquisar_processos(palavras_chave=numero_sei, limit=20)
+        candidatos = result.get("processos", [])
+        for p in candidatos:
+            id_proc = str(p.get("idProcedimento", ""))
+            if not id_proc:
+                continue
+            try:
+                docs = await self._rest.listar_documentos(id_proc, limit=200)
+            except (SEIError, httpx.HTTPError):
+                continue
+            for d in docs:
+                if _match(d.get("atributos", {}).get("protocoloFormatado", "")):
+                    return {
+                        "encontrado": True,
+                        "processo": p.get("protocoloFormatadoProcedimento", ""),
+                        "id_procedimento": id_proc,
+                        "documento": d,
+                    }
+        return {
+            "encontrado": False,
+            "processos_pesquisados": len(candidatos),
+            "mensagem": f"SEI {numero_sei} não encontrado via pesquisa textual",
+            "dica": "A pesquisa Solr pode não indexar esse documento. Informe o número "
+            "do processo (parâmetro processo=) para busca direta, ou use sei_arvore_processo.",
+        }
+
+    async def consultar_documento_interno(self, id_documento: str) -> dict:
+        """Consulta metadados de um documento interno."""
+        return await self._doc(self._rest.consultar_documento_interno(id_documento))
+
+    async def consultar_documento_externo(
+        self, id_documento: str, processo: str | None = None
+    ) -> dict:
+        """Consulta metadados de um documento externo."""
+        del processo  # contrato exige o parâmetro; a REST resolve só pelo id
+        return await self._doc(self._rest.consultar_documento_externo(id_documento))
+
+    async def visualizar_documento_interno(
+        self, id_documento: str, processo: str | None = None
+    ) -> str:
+        """Retorna o HTML de um documento interno."""
+        del processo  # REST localiza o documento pelo id; protocolo não é necessário
+        return await self._doc(self._rest.visualizar_documento_interno(id_documento))
+
+    async def baixar_anexo(self, id_documento: str, processo: str | None = None) -> bytes:
+        """Baixa os bytes de um documento externo (anexo)."""
+        del processo  # contrato exige o parâmetro; a REST resolve só pelo id
+        return await self._doc(self._rest.baixar_anexo(id_documento))
+
+    async def criar_documento_interno(self, processo: str, dados: NovoDocumentoInterno) -> dict:
+        """Cria um documento interno (editor HTML) em um processo."""
+        id_proc = await self._resolver_processo(processo)
+        return await self._rest.criar_documento_interno(
+            id_procedimento=id_proc,
+            id_serie=dados.id_serie,
+            descricao=dados.descricao,
+            nivel_acesso=dados.nivel_acesso,
+            hipotese_legal=dados.hipotese_legal,
+            id_unidade=dados.id_unidade,
+        )
+
+    async def criar_documento_externo(self, processo: str, dados: NovoDocumentoExterno) -> dict:
+        """Cria um documento externo (upload de arquivo) em um processo."""
+        id_proc = await self._resolver_processo(processo)
+        return await self._rest.criar_documento_externo(
+            id_procedimento=id_proc,
+            id_serie=dados.id_serie,
+            arquivo_path=dados.arquivo_path,
+            descricao=dados.descricao,
+            nivel_acesso=dados.nivel_acesso,
+        )
+
+    async def alterar_documento_interno(
+        self,
+        id_documento: str,
+        descricao: str = "",
+        nivel_acesso: str = "",
+        hipotese_legal: str = "",
+    ) -> dict:
+        """Altera metadados de um documento interno."""
+        return await self._doc(
+            self._rest.alterar_documento_interno(
+                id_documento=id_documento,
+                descricao=descricao,
+                nivel_acesso=nivel_acesso,
+                id_hipotese_legal=hipotese_legal,
+            )
+        )
+
+    async def alterar_documento_externo(
+        self,
+        id_documento: str,
+        descricao: str = "",
+        nivel_acesso: str = "",
+        hipotese_legal: str = "",
+        arquivo_path: str = "",
+    ) -> dict:
+        """Altera metadados (e opcionalmente o arquivo) de um documento externo."""
+        return await self._doc(
+            self._rest.alterar_documento_externo(
+                id_documento=id_documento,
+                descricao=descricao,
+                nivel_acesso=nivel_acesso,
+                id_hipotese_legal=hipotese_legal,
+                arquivo_path=arquivo_path,
+            )
+        )
+
+    async def listar_secoes(self, id_documento: str) -> dict:
+        """Lista as seções editáveis de um documento interno."""
+        return await self._rest.listar_secao_documento(id_documento)
+
+    async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str = "") -> dict:
+        """Edita seções de um documento interno."""
+        return await self._doc(
+            self._rest.alterar_secao_documento(id_documento, secoes, versao or "1")
+        )
+
+    async def sugestao_assuntos_documento(self, id_serie: str) -> list[dict]:
+        """Sugere assuntos para um tipo de documento."""
+        return await self._rest.sugestao_assuntos_documento(id_serie)
+
+    async def listar_blocos_documento(self, id_documento: str) -> list[dict]:
+        """Lista os blocos que contêm um documento."""
+        return await self._rest.listar_blocos_documento(id_documento)
+
+    async def assinar_documento(self, id_documento: str, cargo: str = "", orgao: str = "") -> dict:
+        """Assina um documento com o cargo informado.
+
+        Resolve número SEI → id interno (como `dar_ciencia`), evitando assinar o
+        documento errado quando recebe um `protocoloFormatado`. Se a sessão não
+        trouxer o `IdUsuario`, busca-o por login via `listar_usuarios`.
+        """
+        doc_id, _ = await self._resolver_documento(id_documento)
+        login = self._rest.usuario
+        id_usuario = await self._rest.garantir_autenticacao()
+        if not id_usuario:
+            try:
+                res = await self._rest.listar_usuarios(filtro=login, apenas_unidade=False)
+                for u in res.get("usuarios", []):
+                    if u.get("sigla", "").lower() == login.lower():
+                        id_usuario = str(u.get("id_usuario") or "")
+                        break
+            except (SEIError, httpx.HTTPError):
+                pass
+        return await self._rest.assinar_documento(
+            id_documento=doc_id,
+            login=login,
+            senha=self._rest.senha,
+            cargo=cargo,
+            orgao=orgao,
+            id_usuario=id_usuario,
+        )
+
+    async def listar_assinaturas(
+        self, id_documento: str, processo: str | None = None
+    ) -> list[dict]:
+        """Lista as assinaturas de um documento."""
+        del processo  # contrato exige o parâmetro; a REST resolve só pelo id
+        return await self._rest.listar_assinaturas(id_documento)
+
+    async def dar_ciencia(self, referencia: str, tipo: str = "documento") -> dict:
+        """Registra ciência em um documento ou processo."""
+        if tipo == "documento":
+            doc_id, _ = await self._resolver_documento(referencia)
+            return await self._rest.dar_ciencia_documento(doc_id)
+        id_proc = await self._resolver_processo(referencia)
+        return await self._rest.dar_ciencia_processo(id_proc)
+
+    async def listar_ciencias(
+        self, referencia: str, tipo: str = "documento", processo: str | None = None
+    ) -> list[dict]:
+        """Lista as ciências de um documento ou processo."""
+        del processo  # só usado no fallback web; a REST resolve pela referência
+        if tipo == "documento":
+            doc_id, _ = await self._resolver_documento(referencia)
+            return await self._rest.listar_ciencias_documento(doc_id)
+        id_proc = await self._resolver_processo(referencia)
+        return await self._rest.listar_ciencias_processo(id_proc)

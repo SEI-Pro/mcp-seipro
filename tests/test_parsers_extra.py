@@ -105,6 +105,25 @@ class TestExtrairErroSei:
         html = '<div class="infraMsg">   </div><div id="divInfraMensagem">Terceiro erro.</div>'
         assert _extrair_erro_sei(html) == "Terceiro erro."
 
+    def test_ignores_alert_inside_function_script(self):
+        html = """<script>
+function submeter() {
+    if (!document.getElementById('hdnTipo').value) {
+        alert('Selecione o tipo de processo.');
+        return false;
+    }
+}
+</script>"""
+        assert _extrair_erro_sei(html) is None
+
+    def test_ignores_alert_with_name_inside_function_script(self):
+        html = "<script>\nfunction confirmar() {\n    alert('NOME NM-E1EC');\n}\n</script>"
+        assert _extrair_erro_sei(html) is None
+
+    def test_detects_bare_alert_script_without_function(self):
+        html = "<script>\nalert('Usuário sem permissão para esta operação.');\n</script>"
+        assert _extrair_erro_sei(html) == "Usuário sem permissão para esta operação."
+
 
 # ===========================================================================
 # 2. _tag_str

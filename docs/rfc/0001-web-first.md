@@ -117,6 +117,15 @@ Três projetos open-source documentam o comportamento real do SEI sem depender d
 
 ### 4.1 Camada de roteamento por capacidade (`SEIBackend`)
 
+> **⚠️ Superado pela [RFC 0006](0006-backend-abstrato.md).** O facade descrito
+> abaixo (`backend.has_rest` + `backend.rest`/`backend.web`) foi o primeiro corte
+> do roteamento e está sendo substituído pelo `CompositeBackend` (contrato único,
+> decisão de roteamento em um lugar, `SEINotImplementedError` tipado). O
+> *comportamento* web-first desta RFC é preservado integralmente; muda só o
+> mecanismo. Veja a RFC 0006 §3 e §7.
+
+Facade original (histórico):
+
 ```python
 backend = _get_backend(ctx)   # retorna SEIBackend com .rest e .web
 if backend.has_rest:
@@ -127,6 +136,12 @@ else:
 
 `_get_backend` detecta no startup se mod-wssei responde (via GET `/api/v2/versao`
 ou `/autenticar`). 404 → `has_rest=False`; tudo roteia para web.
+
+Novo mecanismo (RFC 0006): a tool chama `backend.<op>(protocolo)` e o
+`CompositeBackend` decide REST-first com fallback web, levantando
+`SEINotImplementedError` quando nenhum backend suporta a operação. A lista de
+tools "permanentemente REST-only" (§4.4) corresponde às ops que o
+`SEIWebBackend` herda como stub `NotImplementedError`.
 
 ### 4.2 Helpers genéricos implementados
 

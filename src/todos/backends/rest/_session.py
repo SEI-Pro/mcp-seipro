@@ -1,0 +1,95 @@
+"""Base de sessão do backend REST — cliente encapsulado e helpers de resolução.
+
+`_RestBase` guarda o `SEIClient` (`self._rest`) e oferece os dois helpers de
+resolução de referência compartilhados por todos os mixins: `_resolver_processo`
+(protocolo → IdProcedimento) e `_resolver_documento` (número SEI → id interno).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import httpx
+
+from todos.exceptions import SEIError, SEINotFoundError
+
+if TYPE_CHECKING:
+    from todos.sei_client import SEIClient
+
+_MIN_DOC_CONTENT_LENGTH = 10  # minimum bytes for a non-empty internal document
+
+
+class _RestMixin:
+    """Atributos/helpers compartilhados pelos mixins REST.
+
+    Declarados apenas para o type-checker — em runtime são providos por
+    `_RestBase` na classe composta `SEIRestBackend` (os mixins de domínio não
+    os definem, apenas os usam via `self`).
+    """
+
+    if TYPE_CHECKING:
+        _rest: SEIClient
+
+        async def _resolver_processo(self, referencia: str) -> str: ...
+
+        async def _resolver_documento(self, referencia: str) -> tuple[str, str]: ...
+
+
+class _RestBase(_RestMixin):
+    """Guarda o cliente REST e expõe os helpers de resolução de referência."""
+
+    def __init__(self, client: SEIClient) -> None:
+        """Armazena o cliente REST a ser encapsulado."""
+        self._rest = client
+
+    # ------------------------------------------------------------------
+    # Helpers de resolução de referência
+    # ------------------------------------------------------------------
+
+    async def _resolver_processo(self, referencia: str) -> str:
+        """Resolve uma referência de processo para o IdProcedimento."""
+        referencia = referencia.strip()
+        if "." in referencia or "/" in referencia:
+            proc = await self._rest.consultar_processo(referencia)
+            return str(proc.get("IdProcedimento", ""))
+        return referencia
+
+    async def _resolver_documento(self, referencia: str) -> tuple[str, str]:
+        """Resolve uma referência de documento para (id_interno, tipo_documento)."""
+        referencia = referencia.strip()
+
+        try:
+            result = await self._rest.pesquisar_processos(palavras_chave=referencia, limit=20)
+            processos = result.get("processos", [])
+            for p in processos:
+                id_proc = str(p.get("idProcedimento", ""))
+                if not id_proc:
+                    continue
+                try:
+                    docs = await self._rest.listar_documentos(id_proc, limit=200)
+                except (SEIError, httpx.RequestError):
+                    continue
+                for d in docs:
+                    proto = d.get("atributos", {}).get("protocoloFormatado", "")
+                    if proto == referencia or proto.lstrip("0") == referencia.lstrip("0"):
+                        doc_id = str(d.get("id", ""))
+                        if not doc_id:
+                            continue
+                        tipo = d.get("atributos", {}).get("tipoDocumento", "I")
+                        return doc_id, tipo
+        except (SEIError, httpx.RequestError):
+            pass
+
+        try:
+            raw = await self._rest.visualizar_documento_interno(referencia)
+            if raw and len(raw) > _MIN_DOC_CONTENT_LENGTH:
+                return referencia, "I"
+        except (SEIError, httpx.HTTPError):
+            pass
+
+        msg = (
+            f"Documento '{referencia}' não encontrado via pesquisa. "
+            "Se é um documento recém-criado, o Solr pode não ter indexado ainda. "
+            "Use sei_arvore_processo com o protocolo do processo para encontrá-lo."
+        )
+        raise SEINotFoundError(msg)

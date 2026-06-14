@@ -141,6 +141,11 @@ class SEIClient:
         data: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Faz request com re-autenticação automática em caso de 401/403."""
+        if not self.base_url:
+            raise SEIConnectionError(
+                "mod-wssei não configurado. Configure a variável de ambiente SEI_URL "
+                "com o endpoint REST da sua instância SEI."
+            )
         headers = await self._get_headers()
         try:
             resp = await self._client.request(

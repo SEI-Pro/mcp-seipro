@@ -20,9 +20,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re as _re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urljoin
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -69,8 +71,35 @@ async def _capture_all(client: SEIWebClient) -> dict[str, str]:
         html, _ = await client._arvore_do_processo(CAPTURE_PROCESS)
         return html
 
+    async def procedimento_consultar_html() -> str:
+        html_arvore, url_arvore = await client._arvore_do_processo(CAPTURE_PROCESS)
+        sei_base = f"{client.sei_root}/sei/"
+        m = _re.search(
+            r"(controlador\.php\?acao=procedimento_consultar[^\"'\s]*infra_hash=[a-f0-9]+)",
+            html_arvore,
+        )
+        if not m:
+            msg = "procedimento_consultar link not found in arvore"
+            raise ValueError(msg)
+        url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
+        r = await client._http.get(url, headers={"Referer": url_arvore})
+        r.raise_for_status()
+        return r.content.decode("iso-8859-1", "replace")
+
+    async def arvore_aberto_html() -> str:
+        result = await client.listar_processos()
+        for p in result.get("processos", []):
+            proto = p.get("protocolo", "")
+            if proto:
+                html, _ = await client._arvore_do_processo(proto)
+                return html
+        msg = "no open process found in inbox"
+        raise ValueError(msg)
+
     await save("inbox", inbox_html())
     await save("arvore", arvore_html())
+    await save("procedimento_consultar", procedimento_consultar_html())
+    await save("arvore_aberto", arvore_aberto_html())
     await save(
         "documento_interno",
         client.visualizar_documento_interno_web(CAPTURE_PROCESS, "13931287"),

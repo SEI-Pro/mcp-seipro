@@ -1,0 +1,275 @@
+"""Tools de assinatura eletrônica e ciência de documentos/processos.
+
+Reúne o domínio de assinatura: assinar documento, assinar bloco (todos ou
+documentos específicos), cancelar assinatura e listar assinaturas; mais ciência
+(dar ciência e listar ciências) em documentos ou processos.
+
+Sem `from __future__ import annotations`: o FastMCP introspecta os type hints em
+tempo de execução para montar o schema de cada tool, então as anotações precisam
+ser objetos reais (não strings adiadas).
+"""
+
+import html
+from contextlib import suppress
+from typing import Literal
+
+import httpx
+from fastmcp import Context
+
+from todos.exceptions import SEIError
+from todos.html_utils import sanitize_iso8859
+from todos.mcp_app import (
+    _IDEM,
+    _READ,
+    _backend,
+    _error,
+    _get_client,
+    _json,
+    _resolver_documento,
+    mcp,
+)
+
+
+@mcp.tool(annotations=_IDEM)
+async def sei_cancelar_assinatura(
+    id_documento: str,
+    ctx: Context | None = None,
+) -> str:
+    """Tenta cancelar (derrubar) a assinatura de um documento no SEI.
+
+    Aceita id interno ou número SEI (protocoloFormatado).
+
+    A API do SEI não possui endpoint direto para cancelar assinatura.
+    Esta tool tenta forçar uma edição mínima no documento para que o
+    SEI remova a assinatura automaticamente (comportamento padrão ao editar).
+
+    LIMITAÇÃO: só funciona se o processo não foi enviado/lido por outra
+    unidade. Se falhar, o usuário deve cancelar a assinatura pela
+    interface web do SEI (botão "Editar Conteúdo" no documento).
+
+    Orquestração REST-only: o SEI não expõe "cancelar assinatura" como op; a
+    tool força uma edição mínima (derruba a assinatura) compondo
+    listar_secao_documento + alterar_secao_documento do cliente REST.
+    """
+    try:
+        client = _get_client(ctx)
+
+        # Resolver número SEI → id interno (best-effort)
+        doc_id = id_documento.strip()
+        with suppress(SEIError, httpx.HTTPError):
+            doc_id, _ = await _resolver_documento(client, doc_id)
+
+        # Verificar se está assinado e capturar a versão atual
+        secoes_data = await client.listar_secao_documento(doc_id)
+        versao = str(secoes_data.get("ultimaVersaoDocumento", "1"))
+
+        # Montar payload com todas as seções (mesmo conteúdo)
+        secoes_enviar = []
+        for s in secoes_data.get("secoes", []):
+            if not isinstance(s, dict):
+                continue
+            conteudo = html.unescape(s.get("conteudo", "") or "")
+            secoes_enviar.append(
+                {
+                    "id": str(s.get("id")),
+                    "idSecaoModelo": str(s.get("idSecaoModelo")),
+                    "conteudo": sanitize_iso8859(conteudo),
+                }
+            )
+
+        # Editar (derruba assinatura se permitido)
+        result = await client.alterar_secao_documento(doc_id, secoes_enviar, versao)
+        return _json(
+            {
+                "mensagem": "Assinatura cancelada com sucesso. O documento foi editado (nova versão).",
+                "versao": result,
+            }
+        )
+    except (SEIError, httpx.HTTPError) as e:
+        msg = str(e)
+        if "assinado" in msg.lower():
+            return _json(
+                {
+                    "error": "Não foi possível cancelar a assinatura via API.",
+                    "motivo": msg,
+                    "dica": "O processo pode ter sido enviado ou lido por outra unidade. "
+                    "Cancele a assinatura pela interface web do SEI: "
+                    "abra o documento → clique em 'Editar Conteúdo'.",
+                }
+            )
+        return _error(msg)
+
+
+@mcp.tool(annotations=_IDEM)
+async def sei_assinar_documento(
+    id_documento: str,
+    cargo: str = "",
+    orgao: str = "",
+    ctx: Context | None = None,
+) -> str:
+    """Assina eletronicamente um documento no SEI.
+
+    A autenticação é automática — basta informar o documento e o cargo.
+
+    IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
+    Se não souber o cargo, chame sem cargo para obter a lista de opções.
+    Pergunte ao usuário qual cargo usar e chame novamente com o cargo escolhido.
+    Grave o cargo escolhido para reutilizar nas próximas assinaturas.
+
+    Parâmetros:
+    - id_documento: ID interno do documento ou número SEI (protocoloFormatado).
+      Se for número SEI, resolve automaticamente via pesquisa Solr.
+    - cargo: cargo/função para assinatura (ex: "Agente Público").
+      OBRIGATÓRIO. Se omitido, retorna a lista de cargos disponíveis.
+    - orgao: código do órgão (usa o padrão se omitido)
+    """
+    backend = _backend(ctx)
+    if not cargo:
+        try:
+            cargos = await backend.listar_assinantes()
+        except (SEIError, httpx.HTTPError):
+            cargos = []
+        return _json(
+            {
+                "error": "Cargo/Função não informado — é obrigatório para assinatura.",
+                "cargos_disponiveis": cargos,
+                "dica": "Pergunte ao usuário qual cargo/função usar para assinar. "
+                "Os cargos disponíveis estão listados acima. "
+                "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
+                "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
+            }
+        )
+    result = await backend.assinar_documento(id_documento, cargo=cargo, orgao=orgao)
+    return _json(result)
+
+
+@mcp.tool(annotations=_READ)
+async def sei_listar_assinaturas(
+    id_documento: str,
+    processo: str | None = None,
+    ctx: Context | None = None,
+) -> str:
+    """Lista as assinaturas de um documento.
+
+    - id_documento: id interno do documento
+    - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
+
+    """
+    backend = _backend(ctx)
+    result = await backend.listar_assinaturas(id_documento, processo=processo)
+    return _json(result)
+
+
+@mcp.tool(annotations=_IDEM)
+async def sei_assinar_bloco(
+    id_bloco: str,
+    cargo: str = "",
+    ctx: Context | None = None,
+) -> str:
+    """Assina TODOS os documentos de um bloco de assinatura.
+
+    A autenticação é automática — basta informar o bloco e o cargo.
+
+    IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
+    Se não souber o cargo, chame sem cargo para ver a lista de opções.
+    Pergunte ao usuário e grave o cargo para reutilizar na mesma conversa.
+
+    - id_bloco: ID do bloco
+    - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
+    """
+    backend = _backend(ctx)
+    if not cargo:
+        try:
+            cargos = await backend.listar_assinantes()
+        except (SEIError, httpx.HTTPError):
+            cargos = []
+        return _json(
+            {
+                "error": "Cargo/Função não informado.",
+                "cargos_disponiveis": cargos,
+                "dica": "Pergunte ao usuário qual cargo usar. "
+                "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
+                "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
+            }
+        )
+    result = await backend.assinar_bloco(id_bloco, cargo=cargo)
+    return _json(result)
+
+
+@mcp.tool(annotations=_IDEM)
+async def sei_assinar_documentos_bloco(
+    documentos: str,
+    cargo: str = "",
+    ctx: Context | None = None,
+) -> str:
+    """Assina documentos específicos de um bloco de assinatura.
+
+    A autenticação é automática — basta informar os documentos e o cargo.
+
+    IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
+    Se não souber o cargo, chame sem cargo para ver a lista de opções.
+    Pergunte ao usuário e grave o cargo para reutilizar na mesma conversa.
+
+    - documentos: ID(s) de documento(s) separados por vírgula
+    - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
+    """
+    backend = _backend(ctx)
+    if not cargo:
+        try:
+            cargos = await backend.listar_assinantes()
+        except (SEIError, httpx.HTTPError):
+            cargos = []
+        return _json(
+            {
+                "error": "Cargo/Função não informado.",
+                "cargos_disponiveis": cargos,
+                "dica": "Pergunte ao usuário qual cargo usar. "
+                "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
+                "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
+            }
+        )
+    result = await backend.assinar_documentos_bloco(documentos, cargo=cargo)
+    return _json(result)
+
+
+@mcp.tool(annotations=_IDEM)
+async def sei_dar_ciencia(
+    referencia: str,
+    tipo: Literal["documento", "processo"] = "documento",
+    ctx: Context | None = None,
+) -> str:
+    """Dá ciência em um documento ou processo no SEI.
+
+    Parâmetros:
+    - referencia: número SEI do documento OU protocolo/IdProcedimento do processo
+    - tipo: "documento" (padrão) ou "processo"
+
+    Exemplos:
+    - sei_dar_ciencia("1482875", tipo="documento")  → ciência na NT 16
+    - sei_dar_ciencia("50300.018905/2018-67", tipo="processo")  → ciência no processo
+
+    instâncias sem mod-wssei. Tipo "documento" exige REST.
+    """
+    backend = _backend(ctx)
+    result = await backend.dar_ciencia(referencia, tipo=tipo)
+    return _json(result)
+
+
+@mcp.tool(annotations=_READ)
+async def sei_listar_ciencias(
+    referencia: str,
+    tipo: Literal["documento", "processo"] = "documento",
+    processo: str | None = None,
+    ctx: Context | None = None,
+) -> str:
+    """Lista as ciências registradas em um documento ou processo.
+
+    Parâmetros:
+    - referencia: número SEI do documento OU protocolo/IdProcedimento do processo
+    - tipo: "documento" (padrão) ou "processo"
+    - processo: protocolo do processo (necessário em instâncias sem mod-wssei quando tipo="documento")
+
+    """
+    backend = _backend(ctx)
+    result = await backend.listar_ciencias(referencia, tipo=tipo, processo=processo)
+    return _json(result)

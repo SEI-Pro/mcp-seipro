@@ -67,6 +67,8 @@ Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. F
 - Labels de documentos parseados via regex: "Despacho GPF 2874369" → tipo=Despacho, sigla=GPF, numero=2874369
 - **`hdnAnexos` encoding**: separador é `±` (U+00B1), encoding ISO-8859-1 como `%B1` — NÃO usar `#`. Construir POST manual (`content=body.encode("ascii")`) para evitar double-encoding pelo httpx
 - **`hdnFlagDocumentoCadastro`**: JS `submeter()` muda `'1'→'2'` antes do submit; obrigatório ser `'2'` no POST
+- **`hdnFlagProcedimentoCadastro`**: idem para criar/alterar processo (form `frmProcedimentoCadastro`) — com `'1'` o servidor só re-exibe o form e **não salva** (retorna 200 sem erro, no-op silencioso)
+- **Criar/alterar processo**: assuntos vão em `hdnAssuntos` no formato `id±texto` (itens separados por `¥` U+00A5), não em `hdnIdAssunto`; nível de acesso vai em `rdoNivelAcesso` (0=público/1=restrito/2=sigiloso). Criar usa o fluxo `procedimento_escolher_tipo` (mostra todos os tipos via `hdnFiltroTipoProcedimento='T'`, depois `hdnIdTipoProcedimento`) no SEI moderno/SEI-RO; fallback para `procedimento_cadastrar` direto
 - Padrão REST-first: todos os tools usam `backend.has_rest` para preferir REST quando disponível e cair para web scraping caso contrário
 - `sei_consultar_processo` é híbrido: REST para dados ricos + web para documentos[] em paralelo via asyncio.gather
 - `sei_resumo_processos` é REST-only (precisa dos flags estruturados de status para agrupamento correto)
@@ -78,6 +80,9 @@ Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. F
 - Web scraper aborta se detectar CAPTCHA ou 2FA na página de login
 - Colunas da Detalhada dependem da configuração do painel do usuário (mas especificação sempre vem do tooltip)
 - `sei_listar_documentos` e `sei_arvore_processo` via web não retornam flags de status (assinado, cancelado, etc.) — para isso usar `sei_consultar_documento_externo` ou `sei_consultar_documento_interno` (REST) por documento
+- **Marcadores (web)**: `marcar_processo` usa ação `andamento_marcador_gerenciar` (NÃO `marcador_alterar`), id em `hdnIdMarcador` (sincronizado do `selMarcador` por JS), observação em `txaTexto`. `desmarcar`/`consultar_marcador` leem/agem na tela de gerenciar; remoção via `andamento_marcador_remover` (padrão `hdnInfraItemId`). `remover_anotacao` = registrar anotação vazia
+- **Histórico de atribuições (web)**: atribuições NÃO aparecem no histórico resumido; usar o COMPLETO via POST `hdnTipoHistorico='P'` em `procedimento_consultar_historico` — registra "Processo atribuído para <login>". `sei_historico_atribuicoes` deriva atual/anterior/atribuidos
+- Ações acionadas por JS na árvore (sem link estático): reabrir, remover sobrestamento, excluir documento, assinar, dar ciência, etc. As URLs **assinadas** dessas ações são declaradas como `var link<Acao> = '...'` no HEAD da **página de visualização do nó raiz** do processo (`acao=arvore_visualizar`, carregada no frame `ifrVisualizacao` — link em `Nos[0]` da árvore), NÃO na árvore (lado esquerdo). Para acioná-las: `_pagina_visualizacao_processo` → `_link_acao_visualizacao(protocolo, "linkReabrirProcesso")` → GET. `sei_reabrir_processo` web usa esse mecanismo; `sei_remover_sobrestamento` usa a tela `procedimento_sobrestado_listar` (também funciona)
 
 ## Qualidade de código
 
