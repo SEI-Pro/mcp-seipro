@@ -19,6 +19,7 @@ import httpx
 import keyring as _keyring
 from bs4 import BeautifulSoup
 
+from todos.exceptions import SEIAuthError, SEICredenciaisError
 from todos.sei_web_client import SEIWebClient
 
 # Named constants for magic values
@@ -266,6 +267,14 @@ def _save_password_to_keyring(
         return "", senha  # keyring has it; use local for validation only
 
 
+def _confirmar_ou_abortar(msg_erro: str) -> None:
+    """Exibe mensagem de erro e pergunta se o usuário quer continuar mesmo assim."""
+    print_red(msg_erro)
+    if input("Deseja gravar as configurações mesmo assim? (s/n): ").strip().lower() != "s":
+        print_red("[ERRO] Configuração cancelada pelo usuário.")
+        sys.exit(1)
+
+
 def _validate_credentials(conn: _SEIConnConfig) -> None:
     """Perform a test login to validate SEI credentials. Prompts user on failure."""
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -310,18 +319,18 @@ def _validate_credentials(conn: _SEIConnConfig) -> None:
             id_unid = unidade.get("id_unidade") or "N/A"
             print_green(f"    Usuário: {nome_usuario} (ID: {id_usuario}, Órgão: {orgao_usuario})")
             print_green(f"    Unidade Ativa: {sigla_unid} - {nome_unid} (ID: {id_unid})")
+    except SEICredenciaisError as e:
+        web_client.limpar_senha()
+        _confirmar_ou_abortar(f"\n[ERRO] {e}")
+    except SEIAuthError as e:
+        web_client.limpar_senha()
+        _confirmar_ou_abortar(f"\n[ERRO] Falha de autenticação no SEI: {e}")
     except (OSError, ValueError, RuntimeError) as e:
         web_client.limpar_senha()
-        print_red(f"[ERRO] Falha na validação das credenciais no SEI: {e}")
         print_yellow(
             "[!] O login no SEI falhou. Pode ser que o usuário, senha ou órgão estejam incorretos."
         )
-        confirm_proceed = (
-            input("Deseja gravar as configurações mesmo assim? (s/n): ").strip().lower()
-        )
-        if confirm_proceed != "s":
-            print_red("[ERRO] Configuração cancelada pelo usuário.")
-            sys.exit(1)
+        _confirmar_ou_abortar(f"[ERRO] Falha na validação das credenciais no SEI: {e}")
 
 
 def _mcp_add_via_cli(

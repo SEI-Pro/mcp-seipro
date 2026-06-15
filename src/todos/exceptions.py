@@ -30,6 +30,15 @@ class SEIAuthError(SEIError):
     """Sessão expirada, login recusado, 401/403."""
 
 
+class SEICredenciaisError(SEIAuthError):
+    """Credenciais rejeitadas pelo SEI (usuário/senha incorretos).
+
+    Diferente de SEIAuthError genérico: indica especificamente que o servidor
+    recebeu as credenciais mas as recusou — senha errada, usuário inválido ou
+    órgão incorreto. Carrega orientação acionável sobre onde e como corrigir.
+    """
+
+
 class SEICaptchaError(SEIAuthError):
     """Login bloqueado por CAPTCHA ou 2FA — o scraper não prossegue (auth manual)."""
 
