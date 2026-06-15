@@ -447,57 +447,34 @@ async def _solicitar_consentimento_via_elicit(
     return "recusou"
 
 
-def _gate_bloqueio(
-    nivel: str | None,
-    tipo: str,
-    id_doc: str,
-    tipo_documento: str,
-    processo: str,
-    hipotese_legal: str | None = None,
-) -> dict | None:
-    """Return the block payload if nivel requires a disclaimer, else None."""
-    if not access_control.precisa_disclaimer(nivel):
-        return None
-    alvo = {"tipo": tipo, "id": str(id_doc), "tipo_documento": tipo_documento, "processo": processo}
-    return access_control.construir_aviso_bloqueio(nivel, hipotese_legal, alvo)
-
-
-async def _aplicar_gate_documento_web(
-    web: SEIWebClient,
-    processo: str,
+async def _consultar_meta_documento(
+    backend: _SEIBackendV2,
     id_documento: str,
     tipo_documento: str,
-    *,
-    confirmou: bool,
-) -> dict | None:
-    """Gate de acesso restrito para os fallbacks web-only.
-
-    Consulta os metadados scrapeados de documento_consultar e, se o documento
-    for restrito/sigiloso sem consentimento, retorna o payload de bloqueio.
-    Retorna None quando o acesso está liberado ou quando a consulta falha
-    (fail-open: sem metadados não bloqueia).
-    """
-    if confirmou or access_control.env_permite_restritos():
-        return None
-    try:
-        meta = await web.consultar_documento_web(processo, id_documento)
-    except (SEIError, httpx.HTTPError):
-        logger.warning("gate web-only: consulta de metadados falhou — prossegue fail-open")
-        return None
-    nivel = access_control.extrair_nivel_web(meta)
-    _, hipotese = access_control.extrair_nivel(meta)
-    return _gate_bloqueio(nivel, "documento", id_documento, tipo_documento, processo, hipotese)
+    processo: str | None,
+) -> dict:
+    """Consulta metadados de um documento pelo backend composto (REST-first)."""
+    if tipo_documento == "X":
+        return await backend.consultar_documento_externo(id_documento, processo)
+    return await backend.consultar_documento_interno(id_documento, processo)
 
 
 async def _aplicar_gate_documento(
     ctx: Context | None,
-    client: SEIClient,
+    backend: _SEIBackendV2,
     id_documento: str,
     tipo_documento: str,
+    processo: str | None = None,
     *,
     confirmou: bool,
 ) -> tuple[str, dict | None, str]:
-    """Resolve metadados e aplica o gate de acesso para um documento.
+    """Resolve metadados pelo backend composto e aplica o gate de acesso.
+
+    Roteia a consulta de metadados pelo composite (REST-first com fallback web),
+    extraindo o nível tanto da forma REST (`nivelAcesso`) quanto da forma web
+    (texto "Restrito"/"Sigiloso"). Falha FECHADA: se a consulta de metadados
+    falhar, retorna "erro" em vez de liberar conteúdo potencialmente restrito
+    sem checar o nível (mais seguro que o antigo fail-open do caminho web).
 
     Retorna (acao, payload, erro):
       - acao="liberar": prossiga; payload é o disclaimer acompanhante (ou None
@@ -507,14 +484,11 @@ async def _aplicar_gate_documento(
       - acao="erro": retorne erro (string) ao caller
     """
     try:
-        if tipo_documento == "X":
-            meta = await client.consultar_documento_externo(id_documento)
-        else:
-            meta = await client.consultar_documento_interno(id_documento)
+        meta = await _consultar_meta_documento(backend, id_documento, tipo_documento, processo)
     except (SEIError, httpx.HTTPError) as e:
         msg = str(e)
         low = msg.lower()
-        if "não autorizado" in low or "nao autorizado" in low:
+        if "não autorizado" in low or "nao autorizado" in low or "acesso negado" in low:
             return (
                 "erro",
                 None,
@@ -529,10 +503,13 @@ async def _aplicar_gate_documento(
         return ("erro", None, f"Falha ao consultar metadados: {msg}")
 
     nivel, hipotese = access_control.extrair_nivel(meta)
+    if nivel is None:
+        nivel = access_control.extrair_nivel_web(meta)
     alvo = {
         "tipo": "documento",
         "id": str(id_documento),
         "tipo_documento": tipo_documento,
+        "processo": processo,
     }
 
     if not access_control.precisa_disclaimer(nivel):

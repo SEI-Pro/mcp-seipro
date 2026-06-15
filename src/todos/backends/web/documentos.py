@@ -94,6 +94,18 @@ class DocumentosWeb(_WebMixin):
             raise SEIValidationError(msg)
         return await self._doc(self._web.consultar_documento_web(processo, id_documento))
 
+    async def consultar_documento_interno(
+        self, id_documento: str, processo: str | None = None
+    ) -> dict:
+        """Consulta metadados de um documento interno (mesma tela genérica do web)."""
+        if processo is None:
+            msg = (
+                "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
+                "para consultar metadados de documento."
+            )
+            raise SEIValidationError(msg)
+        return await self._doc(self._web.consultar_documento_web(processo, id_documento))
+
     async def baixar_anexo(self, id_documento: str, processo: str | None = None) -> bytes:
         """Baixa os bytes de um documento externo (anexo)."""
         if processo is None:

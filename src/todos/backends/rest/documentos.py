@@ -105,8 +105,11 @@ class DocumentosRest(_RestMixin):
             "do processo (parâmetro processo=) para busca direta, ou use sei_arvore_processo.",
         }
 
-    async def consultar_documento_interno(self, id_documento: str) -> dict:
+    async def consultar_documento_interno(
+        self, id_documento: str, processo: str | None = None
+    ) -> dict:
         """Consulta metadados de um documento interno."""
+        del processo  # REST localiza o documento pelo id; protocolo não é necessário
         return await self._doc(self._rest.consultar_documento_interno(id_documento))
 
     async def consultar_documento_externo(

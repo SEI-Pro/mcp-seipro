@@ -18,6 +18,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from todos.backends import NovoDocumentoExterno
 from todos.backends.base import SEIBackend
 from todos.backends.composite import CompositeBackend, build_backend
 from todos.backends.rest import SEIRestBackend
@@ -458,3 +459,38 @@ def test_dispatcher_transport_error_surfaces_when_no_fallback() -> None:
     c = CompositeBackend(_RestTransportErr(), _WebRaises())
     with pytest.raises(SEIConnectionError):
         asyncio.run(c.verificar_acesso("X"))
+
+
+# ---------------------------------------------------------------------------
+# Composite: criar_documento_externo routes by upload form (base64 → web-first)
+# ---------------------------------------------------------------------------
+
+
+class _RestExt(SEIBackend):
+    name = "rest"
+
+    async def criar_documento_externo(self, processo: str, dados: object) -> dict:
+        del processo, dados
+        return {"src": "rest"}
+
+
+class _WebExt(SEIBackend):
+    name = "web"
+
+    async def criar_documento_externo(self, processo: str, dados: object) -> dict:
+        del processo, dados
+        return {"src": "web"}
+
+
+def test_criar_documento_externo_base64_prefers_web() -> None:
+    c = CompositeBackend(_RestExt(), _WebExt())
+    dados = NovoDocumentoExterno(id_serie="S", arquivo_base64="eA==", nome_arquivo="x.pdf")
+    out = asyncio.run(c.criar_documento_externo("P", dados))
+    assert out["src"] == "web"
+
+
+def test_criar_documento_externo_file_path_prefers_rest() -> None:
+    c = CompositeBackend(_RestExt(), _WebExt())
+    dados = NovoDocumentoExterno(id_serie="S", arquivo_path="x.pdf")
+    out = asyncio.run(c.criar_documento_externo("P", dados))
+    assert out["src"] == "rest"

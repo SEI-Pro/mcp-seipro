@@ -538,6 +538,20 @@ _ROUTES: list[tuple[str, str, dict, str, list[object]]] = [
         "criar_documento_externo",
         ["PF"],
     ),
+    (
+        "documentos",
+        "sei_consultar_documento_externo",
+        {"id_documento": "D", "processo": "PF"},
+        "consultar_documento_externo",
+        ["D", "PF"],
+    ),
+    (
+        "documentos",
+        "sei_incluir_documento_externo",
+        {"processo": "PF", "arquivo_base64": "eA==", "nome_arquivo": "x.pdf", "id_serie": "S"},
+        "criar_documento_externo",
+        ["PF"],
+    ),
     # --- unidades ---
     ("unidades", "sei_pesquisar_unidades", {"filtro": "fil"}, "pesquisar_unidades", ["fil"]),
     ("unidades", "sei_pesquisar_usuarios", {"filtro": "fil"}, "pesquisar_usuarios", ["fil"]),
@@ -631,6 +645,65 @@ def test_criar_documento_routes_to_composite(monkeypatch: pytest.MonkeyPatch) ->
     assert op == "criar_documento_interno"
     assert args[0] == "PF"
     assert args[1].id_serie == "S"
+
+
+class _ReadBackend(SEIBackend):
+    """Fake whose document reads return typed payloads (str/bytes), recording ops."""
+
+    name = "fake"
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def consultar_documento_interno(
+        self, id_documento: str, processo: str | None = None
+    ) -> dict:
+        del id_documento, processo
+        self.calls.append("consultar_documento_interno")
+        return {"nivelAcesso": "0"}
+
+    async def consultar_documento_externo(
+        self, id_documento: str, processo: str | None = None
+    ) -> dict:
+        del id_documento, processo
+        self.calls.append("consultar_documento_externo")
+        return {"nivelAcesso": "0"}
+
+    async def visualizar_documento_interno(
+        self, id_documento: str, processo: str | None = None
+    ) -> str:
+        del id_documento, processo
+        self.calls.append("visualizar_documento_interno")
+        return "<p>OLA MUNDO</p>"
+
+    async def baixar_anexo(self, id_documento: str, processo: str | None = None) -> bytes:
+        del id_documento, processo
+        self.calls.append("baixar_anexo")
+        return b"%PDF-1.4 conteudo"
+
+
+def test_ler_documento_gates_then_reads_via_composite(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Web-only mode (no auto-resolution): gate consults then content is read,
+    # both through the composite. Public doc → content released.
+    backend = _ReadBackend()
+    monkeypatch.setattr(documentos, "_backend", lambda _ctx: backend)
+    monkeypatch.setattr(documentos, "_has_rest", lambda _ctx: False)
+
+    out = asyncio.run(
+        documentos.sei_ler_documento("D", tipo_documento="I", processo="PF", ctx=None)
+    )
+    assert backend.calls == ["consultar_documento_interno", "visualizar_documento_interno"]
+    assert "OLA MUNDO" in out
+
+
+def test_baixar_anexo_gates_then_downloads_via_composite(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = _ReadBackend()
+    monkeypatch.setattr(documentos, "_backend", lambda _ctx: backend)
+    monkeypatch.setattr(documentos, "_has_rest", lambda _ctx: False)
+
+    out = asyncio.run(documentos.sei_baixar_anexo("D", processo="PF", ctx=None))
+    assert backend.calls == ["consultar_documento_externo", "baixar_anexo"]
+    assert "base64" in out
 
 
 def test_no_route_targets_a_nonexistent_contract_op() -> None:

@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import httpx
 
@@ -111,39 +111,69 @@ class CompositeBackend(SEIBackend):
             merged["_warnings"] = avisos
         return merged
 
+    async def criar_documento_externo(self, processo: str, dados: object) -> dict:
+        """Cria documento externo escolhendo a rota pela forma do upload.
+
+        Upload por base64 é nativo do scraper web (modo remoto/sem REST), então
+        é tentado web-first; upload por caminho de arquivo é REST-first com
+        fallback web. Em ambos os casos vale o fallback padrão se o preferido
+        não atender.
+        """
+        web_first = bool(getattr(dados, "arquivo_base64", ""))
+        ordered = (self._web, self._rest) if web_first else (self._rest, self._web)
+        result = await _dispatch_in_order("criar_documento_externo", ordered, (processo, dados), {})
+        return cast("dict", result)
+
+
+async def _dispatch_in_order(
+    op_name: str,
+    backends: tuple[SEIBackend | None, ...],
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> object:
+    """Tenta a operação nos backends em ordem, com a semântica de fallback padrão.
+
+    Cai para o próximo backend em `NotImplementedError` (op ausente), nos sinais
+    de "este backend não atendeu" (`SEINotFoundError`, `SEIParseError`,
+    `SEIConnectionError`) e em erros de transporte (`httpx.RequestError`). Erros
+    definitivos de domínio (permissão, validação) propagam sem fallback.
+    """
+    ultimo: Exception | None = None
+    for backend in backends:
+        if backend is None:
+            continue
+        try:
+            return await getattr(backend, op_name)(*args, **kwargs)
+        except NotImplementedError as exc:
+            # backend não implementa esta op → tenta o próximo, mas NÃO sobrescreve
+            # um erro mais informativo já capturado (ex.: 404 real do REST numa op
+            # sem mixin web), senão reportaríamos "não suportada" em vez de "não
+            # encontrada".
+            if not isinstance(ultimo, SEIError):
+                ultimo = exc
+        except (SEINotFoundError, SEIParseError, SEIConnectionError) as exc:
+            # Sinais de que ESTE backend não atendeu (endpoint/ação ausente,
+            # HTML mudou no scraper, ou indisponibilidade) — tenta o próximo;
+            # se for o último, propaga. Erros definitivos de domínio
+            # (permissão, validação) NÃO são capturados aqui de propósito.
+            ultimo = exc
+        except httpx.RequestError as exc:
+            # Erro de transporte (rede/timeout) num backend não deve abortar se
+            # o outro pode atender — tenta o próximo, guardando o erro.
+            ultimo = SEIConnectionError(f"SEI inacessível: {exc}")
+            ultimo.__cause__ = exc
+    if isinstance(ultimo, SEIError):
+        raise ultimo
+    msg = f"Operação '{op_name}' não é suportada por nenhum backend disponível."
+    raise SEINotImplementedError(msg) from ultimo
+
 
 def _make_dispatcher(op_name: str) -> Callable[..., Awaitable[object]]:
     """Cria um dispatcher REST-first (ou web-first) para uma operação do contrato."""
 
     async def _dispatch(self: CompositeBackend, *args: object, **kwargs: object) -> object:
         ordered = (self._web, self._rest) if op_name in _WEB_FIRST else (self._rest, self._web)
-        backends = [b for b in ordered if b is not None]
-        ultimo: Exception | None = None
-        for backend in backends:
-            try:
-                return await getattr(backend, op_name)(*args, **kwargs)
-            except NotImplementedError as exc:
-                # backend não implementa esta op → tenta o próximo, mas NÃO sobrescreve
-                # um erro mais informativo já capturado (ex.: 404 real do REST numa op
-                # sem mixin web), senão reportaríamos "não suportada" em vez de "não
-                # encontrada".
-                if not isinstance(ultimo, SEIError):
-                    ultimo = exc
-            except (SEINotFoundError, SEIParseError, SEIConnectionError) as exc:
-                # Sinais de que ESTE backend não atendeu (endpoint/ação ausente,
-                # HTML mudou no scraper, ou indisponibilidade) — tenta o próximo;
-                # se for o último, propaga. Erros definitivos de domínio
-                # (permissão, validação) NÃO são capturados aqui de propósito.
-                ultimo = exc
-            except httpx.RequestError as exc:
-                # Erro de transporte (rede/timeout) num backend não deve abortar se
-                # o outro pode atender — tenta o próximo, guardando o erro.
-                ultimo = SEIConnectionError(f"SEI inacessível: {exc}")
-                ultimo.__cause__ = exc
-        if isinstance(ultimo, SEIError):
-            raise ultimo
-        msg = f"Operação '{op_name}' não é suportada por nenhum backend disponível."
-        raise SEINotImplementedError(msg) from ultimo
+        return await _dispatch_in_order(op_name, ordered, args, kwargs)
 
     _dispatch.__name__ = op_name
     _dispatch.__qualname__ = f"CompositeBackend.{op_name}"
