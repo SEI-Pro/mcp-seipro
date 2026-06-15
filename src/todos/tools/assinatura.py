@@ -43,9 +43,10 @@ async def sei_cancelar_assinatura(
     Esta tool tenta forçar uma edição mínima no documento para que o
     SEI remova a assinatura automaticamente (comportamento padrão ao editar).
 
-    LIMITAÇÃO: só funciona se o processo não foi enviado/lido por outra
-    unidade. Se falhar, o usuário deve cancelar a assinatura pela
-    interface web do SEI (botão "Editar Conteúdo" no documento).
+    LIMITAÇÃO IMPORTANTE: só é possível enquanto o processo está exclusivamente
+    na unidade geradora e ainda NÃO foi lido nem enviado para outra unidade.
+    Uma vez lido ou tramitado, o documento fica travado e a assinatura NÃO pode
+    mais ser cancelada — por nenhum meio, nem pela interface web do SEI.
 
     Orquestração: o SEI não expõe "cancelar assinatura" como op; a tool força uma
     edição mínima (derruba a assinatura) compondo listar_secoes + alterar_secoes
@@ -89,11 +90,13 @@ async def sei_cancelar_assinatura(
     except DocumentoAssinadoError as e:
         return _json(
             {
-                "error": "Não foi possível cancelar a assinatura via API.",
+                "error": "Não foi possível cancelar a assinatura.",
                 "motivo": str(e),
-                "dica": "O processo pode ter sido enviado ou lido por outra unidade. "
-                "Cancele a assinatura pela interface web do SEI: "
-                "abra o documento → clique em 'Editar Conteúdo'.",
+                "dica": "O documento está travado: o processo já foi lido e/ou "
+                "enviado para outra unidade. Nesse estado a assinatura NÃO pode "
+                "mais ser cancelada — por nenhum meio, nem pela interface web do "
+                "SEI. O cancelamento só é possível enquanto o processo permanece "
+                "exclusivamente na unidade geradora, sem leitura ou tramitação.",
             }
         )
     except (SEIError, httpx.HTTPError) as e:

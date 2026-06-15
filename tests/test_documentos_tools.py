@@ -325,7 +325,9 @@ def test_cancelar_assinatura_reports_signed_lock_by_type(monkeypatch: pytest.Mon
     _patch_cancelar(monkeypatch, _CancelarBackend(locked=True))
     out = asyncio.run(a.sei_cancelar_assinatura("D", ctx=None))
     assert "Não foi possível cancelar" in out
-    assert "Editar Conteúdo" in out
+    # Honest guidance: once read/sent it cannot be cancelled by any means.
+    assert "NÃO pode" in out
+    assert "nenhum meio" in out
 
 
 def test_cancelar_assinatura_success(monkeypatch: pytest.MonkeyPatch) -> None:
