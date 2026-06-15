@@ -16,7 +16,7 @@ from typing import Literal
 import httpx
 from fastmcp import Context
 
-from todos.exceptions import SEIError
+from todos.exceptions import SEIError, SEIValidationError
 from todos.html_utils import sanitize_iso8859
 from todos.mcp_app import (
     _IDEM,
@@ -27,6 +27,17 @@ from todos.mcp_app import (
     _resolver_documento,
     mcp,
 )
+
+
+def _exigir_cargo(cargos: object) -> SEIValidationError:
+    """Erro de cargo obrigatório, com as opções disponíveis embutidas na mensagem."""
+    itens = cargos if isinstance(cargos, list) else []
+    nomes = ", ".join(str(c) for c in itens) if itens else "(nenhum retornado)"
+    return SEIValidationError(
+        "Cargo/Função não informado — obrigatório para assinar. "
+        f"Cargos/funções disponíveis: {nomes}. Pergunte ao usuário qual usar e "
+        "reutilize a escolha nas próximas assinaturas desta conversa."
+    )
 
 
 @mcp.tool(annotations=_IDEM)
@@ -118,16 +129,7 @@ async def sei_assinar_documento(
             cargos = await backend.listar_assinantes()
         except (SEIError, httpx.HTTPError):
             cargos = []
-        return _json(
-            {
-                "error": "Cargo/Função não informado — é obrigatório para assinatura.",
-                "cargos_disponiveis": cargos,
-                "dica": "Pergunte ao usuário qual cargo/função usar para assinar. "
-                "Os cargos disponíveis estão listados acima. "
-                "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
-                "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
-            }
-        )
+        raise _exigir_cargo(cargos)
     result = await backend.assinar_documento(id_documento, cargo=cargo, orgao=orgao)
     return _json(result)
 
@@ -172,15 +174,7 @@ async def sei_assinar_bloco(
             cargos = await backend.listar_assinantes()
         except (SEIError, httpx.HTTPError):
             cargos = []
-        return _json(
-            {
-                "error": "Cargo/Função não informado.",
-                "cargos_disponiveis": cargos,
-                "dica": "Pergunte ao usuário qual cargo usar. "
-                "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
-                "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
-            }
-        )
+        raise _exigir_cargo(cargos)
     result = await backend.assinar_bloco(id_bloco, cargo=cargo)
     return _json(result)
 
@@ -208,15 +202,7 @@ async def sei_assinar_documentos_bloco(
             cargos = await backend.listar_assinantes()
         except (SEIError, httpx.HTTPError):
             cargos = []
-        return _json(
-            {
-                "error": "Cargo/Função não informado.",
-                "cargos_disponiveis": cargos,
-                "dica": "Pergunte ao usuário qual cargo usar. "
-                "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
-                "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
-            }
-        )
+        raise _exigir_cargo(cargos)
     result = await backend.assinar_documentos_bloco(documentos, cargo=cargo)
     return _json(result)
 

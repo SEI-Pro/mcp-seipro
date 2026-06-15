@@ -195,26 +195,31 @@ agente, então:
 - A orientação acionável mora **na exceção** (mensagem/docstring), não num dict
   montado pela tool.
 
-### 6.2 Nada de tradução de erros — `raise` certo ou propague o original
+### 6.2 Erro específico levantado NA ORIGEM — nunca tradução a jusante
 
-Não existe camada de tradução (os `_traduzir_erro_*` / `_doc` / `_proc` foram
-**removidos**). Duas — e só duas — formas válidas de lidar com um erro:
+Não existe camada de tradução a jusante (os `_traduzir_erro_*` / `_doc` /
+`_proc` foram **removidos**). O tipo certo é decidido onde a condição é
+conhecida — uma única vez, na origem:
 
-1. **`raise` o erro certo onde a condição é conhecida.** O ponto que tem
-   informação estruturada decide o tipo. O `SEIClient`/scraper, ao ler a
-   resposta, levanta `SEIAuthError` (401/403), `SEINotFoundError` (404),
-   `SEIConnectionError` (timeout) etc. — pela estrutura, não por substring. Um
-   backend que não serve a op levanta `SEINotImplementedError` (§6.4).
-2. **Deixe o erro original propagar — inclusive nas boundaries.** Erros de
-   nível de aplicação do SEI já vêm como `SEIError` com a *mensagem do SEI*
-   (ex.: `SEIError("Erro ao alterar documento: documento já assinado")`). Essa
-   mensagem É a orientação ao agente; não re-capture para re-tipar por substring
-   nem para montar `{"error": ...}`.
+- **Por dado estruturado**: o `SEIClient`/scraper levanta `SEIAuthError`
+  (401/403), `SEINotFoundError` (404), `SEIConnectionError` (timeout) pelo
+  status; um backend que não serve a op levanta `SEINotImplementedError` (§6.4).
+- **Por classificação da resposta, na origem**: a API do SEI devolve erros de
+  aplicação como *texto* (`data["mensagem"]`). O cliente, ao ler a resposta,
+  chama `raise erro_do_sei(contexto, data.get("mensagem"))`. O factory
+  `erro_do_sei` (em `exceptions.py`) classifica a mensagem UMA vez e devolve o
+  tipo específico — `SEIDocumentoNaoAutorizadoError`, `SEIDocumentoAssinadoError`,
+  `SEIProcessoEmOutraUnidadeError` — ou `SEIError` se não houver condição
+  conhecida.
 
-**Proibido**: pegar um `SEIError` já levantado e re-derivar tipo/mensagem
-grepando `str(e)` (o antigo `_traduzir_erro_*`). Isso quebra silenciosamente
-quando a mensagem muda e foi causa-raiz de bugs reais. Quem só precisa da
-*categoria* captura por tipo (`except SEIAuthError`); ninguém reinspeciona texto.
+**Proibido**: pegar um `SEIError` já levantado e re-derivar o tipo grepando
+`str(e)` a jusante (o antigo `_traduzir_erro_*`). Isso quebra silenciosamente
+quando a mensagem muda e foi causa-raiz de bugs reais.
+
+**Teste por TIPO, não por substring.** Asserir `"não autorizado" in str(e)` é
+proibido em testes; use `pytest.raises(SEIDocumentoNaoAutorizadoError)`. Se o
+tipo específico para o caso ainda não existe, **crie-o** em `exceptions.py` e
+faça `erro_do_sei` (ou o cliente) levantá-lo na origem.
 
 ### 6.4 "Não serve esta op" ≠ "parâmetro inválido"
 
@@ -236,10 +241,12 @@ de rede real do REST.
 
 ### 6.6 Conjunto de exceções vigente
 
-As sete da §2.1, mais `SEICaptchaError` (subclasse de `SEIAuthError`) e
-`SEINotImplementedError`. **Não há** subclasses por cenário (assinado / não
-autorizado / aberto em outra unidade): essas condições viajam na *mensagem* do
-`SEIError` que o cliente já levanta, conforme §6.2.
+As sete da §2.1, mais `SEICaptchaError` (subclasse de `SEIAuthError`),
+`SEINotImplementedError`, e os tipos de cenário levantados na origem via
+`erro_do_sei` (§6.2): `SEIDocumentoNaoAutorizadoError` (←`SEIPermissionError`),
+`SEIDocumentoAssinadoError` e `SEIProcessoEmOutraUnidadeError`
+(←`SEIValidationError`). Novos cenários ganham seu próprio tipo aqui quando um
+teste precisa asseri-lo.
 
 ### 6.7 Não mascarar conectividade
 

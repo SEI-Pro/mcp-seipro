@@ -58,3 +58,40 @@ class SEIValidationError(SEIError):
 
 class SEINotImplementedError(SEIError):
     """Operação não suportada pelo backend ativo (ex: REST-only sem mod-wssei)."""
+
+
+# ── Erros de domínio específicos ─────────────────────────────────────────────
+# Levantados NA ORIGEM (cliente/scraper, ao ler a resposta do SEI) via
+# `erro_do_sei`. Não há re-tradução a jusante: quem trata captura por TIPO.
+
+
+class SEIDocumentoNaoAutorizadoError(SEIPermissionError):
+    """Acesso ao documento negado pelo SEI — id interno vs número SEI, ou permissão."""
+
+
+class SEIDocumentoAssinadoError(SEIValidationError):
+    """Documento assinado e travado para edição (processo já lido/enviado)."""
+
+
+class SEIProcessoEmOutraUnidadeError(SEIValidationError):
+    """Processo aberto/tramitando em outra unidade."""
+
+
+def erro_do_sei(contexto: str, mensagem: str | None) -> SEIError:
+    """Cria o `SEIError` específico para uma mensagem de erro do SEI.
+
+    Classifica a mensagem UMA vez, na origem (onde o cliente/scraper lê a
+    resposta do SEI), e devolve o tipo específico para ser levantado ali —
+    `raise erro_do_sei(...)`. Não é tradução a jusante: ninguém recaptura um
+    `SEIError` para re-tipá-lo. Mensagens sem condição conhecida viram `SEIError`.
+    """
+    texto = (mensagem or "").strip()
+    low = texto.lower()
+    detalhe = f"{contexto}: {texto}" if texto else contexto
+    if "não autorizado" in low or "nao autorizado" in low or "acesso negado" in low:
+        return SEIDocumentoNaoAutorizadoError(detalhe)
+    if "assinad" in low:
+        return SEIDocumentoAssinadoError(detalhe)
+    if "aberto" in low and "unidade" in low:
+        return SEIProcessoEmOutraUnidadeError(detalhe)
+    return SEIError(detalhe)

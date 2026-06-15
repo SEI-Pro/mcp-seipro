@@ -11,6 +11,7 @@ from todos.backends import EnvioProcesso
 from todos.exceptions import (
     SEIConnectionError,
     SEIError,
+    SEIValidationError,
 )
 from todos.mcp_app import (
     _IDEM,
@@ -18,7 +19,6 @@ from todos.mcp_app import (
     _READ,
     _WRITE,
     _backend,
-    _error,
     _get_client,
     _get_web_client,
     _http_mode,
@@ -231,14 +231,14 @@ async def sei_resumo_processos(
         campo1 = _CAMPOS_AGRUPAMENTO.get(agrupar_por)
         if not campo1:
             campos = ", ".join(sorted(_CAMPOS_AGRUPAMENTO.keys()))
-            return _error(f"Campo '{agrupar_por}' inválido. Disponíveis: {campos}")
+            raise SEIValidationError(f"Campo '{agrupar_por}' inválido. Disponíveis: {campos}")
 
         campo2 = None
         if agrupar_por_2:
             campo2 = _CAMPOS_AGRUPAMENTO.get(agrupar_por_2)
             if not campo2:
                 campos = ", ".join(sorted(_CAMPOS_AGRUPAMENTO.keys()))
-                return _error(f"Campo '{agrupar_por_2}' inválido. Disponíveis: {campos}")
+                raise SEIValidationError(f"Campo '{agrupar_por_2}' inválido. Disponíveis: {campos}")
 
         client = _get_client(ctx)
 
@@ -366,7 +366,7 @@ async def sei_pesquisar_processos(
         if exc.response.status_code in (404, 501):
             _rest_unavailable = True  # mod-wssei ausente ou endpoint não encontrado
         else:
-            return _error(str(exc))
+            raise SEIError(str(exc)) from exc
     except httpx.RequestError as e:
         msg = f"SEI inacessível: {e}"
         raise SEIConnectionError(msg) from e
@@ -425,7 +425,7 @@ async def sei_pesquisar_processos(
             paged["aviso"] = "; ".join(avisos).capitalize()
         return _json(paged)
     except (SEIError, httpx.HTTPError) as e2:
-        return _error(f"Web: {e2}")
+        raise SEIError(f"Web: {e2}") from e2
 
 
 @mcp.tool(annotations=_WRITE)

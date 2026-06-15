@@ -357,11 +357,8 @@ async def sei_hipoteses_resource(ctx: Context) -> str:
     OBRIGATÓRIA ao criar ou alterar processo com nível de acesso 1 ou 2.
     Evita uma chamada de tool para sei_pesquisar_hipoteses_legais.
     """
-    try:
-        result = await _backend(ctx).pesquisar_hipoteses_legais()
-        return json.dumps(result, ensure_ascii=False, indent=2)
-    except (SEIError, httpx.HTTPError) as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+    result = await _backend(ctx).pesquisar_hipoteses_legais()
+    return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 class _ConsentimentoRestrito(BaseModel):
@@ -468,30 +465,23 @@ async def _aplicar_gate_documento(
     processo: str | None = None,
     *,
     confirmou: bool,
-) -> tuple[str, dict | None, str]:
+) -> tuple[str, dict | None]:
     """Resolve metadados pelo backend composto e aplica o gate de acesso.
 
     Roteia a consulta de metadados pelo composite (REST-first com fallback web),
     extraindo o nível tanto da forma REST (`nivelAcesso`) quanto da forma web
-    (texto "Restrito"/"Sigiloso"). Falha FECHADA: se a consulta de metadados
-    falhar, retorna "erro" em vez de liberar conteúdo potencialmente restrito
-    sem checar o nível (mais seguro que o antigo fail-open do caminho web).
-    Isso vale INCLUSIVE com `confirmou=True`: sem metadados não há como verificar
-    o nível, então o consentimento prévio não basta para liberar a leitura.
+    (texto "Restrito"/"Sigiloso").
 
-    Retorna (acao, payload, erro):
-      - acao="liberar": prossiga; payload é o disclaimer acompanhante (ou None
-        se público)
-      - acao="bloquear": retorne payload (JSON de bloqueio) ao caller
-      - acao="recusou": retorne payload (JSON de recusa) ao caller
-      - acao="erro": retorne erro (string) ao caller
+    Falha FECHADA por propagação: se a consulta de metadados falhar, o SEIError
+    propaga e a leitura nunca acontece — conteúdo potencialmente restrito não é
+    liberado sem checar o nível. Isso vale INCLUSIVE com `confirmou=True`.
+
+    Retorna (acao, payload):
+      - "liberar": prossiga; payload é o disclaimer acompanhante (ou None se público)
+      - "bloquear": retorne payload (JSON de bloqueio) ao caller
+      - "recusou": retorne payload (JSON de recusa) ao caller
     """
-    try:
-        meta = await _consultar_meta_documento(backend, id_documento, tipo_documento, processo)
-    except (SEIError, httpx.HTTPError) as e:
-        # Falha FECHADA: a mensagem original do SEI (já acionável) vira o erro do
-        # gate, sem tradução nem reinspeção de texto.
-        return ("erro", None, f"Falha ao consultar metadados: {e}")
+    meta = await _consultar_meta_documento(backend, id_documento, tipo_documento, processo)
 
     nivel, hipotese = access_control.extrair_nivel(meta)
     if nivel is None:
@@ -504,35 +494,19 @@ async def _aplicar_gate_documento(
     }
 
     if not access_control.precisa_disclaimer(nivel):
-        return ("liberar", None, "")
+        return ("liberar", None)
 
     if confirmou or access_control.env_permite_restritos():
-        return (
-            "liberar",
-            access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo),
-            "",
-        )
+        return ("liberar", access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo))
 
     rotulo = access_control.ROTULOS.get(nivel, "Restrito")
     consent = await _solicitar_consentimento_via_elicit(ctx, rotulo, hipotese, alvo)
 
     if consent == "aceitou":
-        return (
-            "liberar",
-            access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo),
-            "",
-        )
+        return ("liberar", access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo))
     if consent == "recusou":
-        return (
-            "recusou",
-            access_control.construir_aviso_recusado(nivel, rotulo, alvo),
-            "",
-        )
-    return (
-        "bloquear",
-        access_control.construir_aviso_bloqueio(nivel, hipotese, alvo),
-        "",
-    )
+        return ("recusou", access_control.construir_aviso_recusado(nivel, rotulo, alvo))
+    return ("bloquear", access_control.construir_aviso_bloqueio(nivel, hipotese, alvo))
 
 
 async def _resolver_processo(client: SEIClient, referencia: str) -> str:
@@ -625,10 +599,6 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
 
 def _json(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
-
-
-def _error(msg: str) -> str:
-    return json.dumps({"error": msg}, ensure_ascii=False)
 
 
 # Tool annotation profiles
