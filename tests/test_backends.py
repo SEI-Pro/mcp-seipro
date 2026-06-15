@@ -15,6 +15,7 @@ import inspect
 import re
 from pathlib import Path
 
+import httpx
 import pytest
 
 from todos.backends.base import SEIBackend
@@ -22,6 +23,7 @@ from todos.backends.composite import CompositeBackend, build_backend
 from todos.backends.rest import SEIRestBackend
 from todos.backends.web import SEIWebBackend
 from todos.exceptions import (
+    SEIConnectionError,
     SEINotFoundError,
     SEINotImplementedError,
     SEIParseError,
@@ -318,3 +320,141 @@ def test_build_backend_includes_rest_with_base_url() -> None:
     backend = build_backend(client, SEIWebClient())
     assert isinstance(backend, CompositeBackend)
     assert backend._rest is not None
+
+
+# ---------------------------------------------------------------------------
+# Composite: consultar_processo merge edge cases + warnings
+# ---------------------------------------------------------------------------
+
+
+class _RestRaises(SEIBackend):
+    name = "rest"
+
+    async def consultar_processo(self, processo: str) -> dict:
+        raise SEIParseError(processo)
+
+
+class _WebRaises(SEIBackend):
+    name = "web"
+
+    async def consultar_processo(self, processo: str) -> dict:
+        raise SEIParseError(processo)
+
+
+def test_consultar_processo_web_only_when_rest_none() -> None:
+    c = CompositeBackend(None, _FakeWeb())
+    out = asyncio.run(c.consultar_processo("X"))
+    assert out["src"] == "web"
+    assert "_warnings" not in out
+
+
+def test_consultar_processo_records_warning_when_rest_fails() -> None:
+    c = CompositeBackend(_RestRaises(), _FakeWeb())
+    out = asyncio.run(c.consultar_processo("X"))
+    # Web result still served; REST failure surfaced in _warnings.
+    assert out["src"] == "web"
+    assert any("REST falhou" in w for w in out["_warnings"])
+
+
+def test_consultar_processo_records_warning_when_web_fails() -> None:
+    c = CompositeBackend(_FakeRest(), _WebRaises())
+    out = asyncio.run(c.consultar_processo("X"))
+    assert out["tipo"] == "Administrativo"
+    assert any("Web scraper falhou" in w for w in out["_warnings"])
+
+
+def test_consultar_processo_raises_when_both_sources_fail() -> None:
+    c = CompositeBackend(_RestRaises(), _WebRaises())
+    with pytest.raises(SEIConnectionError):
+        asyncio.run(c.consultar_processo("X"))
+
+
+# ---------------------------------------------------------------------------
+# Composite: trocar_unidade (web controls session, REST is synced best-effort)
+# ---------------------------------------------------------------------------
+
+
+class _WebTrocaOk(SEIBackend):
+    name = "web"
+
+    async def trocar_unidade(self, id_unidade: str) -> dict:
+        return {"id_unidade": id_unidade, "ok": True}
+
+
+class _WebTrocaConnErr(SEIBackend):
+    name = "web"
+
+    async def trocar_unidade(self, id_unidade: str) -> dict:
+        raise httpx.ConnectError(id_unidade)
+
+
+class _RestRecordsTroca(SEIBackend):
+    name = "rest"
+
+    def __init__(self) -> None:
+        self.synced_to: str | None = None
+
+    async def trocar_unidade(self, id_unidade: str) -> dict:
+        self.synced_to = id_unidade
+        return {"id_unidade": id_unidade}
+
+
+class _RestTrocaRaises(SEIBackend):
+    name = "rest"
+
+    async def trocar_unidade(self, id_unidade: str) -> dict:
+        raise SEIParseError(id_unidade)
+
+
+def test_trocar_unidade_syncs_rest_after_web() -> None:
+    rest = _RestRecordsTroca()
+    c = CompositeBackend(rest, _WebTrocaOk())
+    out = asyncio.run(c.trocar_unidade("42"))
+    assert out["ok"] is True
+    assert rest.synced_to == "42"
+
+
+def test_trocar_unidade_web_connection_error_becomes_sei_connection_error() -> None:
+    c = CompositeBackend(_RestRecordsTroca(), _WebTrocaConnErr())
+    with pytest.raises(SEIConnectionError):
+        asyncio.run(c.trocar_unidade("42"))
+
+
+def test_trocar_unidade_suppresses_rest_sync_failure() -> None:
+    # REST sync is best-effort: a failure there must not break the web success.
+    c = CompositeBackend(_RestTrocaRaises(), _WebTrocaOk())
+    out = asyncio.run(c.trocar_unidade("42"))
+    assert out["ok"] is True
+
+
+def test_trocar_unidade_no_rest_just_returns_web() -> None:
+    c = CompositeBackend(None, _WebTrocaOk())
+    out = asyncio.run(c.trocar_unidade("7"))
+    assert out == {"id_unidade": "7", "ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Composite dispatcher: transport error on one backend falls back to the other
+# ---------------------------------------------------------------------------
+
+
+class _RestTransportErr(SEIBackend):
+    name = "rest"
+
+    async def verificar_acesso(self, processo: str) -> dict:
+        raise httpx.ConnectTimeout(processo)
+
+
+def test_dispatcher_transport_error_falls_back_to_web() -> None:
+    c = CompositeBackend(_RestTransportErr(), _FakeWeb())
+    out = asyncio.run(c.verificar_acesso("X"))
+    assert out["src"] == "web"
+
+
+def test_dispatcher_transport_error_surfaces_when_no_fallback() -> None:
+    # REST raises a transport error and web doesn't implement the op (inherited
+    # NotImplementedError stub) → the transport failure (not "unsupported")
+    # must be what propagates, since it is the more informative error.
+    c = CompositeBackend(_RestTransportErr(), _WebRaises())
+    with pytest.raises(SEIConnectionError):
+        asyncio.run(c.verificar_acesso("X"))
