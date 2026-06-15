@@ -132,11 +132,23 @@ class TestAvaliarAcesso:
         assert decisao == "liberar"
         assert payload is not None
         assert payload["consentimento_necessario"] is False
+        assert payload["tipo_resposta"] == "aviso_classificacao_informativo"
 
-    def test_hipotese_legal_is_propagated(self) -> None:
+    def test_hipotese_legal_propagated_to_bloqueio(self) -> None:
         _, payload = ac.avaliar_acesso("1", "Art. 31 LAI", confirmou=False, alvo=_ALVO)
         assert payload is not None
         assert payload["hipotese_legal"] == "Art. 31 LAI"
+
+    def test_hipotese_legal_propagated_to_disclaimer(self) -> None:
+        _, payload = ac.avaliar_acesso("1", "Art. 31 LAI", confirmou=True, alvo=_ALVO)
+        assert payload is not None
+        assert payload["hipotese_legal"] == "Art. 31 LAI"
+        assert payload["tipo_resposta"] == "aviso_classificacao_informativo"
+
+    def test_missing_nivel_is_safe_path(self) -> None:
+        decisao, payload = ac.avaliar_acesso(None, confirmou=False, alvo=_ALVO)
+        assert decisao == "liberar"
+        assert payload is None
 
     def test_alvo_is_propagated(self) -> None:
         _, payload = ac.avaliar_acesso("1", confirmou=False, alvo=_ALVO)
@@ -145,20 +157,22 @@ class TestAvaliarAcesso:
 
     # --- the invariant that justifies this whole module ---------------------
 
-    @pytest.mark.parametrize("nivel", ["1", "2"])
+    @pytest.mark.parametrize(
+        ("nivel", "env_val"),
+        [(n, e) for n in ("1", "2") for e in ("false", "0", "no", "", "garbage")],
+    )
     def test_safety_restricted_without_any_consent_never_liberates(
-        self, monkeypatch: pytest.MonkeyPatch, nivel: str
+        self, monkeypatch: pytest.MonkeyPatch, nivel: str, env_val: str
     ) -> None:
-        """No combination of "no consent" may produce a 'liberar' decision.
+        """No combination of 'no consent' may produce a 'liberar' decision.
 
         This is the legal firewall: restricted/classified content must not reach
         the LLM unless the human explicitly authorized it (per-call flag) or the
         operator opted in at deploy time (env var).
         """
-        for env_val in ("false", "0", "no", "", "garbage"):
-            monkeypatch.setenv("SEI_PERMITIR_RESTRITOS", env_val)
-            decisao, _ = ac.avaliar_acesso(nivel, confirmou=False, alvo=_ALVO)
-            assert decisao == "bloquear", f"leaked with SEI_PERMITIR_RESTRITOS={env_val!r}"
+        monkeypatch.setenv("SEI_PERMITIR_RESTRITOS", env_val)
+        decisao, _ = ac.avaliar_acesso(nivel, confirmou=False, alvo=_ALVO)
+        assert decisao == "bloquear"
 
 
 # ---------------------------------------------------------------------------
@@ -170,12 +184,21 @@ class TestAvisoStructure:
     def test_bloqueio_carries_full_framing(self) -> None:
         aviso = ac.construir_aviso_bloqueio("1", None, _ALVO)
         # The fields a model needs to NOT treat this as a fixable error.
+        assert isinstance(aviso["nao_e_erro_tecnico"], str)
         assert aviso["nao_e_erro_tecnico"]
+        assert isinstance(aviso["instrucao_para_modelo"], str)
         assert aviso["instrucao_para_modelo"]
+        assert isinstance(aviso["mensagem_para_usuario_humano"], str)
         assert aviso["mensagem_para_usuario_humano"]
         assert aviso["riscos"] == ac.riscos_padrao()
-        assert aviso["como_liberar"]
+        assert isinstance(aviso["como_liberar"], list)
+        assert len(aviso["como_liberar"]) > 0
         assert aviso["rotulo_nivel"] == "Restrito"
+
+    def test_bloqueio_nivel_none_consistent_fallback(self) -> None:
+        aviso = ac.construir_aviso_bloqueio(None, None, _ALVO)
+        assert aviso["rotulo_nivel"] == "Desconhecido"
+        assert "Desconhecido" in aviso["mensagem_para_usuario_humano"]
 
     def test_bloqueio_sigiloso_label(self) -> None:
         aviso = ac.construir_aviso_bloqueio("2", None, _ALVO)
@@ -192,6 +215,30 @@ class TestAvisoStructure:
         riscos = ac.riscos_padrao()
         riscos.append("mutação")
         assert "mutação" not in ac.riscos_padrao()
+
+    def test_bloqueio_riscos_list_is_independent_copy(self) -> None:
+        aviso = ac.construir_aviso_bloqueio("1", None, _ALVO)
+        aviso["riscos"].append("mutação")
+        assert "mutação" not in ac.construir_aviso_bloqueio("1", None, _ALVO)["riscos"]
+
+
+class TestAvisoRecusado:
+    def test_tipo_resposta(self) -> None:
+        aviso = ac.construir_aviso_recusado("1", "Restrito", _ALVO)
+        assert aviso["tipo_resposta"] == "consentimento_recusado"
+
+    def test_mensagem_contains_rotulo(self) -> None:
+        aviso = ac.construir_aviso_recusado("1", "Restrito", _ALVO)
+        assert "restrito" in aviso["mensagem_para_usuario_humano"].lower()
+
+    def test_instrucao_warns_against_bypass(self) -> None:
+        aviso = ac.construir_aviso_recusado("1", "Restrito", _ALVO)
+        assert "NÃO tente" in aviso["instrucao_para_modelo"]
+
+    def test_alvo_and_nivel_acesso_present(self) -> None:
+        aviso = ac.construir_aviso_recusado("2", "Sigiloso", _ALVO)
+        assert aviso["alvo"] == _ALVO
+        assert aviso["nivel_acesso"] == "2"
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +325,12 @@ class TestExtrairNivel:
         nivel, hl = ac.extrair_nivel({"foo": "bar"})
         assert nivel is None
         assert hl is None
+
+    def test_integer_zero_nivel_acesso_is_not_skipped(self) -> None:
+        # integer 0 is falsy in Python; the or-chain would skip it and fall
+        # through to the next key, misclassifying a public doc as unknown.
+        nivel, _ = ac.extrair_nivel({"nivelAcesso": 0})
+        assert nivel == "0"
 
     @pytest.mark.parametrize("nao_dict", [None, [], "string", 5])
     def test_non_dict_input_is_safe(self, nao_dict: object) -> None:

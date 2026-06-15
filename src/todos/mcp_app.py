@@ -453,12 +453,13 @@ def _gate_bloqueio(
     id_doc: str,
     tipo_documento: str,
     processo: str,
+    hipotese_legal: str | None = None,
 ) -> dict | None:
     """Return the block payload if nivel requires a disclaimer, else None."""
     if not access_control.precisa_disclaimer(nivel):
         return None
     alvo = {"tipo": tipo, "id": str(id_doc), "tipo_documento": tipo_documento, "processo": processo}
-    return access_control.construir_aviso_bloqueio(nivel, None, alvo)
+    return access_control.construir_aviso_bloqueio(nivel, hipotese_legal, alvo)
 
 
 async def _aplicar_gate_documento_web(
@@ -484,7 +485,8 @@ async def _aplicar_gate_documento_web(
         logger.warning("gate web-only: consulta de metadados falhou — prossegue fail-open")
         return None
     nivel = access_control.extrair_nivel_web(meta)
-    return _gate_bloqueio(nivel, "documento", id_documento, tipo_documento, processo)
+    _, hipotese = access_control.extrair_nivel(meta)
+    return _gate_bloqueio(nivel, "documento", id_documento, tipo_documento, processo, hipotese)
 
 
 async def _aplicar_gate_documento(
@@ -555,22 +557,7 @@ async def _aplicar_gate_documento(
     if consent == "recusou":
         return (
             "recusou",
-            {
-                "tipo_resposta": "consentimento_recusado",
-                "mensagem_para_usuario_humano": (
-                    f"Acesso ao conteúdo {rotulo.lower()} NÃO foi autorizado pelo "
-                    "usuário humano. Nenhum conteúdo bruto foi entregue ao modelo."
-                ),
-                "instrucao_para_modelo": (
-                    "O usuário humano recusou expressamente o acesso ao conteúdo "
-                    "restrito via MCP elicitInput. NÃO tente caminhos alternativos "
-                    "(troca de unidade, outras tools de leitura, IDs alternativos). "
-                    "Confirme ao usuário que a recusa foi registrada e ofereça "
-                    "ações que não dependam do conteúdo bruto."
-                ),
-                "alvo": alvo,
-                "nivel_acesso": nivel,
-            },
+            access_control.construir_aviso_recusado(nivel, rotulo, alvo),
             "",
         )
     return (

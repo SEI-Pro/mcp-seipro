@@ -144,7 +144,7 @@ def construir_aviso_bloqueio(
         "instrucao_para_modelo": _INSTRUCAO_MODELO,
         "mensagem_para_usuario_humano": (
             f"Documento/processo classificado como "
-            f"{ROTULOS.get(nivel, 'restrito')} no SEI. Antes de o conteúdo "
+            f"{ROTULOS.get(nivel, 'Desconhecido')} no SEI. Antes de o conteúdo "
             "bruto ser enviado ao LLM, o MCP precisa que você confirme "
             "ciência dos riscos abaixo e autorize o acesso expressamente."
         ),
@@ -171,12 +171,36 @@ def construir_disclaimer_acompanhante(
         "instrucao_para_modelo": _INSTRUCAO_MODELO_METADATA,
         "mensagem": (
             f"ATENÇÃO: o registro está classificado como "
-            f"{ROTULOS.get(nivel, 'restrito')} no SEI. Trate-o com a cautela "
+            f"{ROTULOS.get(nivel, 'Desconhecido')} no SEI. Trate-o com a cautela "
             "exigida pela LGPD/LAI e pela política do provedor LLM. Os "
             "demais campos desta resposta foram retornados normalmente."
         ),
         **base,
         "consentimento_necessario": False,
+    }
+
+
+def construir_aviso_recusado(
+    nivel: str | None,
+    rotulo: str,
+    alvo: dict,
+) -> dict:
+    """Aviso retornado quando o usuário RECUSA o consentimento via elicit."""
+    return {
+        "tipo_resposta": "consentimento_recusado",
+        "mensagem_para_usuario_humano": (
+            f"Acesso ao conteúdo {rotulo.lower()} NÃO foi autorizado pelo "
+            "usuário humano. Nenhum conteúdo bruto foi entregue ao modelo."
+        ),
+        "instrucao_para_modelo": (
+            "O usuário humano recusou expressamente o acesso ao conteúdo "
+            "restrito via MCP elicitInput. NÃO tente caminhos alternativos "
+            "(troca de unidade, outras tools de leitura, IDs alternativos). "
+            "Confirme ao usuário que a recusa foi registrada e ofereça "
+            "ações que não dependam do conteúdo bruto."
+        ),
+        "alvo": alvo,
+        "nivel_acesso": nivel,
     }
 
 
@@ -290,11 +314,11 @@ def extrair_nivel(metadata: dict) -> tuple[str | None, str | None]:
     """
     if not isinstance(metadata, dict):
         return None, None
-    nivel = (
-        metadata.get("nivelAcesso")
-        or metadata.get("nivel_acesso")
-        or metadata.get("nivelAcessoGlobal")
-    )
+    nivel = None
+    for _k in ("nivelAcesso", "nivel_acesso", "nivelAcessoGlobal"):
+        if _k in metadata:
+            nivel = metadata[_k]
+            break
     hl_raw = (
         metadata.get("hipoteseLegal")
         or metadata.get("hipotese_legal")
