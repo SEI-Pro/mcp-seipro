@@ -216,6 +216,31 @@ def _resolve_organ_manual(
     return sigla_orgao, sigla_orgao_sistema, orgao_id, default_sigla_sistema
 
 
+def _compute_keyring_user(usuario: str, sei_root: str) -> str:
+    """Monta a chave do keyring igual ao client: '<usuario>@<host>' (host sem scheme)."""
+    instance_url = (
+        sei_root.replace("https://", "").replace("http://", "").strip().rstrip("/").lower()
+    )
+    return f"{usuario}@{instance_url}" if instance_url else usuario
+
+
+def _read_existing_todos_env() -> dict[str, str] | None:
+    """Retorna o `env` do mcpServers.todos em ~/.claude.json, ou None se não configurado."""
+    config_path = Path.home() / ".claude.json"
+    if not config_path.exists():
+        return None
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    servers = data.get("mcpServers")
+    todos = servers.get("todos") if isinstance(servers, dict) else None
+    if not isinstance(todos, dict):
+        return None
+    env = todos.get("env")
+    return env if isinstance(env, dict) else {}
+
+
 def _save_password_to_keyring(
     keyring_user: str,
     senha: str,
@@ -740,19 +765,33 @@ def _setup_credentials(sei_root: str) -> tuple[str, str, str]:
 
     sys.stdout.write("\n")
     print_yellow("[*] Gravando senha com segurança no Keyring do Sistema...")
-    instance_url = (
-        sei_root.replace("https://", "").replace("http://", "").strip().rstrip("/").lower()
-    )
-    keyring_user = f"{usuario}@{instance_url}" if instance_url else usuario
+    keyring_user = _compute_keyring_user(usuario, sei_root)
     senha_config, senha_validacao = _save_password_to_keyring(keyring_user, senha)
     return usuario, senha_config, senha_validacao
 
 
-def run_setup_wizard() -> None:
-    """Run the interactive setup wizard to configure the MCP SEI server."""
+def run_setup_wizard(*, force: bool = False) -> None:
+    """Run the interactive setup wizard to configure the MCP SEI server.
+
+    Idempotente: se o MCP `todos` já está configurado e `force` é False, mostra
+    o estado atual e sai SEM sobrescrever (evita clobbar a config do MCP). Use
+    `--force` para reconfigurar do zero, ou `todos set-password` para trocar só
+    a senha.
+    """
     if not sys.stdin.isatty():
         print_red("[ERRO] 'todos setup' requer um terminal interativo (stdin não é um TTY).")
         sys.exit(1)
+    if not force:
+        env = _read_existing_todos_env()
+        if env is not None:
+            print_yellow("[!] MCP 'todos' já está configurado em ~/.claude.json:")
+            sys.stdout.write(f"    usuário: {env.get('SEI_USUARIO', '?')}\n")
+            sys.stdout.write(f"    SEI:     {env.get('SEI_WEB_URL') or env.get('SEI_URL', '?')}\n")
+            sys.stdout.write(f"    órgão:   {env.get('SEI_SIGLA_ORGAO', '?')}\n")
+            sys.stdout.write("\n")
+            print_cyan("    Trocar SÓ a senha:   todos set-password")
+            print_cyan("    Reconfigurar tudo:   todos setup --force")
+            return
     print_cyan("=====================================================")
     print_cyan("  Configurador do MCP SEI (todos)")
     print_cyan("=====================================================")
@@ -813,3 +852,62 @@ def run_setup_wizard() -> None:
     print_green("  Configuração concluída com sucesso!")
     print_green("  Agora você já pode iniciar o Antigravity, Claude ou Codex.")
     print_cyan("=====================================================")
+
+
+def run_set_password() -> None:
+    """Atualiza SOMENTE a senha no keyring — não toca na config do MCP.
+
+    Lê usuário/URL da config existente (~/.claude.json), grava a nova senha no
+    keyring e valida com um login real. Use quando só quer trocar a senha sem
+    risco de reconfigurar o MCP.
+    """
+    if not sys.stdin.isatty():
+        print_red("[ERRO] 'todos set-password' requer um terminal interativo (stdin não é um TTY).")
+        sys.exit(1)
+    env = _read_existing_todos_env()
+    if env is None:
+        print_red(
+            "[ERRO] MCP 'todos' não está configurado em ~/.claude.json. Rode 'todos setup' primeiro."
+        )
+        sys.exit(1)
+    usuario = (env.get("SEI_USUARIO") or "").strip()
+    sei_root = (env.get("SEI_WEB_URL") or env.get("SEI_URL") or "").strip()
+    if not usuario or not sei_root:
+        print_red("[ERRO] SEI_USUARIO/SEI_WEB_URL ausentes na config. Rode 'todos setup'.")
+        sys.exit(1)
+    keyring_user = _compute_keyring_user(usuario, sei_root)
+
+    print_cyan("=====================================================")
+    print_cyan(f"  Atualizar senha do SEI ({keyring_user})")
+    print_cyan("=====================================================")
+    senha = getpass.getpass("Nova senha do SEI: ").strip()
+    if not senha:
+        print_red("[ERRO] Senha vazia.")
+        sys.exit(1)
+
+    print_yellow("[*] Gravando no Keyring do Sistema...")
+    try:
+        _keyring.set_password("todos-mcp", keyring_user, senha)
+        lida = _keyring.get_password("todos-mcp", keyring_user)
+    except (RuntimeError, OSError, ValueError, ImportError, AttributeError) as exc:
+        print_red(f"[ERRO] Não foi possível gravar no keyring: {exc}")
+        sys.exit(1)
+    if lida != senha:
+        print_red("[ERRO] Falha ao confirmar a senha no keyring (readback divergente).")
+        sys.exit(1)
+
+    print_yellow("[*] Validando com login real no SEI...")
+    _validate_credentials(
+        _SEIConnConfig(
+            sei_root=sei_root,
+            usuario=usuario,
+            senha=senha,
+            sigla_orgao=env.get("SEI_SIGLA_ORGAO", ""),
+            sigla_orgao_sistema=env.get("SEI_SIGLA_ORGAO_SISTEMA", ""),
+            sigla_sistema=env.get("SEI_SIGLA_SISTEMA", "SEI"),
+            verify_ssl_disabled=(env.get("SEI_VERIFY_SSL", "") == "false"),
+        )
+    )
+    senha = ""
+    del senha
+    print_green(f"[+] Senha atualizada no keyring ({keyring_user}). Config do MCP intacta.")

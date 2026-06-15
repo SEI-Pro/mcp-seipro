@@ -521,13 +521,23 @@ async def sei_sobrestar_processo(
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] == "setup":
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "setup":
         if not sys.stdin.isatty():
             sys.stderr.write("Erro: 'todos setup' requer um terminal interativo.\n")
             sys.exit(1)
         from todos.setup_wizard import run_setup_wizard
 
-        run_setup_wizard()
+        run_setup_wizard(force="--force" in sys.argv[2:])
+        return
+
+    if cmd == "set-password":
+        if not sys.stdin.isatty():
+            sys.stderr.write("Erro: 'todos set-password' requer um terminal interativo.\n")
+            sys.exit(1)
+        from todos.setup_wizard import run_set_password
+
+        run_set_password()
         return
 
     if _http_mode:
