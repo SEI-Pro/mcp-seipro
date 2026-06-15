@@ -219,6 +219,9 @@ class SEIWebClient:
             self._keyring_user = (
                 f"{self._usuario}@{instance_url}" if instance_url else self._usuario
             )
+        # Cópia que NÃO é zerada após o lookup: permite reler o keyring quando a
+        # senha cacheada é rejeitada (ex.: senha trocada externamente, sem restart).
+        self._keyring_user_persist = self._keyring_user
 
         # SEI_ORGAO no .env é o id da REST (geralmente "0"). O selOrgao do SIP
         # é descoberto dinamicamente do <select> na página de login.
@@ -322,8 +325,25 @@ class SEIWebClient:
     # Login flow
     # ------------------------------------------------------------------
 
-    async def login(self) -> None:
-        """Faz login via formulário SIP e captura a inbox URL com infra_hash."""
+    async def _ler_senha_keyring(self, keyring_user: str) -> str | None:
+        """Lê a senha do keyring (com timeout); None em caso de erro/ausência."""
+        try:
+            import keyring
+
+            return await asyncio.wait_for(
+                asyncio.to_thread(keyring.get_password, "todos-mcp", keyring_user),
+                timeout=5.0,
+            )
+        except (TimeoutError, ImportError, OSError, RuntimeError, ValueError, AttributeError):
+            return None
+
+    async def login(self, *, _retry_keyring: bool = True) -> None:
+        """Faz login via formulário SIP e captura a inbox URL com infra_hash.
+
+        Se a senha veio do keyring e for rejeitada, relê o keyring (a senha pode
+        ter sido atualizada externamente) e refaz o login uma vez — sem precisar
+        reiniciar o processo.
+        """
         _senha_source = self._senha_source_hint
         if not self._senha and self._keyring_user:
             keyring_user = self._keyring_user
@@ -451,6 +471,15 @@ class SEIWebClient:
         if qs.get("acao") != "procedimento_controlar" or "infra_hash" not in qs:
             body = post_resp.text
             if 'name="txtUsuario"' in body or 'id="txtUsuario"' in body:
+                # Senha cacheada rejeitada: se a fonte é o keyring, relê (pode ter
+                # sido trocada externamente) e refaz o login uma vez — sem restart.
+                if _retry_keyring and self._keyring_user_persist:
+                    nova = await self._ler_senha_keyring(self._keyring_user_persist)
+                    if nova and nova != self._senha:
+                        logger.info("Senha do keyring mudou desde o último login; refazendo.")
+                        self._senha = nova
+                        await self.login(_retry_keyring=False)
+                        return
                 if not self._senha:
                     dica = (
                         "SEI_SENHA está vazia e nenhuma senha foi encontrada no keyring. "
