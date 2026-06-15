@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-sei"
-version = "0.4.0"
+dynamic = ["version"]
 description = "TOdos Domina O Sei — MCP server para o SEI com 121 tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
 readme = "README.md"
 license = "MIT"
@@ -35,6 +35,9 @@ dev = [
     "bandit>=1.8",
     "pip-audit>=2.8",
 ]
+
+[tool.hatch.version]
+path = "src/todos/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/todos"]

@@ -1,0 +1,39 @@
+name: Tag on version bump
+
+# Quando __version__ muda na main, cria a tag vX.Y.Z correspondente.
+# A tag dispara o release.yml (build .mcpb + wheel + GitHub Release + PyPI),
+# DESDE QUE a tag seja empurrada por um PAT (secrets.RELEASE_PAT) — o
+# GITHUB_TOKEN padrão não dispara outros workflows (anti-recursão do GitHub).
+# Sem o PAT, a tag é criada mas o release precisa ser disparado manualmente.
+
+on:
+  push:
+    branches: ["main"]
+    paths: ["src/todos/__init__.py"]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Create tag from __version__
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT || github.token }}
+      - name: Tag vX.Y.Z if new
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/todos/__init__.py)
+          [ -n "$ver" ] || { echo "::error::__version__ não encontrado"; exit 1; }
+          if git ls-remote --tags --quiet origin "refs/tags/v$ver" | grep -q .; then
+            echo "::notice::tag v$ver já existe — nada a fazer"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$ver" -m "v$ver"
+          git push origin "v$ver"
+          echo "::notice::tag v$ver criada e enviada"

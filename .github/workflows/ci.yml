@@ -55,3 +55,39 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv run --group dev pip-audit --ignore-vuln CVE-2025-69872
+
+  version-bump:
+    name: Version bump
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require __version__ bumped vs base (and sources in sync)
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          read_ver() { sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$1"; }
+          git fetch --quiet origin "$BASE"
+          head_ver=$(read_ver src/todos/__init__.py)
+          base_ver=$(git show "origin/$BASE:src/todos/__init__.py" | sed -n 's/^__version__ = "\(.*\)"$/\1/p')
+          manifest_ver=$(sed -n 's/.*"version": "\(.*\)".*/\1/p' manifest.json | head -1)
+          echo "base=$base_ver  head=$head_ver  manifest=$manifest_ver"
+
+          [ -n "$head_ver" ] || { echo "::error file=src/todos/__init__.py::__version__ não encontrado"; exit 1; }
+          if [ "$head_ver" = "$base_ver" ]; then
+            echo "::error file=src/todos/__init__.py::__version__ não foi bumpado (continua $head_ver). Faça o bump antes de mergear na main."
+            exit 1
+          fi
+          highest=$(printf '%s\n%s\n' "$base_ver" "$head_ver" | sort -V | tail -1)
+          if [ "$highest" != "$head_ver" ]; then
+            echo "::error file=src/todos/__init__.py::__version__ ($head_ver) é menor que a base ($base_ver) — não rebaixe a versão."
+            exit 1
+          fi
+          if [ "$manifest_ver" != "$head_ver" ]; then
+            echo "::error file=manifest.json::manifest.json (version=$manifest_ver) deve casar com __version__ ($head_ver)."
+            exit 1
+          fi
+          echo "OK: $base_ver -> $head_ver (manifest em sincronia)"

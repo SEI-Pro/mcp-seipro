@@ -9,6 +9,7 @@ Produz: dist/todos.mcpb
 
 import json
 import os
+import re
 import shutil
 import sys
 import zipfile
@@ -17,6 +18,21 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 DIST_DIR = PROJECT_ROOT / "dist"
 OUTPUT_NAME = "todos.mcpb"
+
+
+def _read_version() -> str:
+    """Lê __version__ de src/todos/__init__.py — a fonte ÚNICA de versão.
+
+    pyproject (dynamic) e o manifest do .mcpb derivam daqui, então não há como
+    o bundle sair com versão divergente do pacote.
+    """
+    init = (PROJECT_ROOT / "src" / "todos" / "__init__.py").read_text(encoding="utf-8")
+    m = re.search(r'^__version__ = "([^"]+)"', init, re.MULTILINE)
+    if not m:
+        msg = "__version__ não encontrado em src/todos/__init__.py"
+        raise RuntimeError(msg)
+    return m.group(1)
+
 
 # Icone do projeto (ajuste o caminho se necessario)
 ICON_SOURCES = [
@@ -68,6 +84,35 @@ def ensure_icon() -> Path | None:
     return None
 
 
+def _add_to_zip(zf: zipfile.ZipFile, item_name: str, *, icon: Path | None, manifest: dict) -> int:
+    """Adiciona um item do INCLUDE ao zip; retorna o nº de arquivos escritos.
+
+    `manifest.json` é regravado com a versão derivada de __init__.py (não copia
+    o arquivo cru, garantindo que o bundle nunca saia com versão divergente).
+    """
+    item = PROJECT_ROOT / item_name
+    if not item.exists():
+        if not (item_name == "icon.png" and not icon):
+            sys.stdout.write(f"  [!] Pulando {item_name} (nao existe)\n")
+        return 0
+    if item.is_file():
+        if item_name == "manifest.json":
+            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        else:
+            zf.write(item, item_name)
+        return 1
+    count = 0
+    for root, _dirs, files in os.walk(item):
+        root_path = Path(root)
+        for f in files:
+            file_path = root_path / f
+            if should_ignore(file_path):
+                continue
+            zf.write(file_path, str(file_path.relative_to(PROJECT_ROOT)))
+            count += 1
+    return count
+
+
 def build() -> None:
     """Package the project into dist/todos.mcpb."""
     sys.stdout.write("\n")
@@ -82,6 +127,7 @@ def build() -> None:
         sys.stdout.write("  [ERRO] manifest.json nao encontrado.\n")
         return
     manifest = json.loads(manifest_path.read_text())
+    manifest["version"] = _read_version()  # deriva da fonte única (__init__.py)
     sys.stdout.write(f"  [*] {manifest['display_name']} v{manifest['version']}\n")
     sys.stdout.flush()
 
@@ -96,26 +142,7 @@ def build() -> None:
     count = 0
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
         for item_name in INCLUDE:
-            item = PROJECT_ROOT / item_name
-            if not item.exists():
-                if item_name == "icon.png" and not icon:
-                    continue
-                sys.stdout.write(f"  [!] Pulando {item_name} (nao existe)\n")
-                continue
-
-            if item.is_file():
-                zf.write(item, item_name)
-                count += 1
-            elif item.is_dir():
-                for root, _dirs, files in os.walk(item):
-                    root_path = Path(root)
-                    for f in files:
-                        file_path = root_path / f
-                        if should_ignore(file_path):
-                            continue
-                        arcname = str(file_path.relative_to(PROJECT_ROOT))
-                        zf.write(file_path, arcname)
-                        count += 1
+            count += _add_to_zip(zf, item_name, icon=icon, manifest=manifest)
 
     size_kb = output.stat().st_size / 1024
     sys.stdout.write(f"  [*] {count} arquivos empacotados\n")
