@@ -10,7 +10,7 @@ import base64
 from typing import TYPE_CHECKING, TypeVar
 
 from todos.backends.web._session import _WebMixin
-from todos.exceptions import SEIError, SEINotImplementedError, SEIPermissionError
+from todos.exceptions import DocumentoNaoAutorizadoError, SEIError, SEINotImplementedError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -18,10 +18,6 @@ if TYPE_CHECKING:
     from todos.backends.base import NovoDocumentoExterno, NovoDocumentoInterno
 
 _T = TypeVar("_T")
-
-
-class DocumentoNaoAutorizadoError(SEIPermissionError):
-    """Acesso ao documento negado — em geral processo fora da caixa, ou permissão."""
 
 
 def _traduzir_erro_documento(e: SEIError) -> SEIError | None:

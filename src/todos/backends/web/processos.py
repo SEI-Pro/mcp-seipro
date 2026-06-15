@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, TypeVar
 
 from todos.backends.web._session import _WebMixin
-from todos.exceptions import SEIError, SEIValidationError
+from todos.exceptions import ProcessoEmOutraUnidadeError, SEIError, SEIValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -13,10 +13,6 @@ if TYPE_CHECKING:
     from todos.backends.base import EnvioProcesso, FiltrosPesquisaProcessos, NovoProcesso
 
 _T = TypeVar("_T")
-
-
-class ProcessoEmOutraUnidadeError(SEIValidationError):
-    """Processo aberto em outra(s) unidade(s) — conclua nessas unidades antes de prosseguir."""
 
 
 def _traduzir_erro_processo(e: SEIError) -> SEIError | None:

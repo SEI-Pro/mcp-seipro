@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, TypeVar
 import httpx
 
 from todos.backends.rest._session import _RestMixin
-from todos.exceptions import SEIError, SEIPermissionError, SEIValidationError
+from todos.exceptions import DocumentoAssinadoError, DocumentoNaoAutorizadoError, SEIError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -21,14 +21,6 @@ if TYPE_CHECKING:
     from todos.backends.models import NovoDocumentoExterno, NovoDocumentoInterno
 
 _T = TypeVar("_T")
-
-
-class DocumentoAssinadoError(SEIValidationError):
-    """Documento já assinado — não pode ser alterado sem cancelar a assinatura."""
-
-
-class DocumentoNaoAutorizadoError(SEIPermissionError):
-    """Acesso ao documento negado — em geral id interno vs número SEI, ou permissão."""
 
 
 def _traduzir_erro_documento(e: SEIError) -> SEIError | None:

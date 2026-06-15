@@ -56,3 +56,22 @@ class SEIValidationError(SEIError):
 
 class SEINotImplementedError(SEIError):
     """Operação não suportada pelo backend ativo (ex: REST-only sem mod-wssei)."""
+
+
+# ── Erros de domínio compartilhados ──────────────────────────────────────────
+# Cenários recorrentes que mais de um backend reconhece. Ficam aqui (e não num
+# mixin) para que tanto quem levanta (backends) quanto quem trata (tools/app)
+# possam referenciá-los por TIPO via `isinstance`, em vez de inspecionar o texto
+# da mensagem.
+
+
+class DocumentoNaoAutorizadoError(SEIPermissionError):
+    """Acesso ao documento negado — id interno vs número SEI, processo fora da caixa, ou permissão."""
+
+
+class DocumentoAssinadoError(SEIValidationError):
+    """Documento já assinado — não pode ser alterado sem cancelar a assinatura."""
+
+
+class ProcessoEmOutraUnidadeError(SEIValidationError):
+    """Processo aberto/tramitando em outra unidade — receba-o antes de agir."""

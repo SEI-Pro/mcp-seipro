@@ -17,6 +17,7 @@ from todos.backends import (
 )
 from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import (
+    SEIConnectionError,
     SEIError,
     SEINotFoundError,
     SEIPermissionError,
@@ -629,12 +630,14 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
         # Validar que realmente retornou conteúdo (não erro mascarado)
         if raw and len(raw) > _MIN_DOC_CONTENT_LENGTH:
             return referencia, "I"
-    except (SEIError, httpx.HTTPError) as e:
-        msg = str(e)
-        # "não autorizado" pode significar que o id existe mas sem permissão
-        # OU que o protocoloFormatado coincidiu com outro id — não confiável
-        if "não autorizado" not in msg.lower() and "nao autorizado" not in msg.lower():
-            pass  # Erro diferente, tentar externo
+    except SEIConnectionError:
+        # Não mascarar uma falha de conectividade como "documento não encontrado".
+        raise
+    except (SEIError, httpx.HTTPError):
+        # A tentativa por id direto não resolveu (não encontrado, sem acesso, ou
+        # um id que coincidiu com outro protocolo — não confiável). Desiste e cai
+        # para o SEINotFoundError acionável abaixo.
+        pass
 
     # Não tentar como externo automaticamente — risco alto de confusão id/proto
     # O fallback para externo só deve ser usado com id_procedimento conhecido
