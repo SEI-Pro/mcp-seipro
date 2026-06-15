@@ -33,6 +33,7 @@ from todos.exceptions import (
     SEIAuthError,
     SEICaptchaError,
     SEIConnectionError,
+    SEICredenciaisError,
     SEIError,
     SEINotFoundError,
     SEIParseError,
@@ -316,6 +317,8 @@ class SEIWebClient:
 
     async def login(self) -> None:
         """Faz login via formulário SIP e captura a inbox URL com infra_hash."""
+        # Rastreia a fonte da senha para mensagem de erro acionável
+        _senha_source = "SEI_SENHA (variável de ambiente)"
         if not self._senha and self._keyring_user:
             keyring_user = self._keyring_user
             self._keyring_user = None  # prevent concurrent / empty-string repeated lookups
@@ -328,6 +331,9 @@ class SEIWebClient:
                 )
                 if senha:
                     self._senha = senha
+                    _senha_source = f"keyring (chave: {keyring_user!r})"
+                else:
+                    _senha_source = f"keyring (chave {keyring_user!r} não encontrada)"
                 # _keyring_user stays None: keyring answered definitively (found or not found)
             except TimeoutError:
                 self._keyring_user = keyring_user  # restore: transient timeout, allow retry
@@ -337,6 +343,8 @@ class SEIWebClient:
             except (ImportError, OSError, RuntimeError, ValueError, AttributeError) as e:
                 self._keyring_user = keyring_user  # restore: transient error, allow retry
                 logger.warning("Não foi possível obter a senha do keyring: %s", e)
+        elif self._senha:
+            _senha_source = "SEI_SENHA (variável de ambiente)"
 
         if not self.sei_root:
             raise RuntimeError(
@@ -439,9 +447,26 @@ class SEIWebClient:
         if qs.get("acao") != "procedimento_controlar" or "infra_hash" not in qs:
             body = post_resp.text
             if 'name="txtUsuario"' in body or 'id="txtUsuario"' in body:
-                raise SEIAuthError(
-                    "Login falhou: o servidor retornou a página de login novamente. "
-                    "Verifique credenciais."
+                if not self._senha:
+                    dica = (
+                        "SEI_SENHA está vazia e nenhuma senha foi encontrada no keyring. "
+                        "Execute `todos setup` para configurar as credenciais."
+                    )
+                elif "keyring" in _senha_source:
+                    dica = (
+                        f"A senha obtida do {_senha_source} foi recusada pelo SEI. "
+                        f"Execute `todos setup` para regravar a senha correta no keyring, "
+                        f"ou defina SEI_SENHA na configuração do MCP."
+                    )
+                else:
+                    dica = (
+                        f"A senha em {_senha_source} foi recusada pelo SEI. "
+                        f"Verifique o valor de SEI_SENHA na configuração do MCP."
+                    )
+                raise SEICredenciaisError(
+                    f"Credenciais rejeitadas pelo SEI "
+                    f"(usuário: {self._usuario!r}, órgão selOrgao={form.get('selOrgao', '?')!r}). "
+                    f"{dica}"
                 )
             raise SEIParseError(f"URL inesperada após login: {final_url}")
 
