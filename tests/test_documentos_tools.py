@@ -13,7 +13,8 @@ import asyncio
 import pytest
 
 from todos import access_control
-from todos.exceptions import SEIPermissionError
+from todos.exceptions import DocumentoAssinadoError, SEIPermissionError
+from todos.tools import assinatura as a
 from todos.tools import documentos as d
 
 
@@ -281,3 +282,53 @@ def test_consultar_documento_externo_recovers_via_reconsulta(
 
     out = asyncio.run(d.sei_consultar_documento_externo(_NUMERO_SEI, ctx=None))
     assert _ID_INTERNO in out  # recovered and returned the resolved doc's metadata
+
+
+# ---------------------------------------------------------------------------
+# sei_cancelar_assinatura — detect the signed-lock by TYPE, not message
+# ---------------------------------------------------------------------------
+
+
+class _CancelarBackend:
+    name = "fake"
+
+    def __init__(self, *, locked: bool) -> None:
+        self._locked = locked
+
+    async def listar_secoes(self, id_documento: str) -> dict:
+        del id_documento
+        return {
+            "secoes": [{"id": "1", "idSecaoModelo": "2", "conteudo": "x"}],
+            "ultimaVersaoDocumento": "4",
+        }
+
+    async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str) -> dict:
+        del id_documento, secoes, versao
+        if self._locked:
+            msg = "Documento já assinado — edite pela interface web."
+            raise DocumentoAssinadoError(msg)
+        return {"versao": "5"}
+
+
+def _patch_cancelar(monkeypatch: pytest.MonkeyPatch, backend: _CancelarBackend) -> None:
+    async def _fake_resolver(_client: object, ref: str) -> tuple[str, str]:
+        return ref, "I"
+
+    monkeypatch.setattr(a, "_backend", lambda _ctx: backend)
+    monkeypatch.setattr(a, "_get_client", lambda _ctx: object())
+    monkeypatch.setattr(a, "_resolver_documento", _fake_resolver)
+
+
+def test_cancelar_assinatura_reports_signed_lock_by_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The backend raises DocumentoAssinadoError; the tool must catch it by TYPE
+    # and return the web-fallback guidance (not a generic error).
+    _patch_cancelar(monkeypatch, _CancelarBackend(locked=True))
+    out = asyncio.run(a.sei_cancelar_assinatura("D", ctx=None))
+    assert "Não foi possível cancelar" in out
+    assert "Editar Conteúdo" in out
+
+
+def test_cancelar_assinatura_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_cancelar(monkeypatch, _CancelarBackend(locked=False))
+    out = asyncio.run(a.sei_cancelar_assinatura("D", ctx=None))
+    assert "sucesso" in out
