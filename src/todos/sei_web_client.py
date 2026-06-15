@@ -1050,34 +1050,10 @@ class SEIWebClient:
         _check(r2)
 
         nos = parse_arvore_nos(r2.text)
-        arvore_html = r2.text
-
-        # Step 2b: resolve nós AGUARDE — SEI pagina a árvore quando há muitos
-        # documentos; cada placeholder AGUARDE representa uma página adicional.
-        # O link do nó aponta para a página, ou derivamos via pagina_arvore=N.
-        aguarde_nos = [n for n in nos[1:] if n.get("tipo_no") == "AGUARDE"]
-        if aguarde_nos:
-            arvore_url_str = str(arvore_url)
-            real_nos: list[dict] = [nos[0], *(n for n in nos[1:] if n.get("tipo_no") != "AGUARDE")]
-            for aguarde in aguarde_nos:
-                link = aguarde.get("link", "").replace("&amp;", "&")
-                if link:
-                    page_url = urljoin(str(r2.url), link)
-                else:
-                    m_page = re.search(r"\d+", aguarde.get("id", ""))
-                    if not m_page:
-                        continue
-                    sep = "&" if "?" in arvore_url_str else "?"
-                    page_url = f"{arvore_url_str}{sep}pagina_arvore={m_page.group()}"
-                r_pag = await self._http.get(page_url, headers={"Referer": trab_url})
-                if r_pag.is_success:
-                    page_nos = parse_arvore_nos(r_pag.text)
-                    real_nos.extend(n for n in page_nos if n.get("tipo_no") != "AGUARDE")
-                    arvore_html = r_pag.text
-                    logger.debug("AGUARDE %s resolvido: %d nós extras", aguarde.get("id"), len(page_nos))
-            nos = real_nos
+        arvore_html = r2.text  # preservado para cardRelacionado — não sobrescrever no loop AGUARDE
 
         # Step 3: Se houver PASTA colapsadas, fetch novamente com abrir_pastas=1
+        # (executado ANTES da resolução AGUARDE para evitar sobrescrever real_nos)
         has_collapsed = len(nos) > 1 and any(n.get("tipo_no") == "PASTA" for n in nos[1:])
         if has_collapsed:
             arvore_url_str = str(arvore_url)
@@ -1092,6 +1068,49 @@ class SEIWebClient:
                 nos = parse_arvore_nos(r3.text)
                 arvore_html = r3.text
                 logger.debug("Pastas expandidas via abrir_pastas=1")
+
+        # Step 3b: resolve nós AGUARDE via BFS — SEI pagina a árvore quando há
+        # muitos documentos. Ao resolver uma página, novos AGUARDE nela são
+        # enfileirados. `seen_ids` evita raiz duplicada e loops. `arvore_html`
+        # não é sobrescrito aqui para preservar o sidebar de processos relacionados.
+        arvore_url_str = str(arvore_url)
+        arvore_ref_url = str(r2.url)  # Referer correto: a própria árvore, não o trabalhar
+        pending_aguarde = [n for n in nos[1:] if n.get("tipo_no") == "AGUARDE"]
+        if pending_aguarde:
+            seen_ids: set[str] = {n["id"] for n in nos}
+            real_nos: list[dict] = [n for n in nos if n.get("tipo_no") != "AGUARDE"]
+            while pending_aguarde:
+                aguarde = pending_aguarde.pop(0)
+                link = aguarde.get("link", "").replace("&amp;", "&")
+                if link:
+                    page_url = urljoin(arvore_ref_url, link)
+                else:
+                    m_page = re.search(r"\d+$", aguarde.get("id", ""))
+                    if not m_page:
+                        continue
+                    sep = "&" if "?" in arvore_url_str else "?"
+                    page_url = f"{arvore_url_str}{sep}pagina_arvore={m_page.group()}"
+                r_pag = await self._http.get(page_url, headers={"Referer": arvore_ref_url})
+                if not r_pag.is_success:
+                    logger.warning(
+                        "AGUARDE %s: falha HTTP %s ao buscar %s",
+                        aguarde.get("id"),
+                        r_pag.status_code,
+                        page_url,
+                    )
+                    continue
+                page_nos = parse_arvore_nos(r_pag.text)
+                logger.debug("AGUARDE %s resolvido: %d nós", aguarde.get("id"), len(page_nos))
+                for n in page_nos:
+                    nid = n.get("id", "")
+                    if not nid or nid in seen_ids:
+                        continue
+                    seen_ids.add(nid)
+                    if n.get("tipo_no") == "AGUARDE":
+                        pending_aguarde.append(n)  # BFS: enfileira AGUARDE aninhados
+                    else:
+                        real_nos.append(n)
+            nos = real_nos
 
         result: dict[str, Any] = {
             "id_procedimento": id_proc or "",
