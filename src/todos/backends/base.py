@@ -280,7 +280,9 @@ class SEIBackend:
         """Busca um documento pelo número SEI."""
         raise NotImplementedError
 
-    async def consultar_documento_interno(self, id_documento: str) -> dict:
+    async def consultar_documento_interno(
+        self, id_documento: str, processo: str | None = None
+    ) -> dict:
         """Consulta metadados de um documento interno."""
         raise NotImplementedError
 

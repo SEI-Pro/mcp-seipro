@@ -11,6 +11,13 @@ build/
 .eggs/
 *.egg
 
+# Test / coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.cache/
+
 # Virtual environment
 .venv/
 venv/
