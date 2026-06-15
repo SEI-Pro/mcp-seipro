@@ -1,52 +1,24 @@
 """Mixin web: documentos.
 
-Erros específicos deste domínio são definidos aqui e levantados pelos métodos que
-conhecem o contexto, via `try/except … raise XxxError from e`.
+Sem tradução de erros: cada método delega ao scraper, cujo SEIError (com a
+mensagem do SEI) propaga sem reembrulho. Onde o backend web simplesmente não
+serve a operação (ex.: falta `processo`), levanta `SEINotImplementedError`.
 """
 
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 from todos.backends.web._session import _WebMixin
-from todos.exceptions import SEIError, SEIPermissionError, SEIValidationError
+from todos.exceptions import SEINotImplementedError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
-
     from todos.backends.base import NovoDocumentoExterno, NovoDocumentoInterno
-
-_T = TypeVar("_T")
-
-
-class DocumentoNaoAutorizadoError(SEIPermissionError):
-    """Acesso ao documento negado — em geral processo fora da caixa, ou permissão."""
-
-
-def _traduzir_erro_documento(e: SEIError) -> SEIError | None:
-    """Mapeia um erro web de documento numa exceção específica, ou None se desconhecido."""
-    low = str(e).lower()
-    if "não autorizado" in low or "nao autorizado" in low or "acesso negado" in low:
-        return DocumentoNaoAutorizadoError(
-            "Acesso ao documento negado. Confirme que o processo está aberto na sua "
-            "unidade (sei_trocar_unidade) e que você tem acesso ao documento."
-        )
-    return None
 
 
 class DocumentosWeb(_WebMixin):
     """Operações web de documentos."""
-
-    async def _doc(self, coro: Awaitable[_T]) -> _T:
-        """Executa uma chamada de documento, traduzindo erros conhecidos do SEI."""
-        try:
-            return await coro
-        except SEIError as e:
-            especifico = _traduzir_erro_documento(e)
-            if especifico is not None:
-                raise especifico from e
-            raise
 
     async def buscar_documento(self, numero_sei: str, processo: str = "") -> dict:
         """Busca um documento pelo número SEI."""
@@ -91,8 +63,8 @@ class DocumentosWeb(_WebMixin):
                 "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
                 "para consultar metadados de documento."
             )
-            raise SEIValidationError(msg)
-        return await self._doc(self._web.consultar_documento_web(processo, id_documento))
+            raise SEINotImplementedError(msg)
+        return await self._web.consultar_documento_web(processo, id_documento)
 
     async def consultar_documento_interno(
         self, id_documento: str, processo: str | None = None
@@ -103,15 +75,15 @@ class DocumentosWeb(_WebMixin):
                 "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
                 "para consultar metadados de documento."
             )
-            raise SEIValidationError(msg)
-        return await self._doc(self._web.consultar_documento_web(processo, id_documento))
+            raise SEINotImplementedError(msg)
+        return await self._web.consultar_documento_web(processo, id_documento)
 
     async def baixar_anexo(self, id_documento: str, processo: str | None = None) -> bytes:
         """Baixa os bytes de um documento externo (anexo)."""
         if processo is None:
             msg = "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' para baixar anexos."
-            raise SEIValidationError(msg)
-        return await self._doc(self._web.baixar_documento_externo_web(processo, id_documento))
+            raise SEINotImplementedError(msg)
+        return await self._web.baixar_documento_externo_web(processo, id_documento)
 
     async def visualizar_documento_interno(
         self, id_documento: str, processo: str | None = None
@@ -122,8 +94,8 @@ class DocumentosWeb(_WebMixin):
                 "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
                 "para ler um documento interno."
             )
-            raise SEIValidationError(msg)
-        return await self._doc(self._web.visualizar_documento_interno_web(processo, id_documento))
+            raise SEINotImplementedError(msg)
+        return await self._web.visualizar_documento_interno_web(processo, id_documento)
 
     async def criar_documento_interno(self, processo: str, dados: NovoDocumentoInterno) -> dict:
         """Cria um documento interno (editor HTML) em um processo."""
@@ -160,7 +132,7 @@ class DocumentosWeb(_WebMixin):
                 "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
                 "para listar assinaturas."
             )
-            raise SEIValidationError(msg)
+            raise SEINotImplementedError(msg)
         return await self._web.listar_assinaturas_web(processo, id_documento)
 
     async def dar_ciencia(self, referencia: str, tipo: str = "documento") -> dict:
@@ -170,7 +142,7 @@ class DocumentosWeb(_WebMixin):
                 "Dar ciência em documento requer mod-wssei (REST). "
                 "Configure SEI_URL ou use tipo='processo'."
             )
-            raise SEIValidationError(msg)
+            raise SEINotImplementedError(msg)
         return await self._web.executar_acao_processo(referencia, "processo_dar_ciencia")
 
     async def listar_ciencias(
@@ -182,10 +154,10 @@ class DocumentosWeb(_WebMixin):
                 "Listar ciências de processo requer mod-wssei (REST). "
                 "Configure SEI_URL para habilitar esta funcionalidade."
             )
-            raise SEIValidationError(msg)
+            raise SEINotImplementedError(msg)
         if processo is None:
             msg = (
                 "Em instâncias sem mod-wssei, forneça 'processo' para listar ciências de documento."
             )
-            raise SEIValidationError(msg)
+            raise SEINotImplementedError(msg)
         return await self._web.listar_ciencias_web(processo, referencia)

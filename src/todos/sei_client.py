@@ -10,7 +10,13 @@ from typing import Any
 import httpx
 
 from todos.catalog_cache import get_catalog_cache
-from todos.exceptions import SEIAuthError, SEIConnectionError, SEIError, SEINotFoundError
+from todos.exceptions import (
+    SEIAuthError,
+    SEIConnectionError,
+    SEIError,
+    SEINotFoundError,
+    erro_do_sei,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -343,7 +349,7 @@ class SEIClient:
         resp = await self._request("GET", f"/documento/interno/consultar/{id_documento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao consultar documento {id_documento}: {data.get('mensagem')}")
+            raise erro_do_sei(f"Erro ao consultar documento {id_documento}", data.get("mensagem"))
         return data["data"]
 
     async def consultar_documento_externo(self, id_documento: str) -> dict:
@@ -353,8 +359,8 @@ class SEIClient:
         resp = await self._request("GET", f"/documento/externo/consultar/{id_documento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(
-                f"Erro ao consultar documento externo {id_documento}: {data.get('mensagem')}"
+            raise erro_do_sei(
+                f"Erro ao consultar documento externo {id_documento}", data.get("mensagem")
             )
         return data["data"]
 
@@ -380,7 +386,7 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao alterar documento interno: {data.get('mensagem')}")
+            raise erro_do_sei("Erro ao alterar documento interno", data.get("mensagem"))
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def alterar_documento_externo(
@@ -419,7 +425,7 @@ class SEIClient:
             )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao alterar documento externo: {data.get('mensagem')}")
+            raise erro_do_sei("Erro ao alterar documento externo", data.get("mensagem"))
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def pesquisar_tipos_conferencia(
@@ -495,7 +501,7 @@ class SEIClient:
         resp = await self._request("GET", f"/documento/{id_documento}/interno/visualizar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao visualizar documento {id_documento}: {data.get('mensagem')}")
+            raise erro_do_sei(f"Erro ao visualizar documento {id_documento}", data.get("mensagem"))
         return data["data"]
 
     async def baixar_anexo(self, id_documento: str) -> bytes:
@@ -505,7 +511,7 @@ class SEIClient:
         if "json" in content_type:
             data = resp.json()
             if not data.get("sucesso"):
-                raise SEIError(f"Erro ao baixar anexo {id_documento}: {data.get('mensagem')}")
+                raise erro_do_sei(f"Erro ao baixar anexo {id_documento}", data.get("mensagem"))
             return base64.b64decode(data["data"])
         return resp.content
 
@@ -585,8 +591,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(
-                f"Erro ao alterar seção do documento {id_documento}: {data.get('mensagem')}"
+            raise erro_do_sei(
+                f"Erro ao alterar seção do documento {id_documento}", data.get("mensagem")
             )
         return data.get("data", {})
 
@@ -834,7 +840,7 @@ class SEIClient:
         resp = await self._request("POST", f"/processo/{id_procedimento}/alterar", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao alterar processo: {data.get('mensagem')}")
+            raise erro_do_sei("Erro ao alterar processo", data.get("mensagem"))
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def consultar_processo_por_id(self, id_procedimento: str) -> dict:
@@ -963,7 +969,7 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao concluir processo: {data.get('mensagem')}")
+            raise erro_do_sei("Erro ao concluir processo", data.get("mensagem"))
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def reabrir_processo(self, id_procedimento: str) -> dict:
@@ -1071,7 +1077,7 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao sobrestar processo: {data.get('mensagem')}")
+            raise erro_do_sei("Erro ao sobrestar processo", data.get("mensagem"))
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def remover_sobrestamento(self, id_procedimento: str) -> dict:

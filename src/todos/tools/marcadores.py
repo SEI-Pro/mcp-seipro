@@ -12,6 +12,7 @@ ser objetos reais (não strings adiadas).
 
 from fastmcp import Context
 
+from todos.exceptions import SEIValidationError
 from todos.mcp_app import (
     _DEST,
     _IDEM,
@@ -38,12 +39,9 @@ async def sei_criar_marcador(
     backend = _backend(ctx)
     if not id_cor:
         cores = await backend.listar_cores_marcador()
-        return _json(
-            {
-                "error": "Cor não informada — escolha uma das cores disponíveis.",
-                "cores": cores,
-            }
-        )
+        disponiveis = ", ".join(str(c) for c in cores) if cores else "(nenhuma retornada)"
+        msg = f"id_cor não informado — escolha uma das cores disponíveis: {disponiveis}"
+        raise SEIValidationError(msg)
     result = await backend.criar_marcador(nome, id_cor)
     return _json(result)
 

@@ -26,7 +26,7 @@ from fastmcp import Context
 from todos import access_control
 from todos.backends import NovoDocumentoExterno, NovoDocumentoInterno
 from todos.backends.base import SEIBackend
-from todos.exceptions import SEIConnectionError, SEIError
+from todos.exceptions import SEIConnectionError, SEIError, SEIValidationError
 from todos.html_utils import (
     html_to_markdown,
     html_to_text,
@@ -41,7 +41,6 @@ from todos.mcp_app import (
     MAX_BINARY_SIZE,
     _aplicar_gate_documento,
     _backend,
-    _error,
     _get_client,
     _has_rest,
     _http_mode,
@@ -59,14 +58,14 @@ from todos.sei_styles import (
 def _formatar_doc_externo(content: bytes, formato: str, disclaimer: dict | None) -> str:
     """Formata conteúdo de documento externo (PDF) com disclaimer opcional."""
     if len(content) > MAX_BINARY_SIZE:
-        return _error(
+        msg = (
             f"Documento muito grande ({len(content)} bytes). "
             "Use sei_baixar_anexo para obter o base64."
         )
+        raise SEIValidationError(msg)
     if content[:4] != b"%PDF":
-        return _error(
-            "Documento externo não é PDF. Use sei_baixar_anexo para obter o arquivo em base64."
-        )
+        msg = "Documento externo não é PDF. Use sei_baixar_anexo para obter o arquivo em base64."
+        raise SEIValidationError(msg)
     if formato == "markdown":
         resultado = pdf_to_markdown(content)
         if disclaimer:
@@ -111,11 +110,9 @@ async def _ler_documento_via_backend(
     pode ser "auto" — nesse caso tenta interno e cai para externo.
     """
     gate_tipo = "X" if tipo_documento == "X" else "I"
-    acao, payload, erro = await _aplicar_gate_documento(
+    acao, payload = await _aplicar_gate_documento(
         ctx, backend, str(id_documento), gate_tipo, processo, confirmou=confirmou
     )
-    if acao == "erro":
-        return _error(erro)
     if acao in ("bloquear", "recusou"):
         return _json(payload)
     disclaimer = payload
@@ -173,23 +170,16 @@ async def sei_ler_documento(
         backend = _backend(ctx)
         tipo_doc = tipo_documento
         # Auto-resolução número SEI → id interno + tipo: pesquisa Solr, REST-only.
-        # Em modo web-only o id é usado direto e o tipo continua "auto".
+        # Em modo web-only o id é usado direto e o tipo continua "auto". O erro de
+        # resolução já orienta (sei_arvore_processo) e propaga.
         if _has_rest(ctx) and tipo_documento == "auto":
-            try:
-                doc_id, detected_tipo = await _resolver_documento(_get_client(ctx), id_documento)
-                id_documento, tipo_doc = doc_id, detected_tipo
-            except (SEIError, httpx.HTTPError) as e:
-                return _json(
-                    {
-                        "error": str(e),
-                        "dica": "Use sei_arvore_processo para ver os documentos do processo e seus IDs.",
-                    }
-                )
+            id_documento, tipo_doc = await _resolver_documento(_get_client(ctx), id_documento)
         if not _has_rest(ctx) and processo is None:
-            return _error(
+            msg = (
                 "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
                 "(protocolo do processo, ex: '50300.018905/2018-67') para ler documentos."
             )
+            raise SEIValidationError(msg)
         return await _ler_documento_via_backend(
             ctx,
             backend,
@@ -199,25 +189,20 @@ async def sei_ler_documento(
             processo,
             confirmou=confirmar_acesso_restrito,
         )
-    except (SEIError, httpx.HTTPError) as e:
-        msg = str(e)
-        if "não autorizado" in msg.lower() or "nao autorizado" in msg.lower():
-            return _json(
-                {
-                    "error": msg,
-                    "dica": "Acesso negado. Troque para a unidade geradora com sei_trocar_unidade.",
-                }
-            )
-        return _error(msg)
+    except httpx.RequestError as e:
+        # httpx não é ToolError → converte para o erro de domínio e propaga.
+        msg = f"SEI inacessível: {e}"
+        raise SEIConnectionError(msg) from e
 
 
 def _envelopar_anexo(content: bytes, disclaimer: dict | None) -> str:
-    """Valida tamanho e devolve o envelope base64 do anexo (ou erro)."""
+    """Valida tamanho e devolve o envelope base64 do anexo."""
     if len(content) > MAX_BINARY_SIZE:
-        return _error(
+        msg = (
             f"Documento muito grande ({len(content)} bytes, limite {MAX_BINARY_SIZE}). "
             "Baixe manualmente pelo SEI."
         )
+        raise SEIValidationError(msg)
     resposta: dict = {
         "base64": base64.b64encode(content).decode(),
         "size_bytes": len(content),
@@ -256,29 +241,17 @@ async def sei_baixar_anexo(
     """
     try:
         backend = _backend(ctx)
-        # Auto-resolução número SEI → id interno (Solr, REST-only).
+        # Auto-resolução número SEI → id interno (Solr, REST-only). O erro de
+        # resolução já traz orientação (sei_arvore_processo) e propaga.
         if _has_rest(ctx):
-            try:
-                doc_id, _ = await _resolver_documento(_get_client(ctx), id_documento)
-                id_documento = doc_id
-            except (SEIError, httpx.HTTPError) as e:
-                return _json(
-                    {
-                        "error": str(e),
-                        "dica": "Use sei_arvore_processo ou sei_buscar_documento para "
-                        "encontrar o id correto do documento.",
-                    }
-                )
+            id_documento, _ = await _resolver_documento(_get_client(ctx), id_documento)
         elif processo is None:
-            return _error(
-                "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' para baixar anexos."
-            )
+            msg = "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' para baixar anexos."
+            raise SEIValidationError(msg)
 
-        acao, payload, erro = await _aplicar_gate_documento(
+        acao, payload = await _aplicar_gate_documento(
             ctx, backend, str(id_documento), "X", processo, confirmou=confirmar_acesso_restrito
         )
-        if acao == "erro":
-            return _error(erro)
         if acao in ("bloquear", "recusou"):
             return _json(payload)
 
@@ -315,10 +288,11 @@ async def sei_criar_documento(
     """
     # id_serie é obrigatório no caminho REST; no web vazio retorna os tipos.
     if _has_rest(ctx) and not id_serie:
-        return _error(
+        msg = (
             "id_serie é obrigatório no modo REST. "
             "Use sei_pesquisar_tipos_documento para listar os tipos disponíveis."
         )
+        raise SEIValidationError(msg)
     dados = NovoDocumentoInterno(
         id_serie=id_serie,
         descricao=descricao,
@@ -426,12 +400,9 @@ async def sei_estilos(categoria: str = "") -> str:
 
         prefixos = filtros.get(categoria, [])
         if not prefixos:
-            return _json(
-                {
-                    "error": f"Categoria '{categoria}' não encontrada",
-                    "categorias": [*filtros.keys(), "todos", "atalhos"],
-                }
-            )
+            disponiveis = ", ".join([*filtros.keys(), "todos", "atalhos"])
+            msg = f"Categoria '{categoria}' não encontrada. Disponíveis: {disponiveis}"
+            raise SEIValidationError(msg)
 
         resultado = {
             nome: info
@@ -540,39 +511,17 @@ async def sei_criar_documento_externo(
     return _json(result)
 
 
-async def _reconsultar_documento_externo(
-    ctx: Context | None, backend: SEIBackend, id_documento: str
-) -> tuple[dict | None, str]:
-    """Tenta recuperar um 'não autorizado' resolvendo número SEI → id interno.
-
-    A resolução número SEI → id é uma pesquisa Solr (REST-only); a reconsulta
-    dos metadados volta a passar pelo backend composto. Retorna
-    `(result, id_resolvido)` em caso de sucesso; `(None, id_documento)` quando o
-    id não pôde ser resolvido para um id interno diferente.
-    """
-    if not _has_rest(ctx):
-        return None, id_documento
-    try:
-        doc_id, _ = await _resolver_documento(_get_client(ctx), id_documento)
-        if doc_id == id_documento:
-            return None, id_documento
-        result = await backend.consultar_documento_externo(doc_id, None)
-    except (SEIError, httpx.HTTPError):
-        return None, id_documento
-    return result, doc_id
-
-
 @mcp.tool(annotations=_READ)
 async def sei_consultar_documento_externo(
     id_documento: str,
     processo: str | None = None,
     ctx: Context | None = None,
 ) -> str:
-    """Consulta metadados de um documento externo pelo ID.
+    """Consulta metadados de um documento externo pelo ID INTERNO.
 
-    Aceita tanto o id interno (ex: "3149544") quanto o número SEI /
-    protocoloFormatado (ex: "2867926") — auto-resolve via pesquisa Solr
-    quando necessário.
+    Passe o id interno do documento (ex.: "3149544"). Se você só tem o número
+    SEI / protocoloFormatado (ex.: "2867926"), resolva-o antes com
+    sei_buscar_documento — o SEI rejeita o número SEI aqui com "não autorizado".
 
     - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
 
@@ -587,34 +536,7 @@ async def sei_consultar_documento_externo(
     Se falhar com erro inesperado, use sei_versao para verificar a versão.
     """
     try:
-        backend = _backend(ctx)
-        try:
-            result = await backend.consultar_documento_externo(id_documento, processo)
-        except (SEIError, httpx.HTTPError) as primeira:
-            msg = str(primeira)
-            low = msg.lower()
-            if (
-                "não autorizado" not in low
-                and "nao autorizado" not in low
-                and "acesso negado" not in low
-            ):
-                raise
-            # Se não autorizado, pode ser id errado (passou número SEI). Tenta resolver.
-            result, id_documento = await _reconsultar_documento_externo(ctx, backend, id_documento)
-            if result is None:
-                return _json(
-                    {
-                        "error": msg,
-                        "dica": (
-                            "SEI retornou 'não autorizado' para o id "
-                            f"{id_documento!r}. Verifique se você passou o id "
-                            "INTERNO do documento (ex.: 3149544) e não o número "
-                            "SEI / protocoloFormatado (ex.: 2867926). Use "
-                            "sei_buscar_documento para resolver número SEI → id."
-                        ),
-                    }
-                )
-
+        result = await _backend(ctx).consultar_documento_externo(id_documento, processo)
         nivel, hipotese = access_control.extrair_nivel(result)
         if nivel is None:
             nivel = access_control.extrair_nivel_web(result)
@@ -761,21 +683,25 @@ async def sei_incluir_documento_externo(
     try:
         if arquivo_base64:
             if not nome_arquivo:
-                return _error("nome_arquivo é obrigatório quando arquivo_base64 é usado.")
+                msg = "nome_arquivo é obrigatório quando arquivo_base64 é usado."
+                raise SEIValidationError(msg)
             try:
                 base64.b64decode(arquivo_base64, validate=True)
-            except ValueError:
-                return _error("arquivo_base64 inválido (não é base64 válido).")
+            except ValueError as e:
+                msg = "arquivo_base64 inválido (não é base64 válido)."
+                raise SEIValidationError(msg) from e
         elif arquivo_path:
             # Em modo remoto o caminho apontaria para o filesystem do SERVIDOR,
             # permitindo exfiltrar arquivos do host — exigir base64.
             if _http_mode:
-                return _error(
+                msg = (
                     "Em modo remoto use arquivo_base64 + nome_arquivo "
                     "(caminhos do servidor não são permitidos)."
                 )
+                raise SEIValidationError(msg)
         elif id_serie:
-            return _error("Informe arquivo_path (local) ou arquivo_base64 (remoto).")
+            msg = "Informe arquivo_path (local) ou arquivo_base64 (remoto)."
+            raise SEIValidationError(msg)
 
         # O composite roteia web-first quando há base64 (upload nativo do scraper),
         # e REST-first quando só há caminho de arquivo.

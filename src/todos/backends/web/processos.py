@@ -1,54 +1,22 @@
-"""Mixin web: leitura e escrita de processos."""
+"""Mixin web: leitura e escrita de processos.
+
+Sem tradução de erros: cada método delega ao scraper, cujo SEIError (com a
+mensagem do SEI) propaga sem reembrulho.
+"""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 from todos.backends.web._session import _WebMixin
-from todos.exceptions import SEIError, SEIValidationError
+from todos.exceptions import SEIValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
-
     from todos.backends.base import EnvioProcesso, FiltrosPesquisaProcessos, NovoProcesso
-
-_T = TypeVar("_T")
-
-
-class ProcessoEmOutraUnidadeError(SEIValidationError):
-    """Processo aberto em outra(s) unidade(s) — conclua nessas unidades antes de prosseguir."""
-
-
-def _traduzir_erro_processo(e: SEIError) -> SEIError | None:
-    """Mapeia um erro web de processo numa exceção específica, ou None se desconhecido."""
-    low = str(e).lower()
-    if (
-        "aberto na unidade" in low
-        or "está aberto" in low
-        or "esta aberto" in low
-        or "aberto em outra" in low
-        or "aberto nas unidades" in low
-    ):
-        return ProcessoEmOutraUnidadeError(
-            "Processo aberto em outra(s) unidade(s). Conclua o processo nessas unidades "
-            "(sei_concluir_processo) antes desta operação, ou verifique "
-            "sei_listar_unidades_processo."
-        )
-    return None
 
 
 class ProcessosWeb(_WebMixin):
     """Operações web de leitura e escrita de processos."""
-
-    async def _proc(self, coro: Awaitable[_T]) -> _T:
-        """Executa uma chamada de processo, traduzindo erros conhecidos do SEI."""
-        try:
-            return await coro
-        except SEIError as e:
-            especifico = _traduzir_erro_processo(e)
-            if especifico is not None:
-                raise especifico from e
-            raise
 
     # ------------------------------------------------------------------
     # Operações de leitura de processos
@@ -196,7 +164,7 @@ class ProcessosWeb(_WebMixin):
 
     async def concluir_processo(self, processo: str) -> dict:
         """Conclui (encerra) um processo na unidade atual."""
-        return await self._proc(self._web.executar_acao_processo(processo, "procedimento_concluir"))
+        return await self._web.executar_acao_processo(processo, "procedimento_concluir")
 
     async def reabrir_processo(self, processo: str) -> dict:
         """Reabre um processo concluído na unidade atual."""
@@ -266,9 +234,7 @@ class ProcessosWeb(_WebMixin):
         if processo_vinculado:
             campos["txtProcedimentoDestino"] = processo_vinculado
             campos["txtIdentificacaoProcedimentoDestino"] = processo_vinculado
-        return await self._proc(
-            self._web.executar_acao_processo(processo, "procedimento_sobrestar", campos)
-        )
+        return await self._web.executar_acao_processo(processo, "procedimento_sobrestar", campos)
 
     async def remover_sobrestamento(self, processo: str) -> dict:
         """Remove o sobrestamento de um processo (via lista de sobrestados)."""

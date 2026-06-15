@@ -28,7 +28,6 @@ from todos.mcp_app import (
     _READ,
     _WRITE,
     _backend,
-    _error,
     _json,
     access_control,
     mcp,
@@ -621,7 +620,8 @@ async def sei_gerar_pdf_processo(
 
     tamanho_mb = len(pdf_bytes) / 1024 / 1024
     if tamanho_mb > _MAX_PDF_MB:
-        return _error(f"PDF muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI.")
+        msg = f"PDF muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI."
+        raise SEIValidationError(msg)
 
     protocolo_safe = processo.replace("/", "-")
     pdf_path = Path(tempfile.gettempdir()) / f"SEI_{protocolo_safe}.pdf"
@@ -664,7 +664,8 @@ async def sei_gerar_zip_processo(
 
     tamanho_mb = len(zip_bytes) / 1024 / 1024
     if tamanho_mb > _MAX_ZIP_MB:
-        return _error(f"ZIP muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI.")
+        msg = f"ZIP muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI."
+        raise SEIValidationError(msg)
 
     protocolo_safe = processo.replace("/", "-")
     zip_path = Path(tempfile.gettempdir()) / f"SEI_{protocolo_safe}.zip"

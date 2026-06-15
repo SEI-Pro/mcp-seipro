@@ -17,6 +17,7 @@ from todos.backends import (
 )
 from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import (
+    SEIConnectionError,
     SEIError,
     SEINotFoundError,
 )
@@ -356,11 +357,8 @@ async def sei_hipoteses_resource(ctx: Context) -> str:
     OBRIGATÓRIA ao criar ou alterar processo com nível de acesso 1 ou 2.
     Evita uma chamada de tool para sei_pesquisar_hipoteses_legais.
     """
-    try:
-        result = await _backend(ctx).pesquisar_hipoteses_legais()
-        return json.dumps(result, ensure_ascii=False, indent=2)
-    except (SEIError, httpx.HTTPError) as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+    result = await _backend(ctx).pesquisar_hipoteses_legais()
+    return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 class _ConsentimentoRestrito(BaseModel):
@@ -467,40 +465,23 @@ async def _aplicar_gate_documento(
     processo: str | None = None,
     *,
     confirmou: bool,
-) -> tuple[str, dict | None, str]:
+) -> tuple[str, dict | None]:
     """Resolve metadados pelo backend composto e aplica o gate de acesso.
 
     Roteia a consulta de metadados pelo composite (REST-first com fallback web),
     extraindo o nível tanto da forma REST (`nivelAcesso`) quanto da forma web
-    (texto "Restrito"/"Sigiloso"). Falha FECHADA: se a consulta de metadados
-    falhar, retorna "erro" em vez de liberar conteúdo potencialmente restrito
-    sem checar o nível (mais seguro que o antigo fail-open do caminho web).
+    (texto "Restrito"/"Sigiloso").
 
-    Retorna (acao, payload, erro):
-      - acao="liberar": prossiga; payload é o disclaimer acompanhante (ou None
-        se público)
-      - acao="bloquear": retorne payload (JSON de bloqueio) ao caller
-      - acao="recusou": retorne payload (JSON de recusa) ao caller
-      - acao="erro": retorne erro (string) ao caller
+    Falha FECHADA por propagação: se a consulta de metadados falhar, o SEIError
+    propaga e a leitura nunca acontece — conteúdo potencialmente restrito não é
+    liberado sem checar o nível. Isso vale INCLUSIVE com `confirmou=True`.
+
+    Retorna (acao, payload):
+      - "liberar": prossiga; payload é o disclaimer acompanhante (ou None se público)
+      - "bloquear": retorne payload (JSON de bloqueio) ao caller
+      - "recusou": retorne payload (JSON de recusa) ao caller
     """
-    try:
-        meta = await _consultar_meta_documento(backend, id_documento, tipo_documento, processo)
-    except (SEIError, httpx.HTTPError) as e:
-        msg = str(e)
-        low = msg.lower()
-        if "não autorizado" in low or "nao autorizado" in low or "acesso negado" in low:
-            return (
-                "erro",
-                None,
-                (
-                    f"SEI retornou 'não autorizado' para o id {id_documento!r}. "
-                    "Verifique se você passou o id INTERNO do documento (ex.: 3149544) "
-                    "e não o número SEI / protocoloFormatado (ex.: 2867926). "
-                    "Se tiver apenas o número SEI, use sei_buscar_documento ou "
-                    "sei_ler_documento (que faz auto-resolução)."
-                ),
-            )
-        return ("erro", None, f"Falha ao consultar metadados: {msg}")
+    meta = await _consultar_meta_documento(backend, id_documento, tipo_documento, processo)
 
     nivel, hipotese = access_control.extrair_nivel(meta)
     if nivel is None:
@@ -513,35 +494,19 @@ async def _aplicar_gate_documento(
     }
 
     if not access_control.precisa_disclaimer(nivel):
-        return ("liberar", None, "")
+        return ("liberar", None)
 
     if confirmou or access_control.env_permite_restritos():
-        return (
-            "liberar",
-            access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo),
-            "",
-        )
+        return ("liberar", access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo))
 
     rotulo = access_control.ROTULOS.get(nivel, "Restrito")
     consent = await _solicitar_consentimento_via_elicit(ctx, rotulo, hipotese, alvo)
 
     if consent == "aceitou":
-        return (
-            "liberar",
-            access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo),
-            "",
-        )
+        return ("liberar", access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo))
     if consent == "recusou":
-        return (
-            "recusou",
-            access_control.construir_aviso_recusado(nivel, rotulo, alvo),
-            "",
-        )
-    return (
-        "bloquear",
-        access_control.construir_aviso_bloqueio(nivel, hipotese, alvo),
-        "",
-    )
+        return ("recusou", access_control.construir_aviso_recusado(nivel, rotulo, alvo))
+    return ("bloquear", access_control.construir_aviso_bloqueio(nivel, hipotese, alvo))
 
 
 async def _resolver_processo(client: SEIClient, referencia: str) -> str:
@@ -613,12 +578,14 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
         # Validar que realmente retornou conteúdo (não erro mascarado)
         if raw and len(raw) > _MIN_DOC_CONTENT_LENGTH:
             return referencia, "I"
-    except (SEIError, httpx.HTTPError) as e:
-        msg = str(e)
-        # "não autorizado" pode significar que o id existe mas sem permissão
-        # OU que o protocoloFormatado coincidiu com outro id — não confiável
-        if "não autorizado" not in msg.lower() and "nao autorizado" not in msg.lower():
-            pass  # Erro diferente, tentar externo
+    except SEIConnectionError:
+        # Não mascarar uma falha de conectividade como "documento não encontrado".
+        raise
+    except (SEIError, httpx.HTTPError):
+        # A tentativa por id direto não resolveu (não encontrado, sem acesso, ou
+        # um id que coincidiu com outro protocolo — não confiável). Desiste e cai
+        # para o SEINotFoundError acionável abaixo.
+        pass
 
     # Não tentar como externo automaticamente — risco alto de confusão id/proto
     # O fallback para externo só deve ser usado com id_procedimento conhecido
@@ -632,10 +599,6 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
 
 def _json(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
-
-
-def _error(msg: str) -> str:
-    return json.dumps({"error": msg}, ensure_ascii=False)
 
 
 # Tool annotation profiles

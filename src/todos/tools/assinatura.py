@@ -16,18 +16,28 @@ from typing import Literal
 import httpx
 from fastmcp import Context
 
-from todos.exceptions import SEIError
+from todos.exceptions import SEIError, SEIValidationError
 from todos.html_utils import sanitize_iso8859
 from todos.mcp_app import (
     _IDEM,
     _READ,
     _backend,
-    _error,
     _get_client,
     _json,
     _resolver_documento,
     mcp,
 )
+
+
+def _exigir_cargo(cargos: object) -> SEIValidationError:
+    """Erro de cargo obrigatório, com as opções disponíveis embutidas na mensagem."""
+    itens = cargos if isinstance(cargos, list) else []
+    nomes = ", ".join(str(c) for c in itens) if itens else "(nenhum retornado)"
+    return SEIValidationError(
+        "Cargo/Função não informado — obrigatório para assinar. "
+        f"Cargos/funções disponíveis: {nomes}. Pergunte ao usuário qual usar e "
+        "reutilize a escolha nas próximas assinaturas desta conversa."
+    )
 
 
 @mcp.tool(annotations=_IDEM)
@@ -43,61 +53,51 @@ async def sei_cancelar_assinatura(
     Esta tool tenta forçar uma edição mínima no documento para que o
     SEI remova a assinatura automaticamente (comportamento padrão ao editar).
 
-    LIMITAÇÃO: só funciona se o processo não foi enviado/lido por outra
-    unidade. Se falhar, o usuário deve cancelar a assinatura pela
-    interface web do SEI (botão "Editar Conteúdo" no documento).
+    LIMITAÇÃO IMPORTANTE: só é possível enquanto o processo está exclusivamente
+    na unidade geradora e ainda NÃO foi lido nem enviado para outra unidade.
+    Uma vez lido ou tramitado, o documento fica travado e a assinatura NÃO pode
+    mais ser cancelada — por nenhum meio, nem pela interface web do SEI.
 
-    Orquestração REST-only: o SEI não expõe "cancelar assinatura" como op; a
-    tool força uma edição mínima (derruba a assinatura) compondo
-    listar_secao_documento + alterar_secao_documento do cliente REST.
+    Orquestração: o SEI não expõe "cancelar assinatura" como op; a tool força uma
+    edição mínima (derruba a assinatura) compondo listar_secoes + alterar_secoes
+    pelo backend composto. Se o documento estiver travado (processo já lido/
+    enviado), o SEI rejeita a edição e o erro original propaga ao agente — é um
+    ToolError com a mensagem do próprio SEI.
     """
-    try:
-        client = _get_client(ctx)
+    backend = _backend(ctx)
 
-        # Resolver número SEI → id interno (best-effort)
-        doc_id = id_documento.strip()
-        with suppress(SEIError, httpx.HTTPError):
-            doc_id, _ = await _resolver_documento(client, doc_id)
+    # Resolver número SEI → id interno (best-effort, pesquisa Solr REST-only)
+    doc_id = id_documento.strip()
+    with suppress(SEIError, httpx.HTTPError):
+        doc_id, _ = await _resolver_documento(_get_client(ctx), doc_id)
 
-        # Verificar se está assinado e capturar a versão atual
-        secoes_data = await client.listar_secao_documento(doc_id)
-        versao = str(secoes_data.get("ultimaVersaoDocumento", "1"))
+    # Verificar se está assinado e capturar a versão atual
+    secoes_data = await backend.listar_secoes(doc_id)
+    versao = str(secoes_data.get("ultimaVersaoDocumento", "1"))
 
-        # Montar payload com todas as seções (mesmo conteúdo)
-        secoes_enviar = []
-        for s in secoes_data.get("secoes", []):
-            if not isinstance(s, dict):
-                continue
-            conteudo = html.unescape(s.get("conteudo", "") or "")
-            secoes_enviar.append(
-                {
-                    "id": str(s.get("id")),
-                    "idSecaoModelo": str(s.get("idSecaoModelo")),
-                    "conteudo": sanitize_iso8859(conteudo),
-                }
-            )
-
-        # Editar (derruba assinatura se permitido)
-        result = await client.alterar_secao_documento(doc_id, secoes_enviar, versao)
-        return _json(
+    # Montar payload com todas as seções (mesmo conteúdo)
+    secoes_enviar = []
+    for s in secoes_data.get("secoes", []):
+        if not isinstance(s, dict):
+            continue
+        conteudo = html.unescape(s.get("conteudo", "") or "")
+        secoes_enviar.append(
             {
-                "mensagem": "Assinatura cancelada com sucesso. O documento foi editado (nova versão).",
-                "versao": result,
+                "id": str(s.get("id")),
+                "idSecaoModelo": str(s.get("idSecaoModelo")),
+                "conteudo": sanitize_iso8859(conteudo),
             }
         )
-    except (SEIError, httpx.HTTPError) as e:
-        msg = str(e)
-        if "assinado" in msg.lower():
-            return _json(
-                {
-                    "error": "Não foi possível cancelar a assinatura via API.",
-                    "motivo": msg,
-                    "dica": "O processo pode ter sido enviado ou lido por outra unidade. "
-                    "Cancele a assinatura pela interface web do SEI: "
-                    "abra o documento → clique em 'Editar Conteúdo'.",
-                }
-            )
-        return _error(msg)
+
+    # Editar derruba a assinatura se o documento ainda puder ser editado. Se
+    # estiver travado (processo lido/enviado), o SEI rejeita e o erro propaga.
+    result = await backend.alterar_secoes(doc_id, secoes_enviar, versao)
+    return _json(
+        {
+            "mensagem": "Assinatura cancelada com sucesso. O documento foi editado (nova versão).",
+            "versao": result,
+        }
+    )
 
 
 @mcp.tool(annotations=_IDEM)
@@ -129,16 +129,7 @@ async def sei_assinar_documento(
             cargos = await backend.listar_assinantes()
         except (SEIError, httpx.HTTPError):
             cargos = []
-        return _json(
-            {
-                "error": "Cargo/Função não informado — é obrigatório para assinatura.",
-                "cargos_disponiveis": cargos,
-                "dica": "Pergunte ao usuário qual cargo/função usar para assinar. "
-                "Os cargos disponíveis estão listados acima. "
-                "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
-                "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
-            }
-        )
+        raise _exigir_cargo(cargos)
     result = await backend.assinar_documento(id_documento, cargo=cargo, orgao=orgao)
     return _json(result)
 
@@ -183,15 +174,7 @@ async def sei_assinar_bloco(
             cargos = await backend.listar_assinantes()
         except (SEIError, httpx.HTTPError):
             cargos = []
-        return _json(
-            {
-                "error": "Cargo/Função não informado.",
-                "cargos_disponiveis": cargos,
-                "dica": "Pergunte ao usuário qual cargo usar. "
-                "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
-                "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
-            }
-        )
+        raise _exigir_cargo(cargos)
     result = await backend.assinar_bloco(id_bloco, cargo=cargo)
     return _json(result)
 
@@ -219,15 +202,7 @@ async def sei_assinar_documentos_bloco(
             cargos = await backend.listar_assinantes()
         except (SEIError, httpx.HTTPError):
             cargos = []
-        return _json(
-            {
-                "error": "Cargo/Função não informado.",
-                "cargos_disponiveis": cargos,
-                "dica": "Pergunte ao usuário qual cargo usar. "
-                "IMPORTANTE: após o usuário escolher, salve o cargo na memória da conversa "
-                "para reutilizar em todas as próximas assinaturas sem perguntar novamente.",
-            }
-        )
+        raise _exigir_cargo(cargos)
     result = await backend.assinar_documentos_bloco(documentos, cargo=cargo)
     return _json(result)
 

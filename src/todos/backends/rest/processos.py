@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -10,51 +10,15 @@ from todos.backends.rest._session import _RestMixin
 from todos.exceptions import SEIError, SEINotFoundError, SEIValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
-
     from todos.backends.models import (
         EnvioProcesso,
         FiltrosPesquisaProcessos,
         NovoProcesso,
     )
 
-_T = TypeVar("_T")
-
-
-class ProcessoEmOutraUnidadeError(SEIValidationError):
-    """Processo aberto em outra(s) unidade(s) — conclua nessas unidades antes de prosseguir."""
-
-
-def _traduzir_erro_processo(e: SEIError) -> SEIError | None:
-    """Mapeia um erro de processo numa exceção específica, ou None se desconhecido."""
-    low = str(e).lower()
-    if (
-        "aberto na unidade" in low
-        or "está aberto" in low
-        or "esta aberto" in low
-        or "aberto em outra" in low
-        or "aberto nas unidades" in low
-    ):
-        return ProcessoEmOutraUnidadeError(
-            "Processo aberto em outra(s) unidade(s). Conclua o processo nessas unidades "
-            "(sei_concluir_processo) antes desta operação, ou verifique "
-            "sei_listar_unidades_processo."
-        )
-    return None
-
 
 class ProcessosRest(_RestMixin):
     """Operações REST de leitura e escrita de processos."""
-
-    async def _proc(self, coro: Awaitable[_T]) -> _T:
-        """Executa uma chamada de processo, traduzindo erros conhecidos do SEI."""
-        try:
-            return await coro
-        except SEIError as e:
-            especifico = _traduzir_erro_processo(e)
-            if especifico is not None:
-                raise especifico from e
-            raise
 
     async def consultar_processo(self, processo: str) -> dict:
         """Consulta os dados completos de um processo pelo protocolo formatado."""
@@ -191,7 +155,7 @@ class ProcessosRest(_RestMixin):
 
     async def concluir_processo(self, processo: str) -> dict:
         """Conclui (encerra) um processo na unidade atual."""
-        return await self._proc(self._rest.concluir_processo(processo))
+        return await self._rest.concluir_processo(processo)
 
     async def reabrir_processo(self, processo: str) -> dict:
         """Reabre um processo concluído na unidade atual."""
@@ -243,12 +207,10 @@ class ProcessosRest(_RestMixin):
         proto_vinculado = ""
         if processo_vinculado:
             proto_vinculado = await self._resolver_processo(processo_vinculado)
-        return await self._proc(
-            self._rest.sobrestar_processo(
-                id_procedimento=id_proc,
-                motivo=motivo,
-                protocolo_vinculado=proto_vinculado,
-            )
+        return await self._rest.sobrestar_processo(
+            id_procedimento=id_proc,
+            motivo=motivo,
+            protocolo_vinculado=proto_vinculado,
         )
 
     async def remover_sobrestamento(self, processo: str) -> dict:
