@@ -1,8 +1,13 @@
 # RFC 0004 — Hierarquia de exceções + remoção de código defensivo
 
-**Status**: Concluído · **Atualizado**: 2026-06-13
+**Status**: Concluído · **Atualizado**: 2026-06-15
 **Data**: 2026-06-13
 **Autores**: Franklin Baldo (com Claude Code)
+
+> **Revisão 2026-06-15**: o desenho evoluiu desde a redação original. `SEIError`
+> agora estende `ToolError` (não `Exception`) e o helper `_to_tool_error` (§2.3)
+> foi **removido** — as tools apenas deixam o `SEIError` propagar. As convenções
+> consolidadas estão na **§6**; onde §2.1/§2.3 divergem do código, vale a §6.
 
 ## 1. Problema
 
@@ -169,3 +174,74 @@ As fases são sequenciais (cada uma depende da anterior).
 - [ ] `ty check src/` passa (isinstance removidos não introduzem erros de tipo).
 - [ ] Erro de sessão expirada retorna mensagem com instrução de reconexão, não stack do httpx.
 - [ ] `vulture src/` não reporta `SEIError` subclasses como código morto.
+
+## 6. Revisão 2026-06-15 — convenções consolidadas
+
+A implementação convergiu para um modelo mais simples e seguro que o §2.3
+original. Estas são as regras vigentes.
+
+### 6.1 `SEIError` é um `ToolError` — propague, não embrulhe
+
+`SEIError(ToolError)`. O FastMCP entrega a mensagem de um `ToolError` direto ao
+agente, então:
+
+- **Não existe mais `_to_tool_error`** (§2.3 está superseded). A tool deixa o
+  `SEIError` propagar; a mensagem da exceção É a resposta ao agente.
+- **Não retorne envelopes `{"error": ...}` para falhas reais.** Construir um JSON
+  de erro é o padrão antigo (pré-`ToolError`). Para uma falha dura, `raise` uma
+  subclasse de `SEIError` com a mensagem acionável e deixe propagar. Reserve
+  `_json({...})` para *resultados* estruturados (dados, opções, dry-run), não
+  para erros.
+- A orientação acionável mora **na exceção** (mensagem/docstring), não num dict
+  montado pela tool.
+
+### 6.2 Nada de tradução de erros — `raise` certo ou propague o original
+
+Não existe camada de tradução (os `_traduzir_erro_*` / `_doc` / `_proc` foram
+**removidos**). Duas — e só duas — formas válidas de lidar com um erro:
+
+1. **`raise` o erro certo onde a condição é conhecida.** O ponto que tem
+   informação estruturada decide o tipo. O `SEIClient`/scraper, ao ler a
+   resposta, levanta `SEIAuthError` (401/403), `SEINotFoundError` (404),
+   `SEIConnectionError` (timeout) etc. — pela estrutura, não por substring. Um
+   backend que não serve a op levanta `SEINotImplementedError` (§6.4).
+2. **Deixe o erro original propagar — inclusive nas boundaries.** Erros de
+   nível de aplicação do SEI já vêm como `SEIError` com a *mensagem do SEI*
+   (ex.: `SEIError("Erro ao alterar documento: documento já assinado")`). Essa
+   mensagem É a orientação ao agente; não re-capture para re-tipar por substring
+   nem para montar `{"error": ...}`.
+
+**Proibido**: pegar um `SEIError` já levantado e re-derivar tipo/mensagem
+grepando `str(e)` (o antigo `_traduzir_erro_*`). Isso quebra silenciosamente
+quando a mensagem muda e foi causa-raiz de bugs reais. Quem só precisa da
+*categoria* captura por tipo (`except SEIAuthError`); ninguém reinspeciona texto.
+
+### 6.4 "Não serve esta op" ≠ "parâmetro inválido"
+
+Quando um backend não consegue atender (ex.: web sem `processo`, op REST-only),
+levante `SEINotImplementedError` — não `SEIValidationError`. Isso permite ao
+`CompositeBackend` cair para o outro backend, em vez de tratar como erro
+definitivo de validação.
+
+### 6.5 Fallback do composite por categoria + prioridade
+
+`_dispatch_in_order` cai para o próximo backend em `NotImplementedError`,
+`SEINotImplementedError`, `SEINotFoundError`, `SEIParseError`,
+`SEIConnectionError` e `httpx.RequestError`. Erros definitivos de domínio
+(`SEIPermissionError`, `SEIValidationError`, `SEIAuthError`) **propagam sem
+fallback**. Quando mais de um backend falha, `_prioridade_erro` faz o erro mais
+informativo prevalecer (falha real de transporte/404/parse > "não serve esta op"
+> stub base), para o agente nunca receber "sem mod-wssei" mascarando uma falha
+de rede real do REST.
+
+### 6.6 Conjunto de exceções vigente
+
+As sete da §2.1, mais `SEICaptchaError` (subclasse de `SEIAuthError`) e
+`SEINotImplementedError`. **Não há** subclasses por cenário (assinado / não
+autorizado / aberto em outra unidade): essas condições viajam na *mensagem* do
+`SEIError` que o cliente já levanta, conforme §6.2.
+
+### 6.7 Não mascarar conectividade
+
+Um `except` que cai para "não encontrado"/resultado vazio deve **re-levantar
+`SEIConnectionError`** — uma falha de rede não pode virar `SEINotFoundError`.

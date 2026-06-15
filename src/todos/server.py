@@ -513,9 +513,9 @@ async def sei_sobrestar_processo(
 
     """
     backend = _backend(ctx)
-    # O backend resolve processo/vinculado → id e levanta ProcessoEmOutraUnidadeError
-    # (mensagem aponta sei_listar_unidades_processo) quando o processo está aberto
-    # em outra unidade.
+    # O backend resolve processo/vinculado → id; se o processo estiver aberto em
+    # outra unidade, o SEI rejeita e o erro original (com a mensagem do SEI)
+    # propaga ao agente.
     result = await backend.sobrestar_processo(processo, motivo, processo_vinculado)
     return _json(result)
 

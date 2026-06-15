@@ -16,13 +16,12 @@ from typing import Literal
 import httpx
 from fastmcp import Context
 
-from todos.exceptions import DocumentoAssinadoError, SEIError
+from todos.exceptions import SEIError
 from todos.html_utils import sanitize_iso8859
 from todos.mcp_app import (
     _IDEM,
     _READ,
     _backend,
-    _error,
     _get_client,
     _json,
     _resolver_documento,
@@ -50,57 +49,44 @@ async def sei_cancelar_assinatura(
 
     Orquestração: o SEI não expõe "cancelar assinatura" como op; a tool força uma
     edição mínima (derruba a assinatura) compondo listar_secoes + alterar_secoes
-    pelo backend composto. Quando o documento está travado por assinatura, o
-    backend levanta DocumentoAssinadoError — capturado por TIPO aqui.
+    pelo backend composto. Se o documento estiver travado (processo já lido/
+    enviado), o SEI rejeita a edição e o erro original propaga ao agente — é um
+    ToolError com a mensagem do próprio SEI.
     """
-    try:
-        backend = _backend(ctx)
+    backend = _backend(ctx)
 
-        # Resolver número SEI → id interno (best-effort, pesquisa Solr REST-only)
-        doc_id = id_documento.strip()
-        with suppress(SEIError, httpx.HTTPError):
-            doc_id, _ = await _resolver_documento(_get_client(ctx), doc_id)
+    # Resolver número SEI → id interno (best-effort, pesquisa Solr REST-only)
+    doc_id = id_documento.strip()
+    with suppress(SEIError, httpx.HTTPError):
+        doc_id, _ = await _resolver_documento(_get_client(ctx), doc_id)
 
-        # Verificar se está assinado e capturar a versão atual
-        secoes_data = await backend.listar_secoes(doc_id)
-        versao = str(secoes_data.get("ultimaVersaoDocumento", "1"))
+    # Verificar se está assinado e capturar a versão atual
+    secoes_data = await backend.listar_secoes(doc_id)
+    versao = str(secoes_data.get("ultimaVersaoDocumento", "1"))
 
-        # Montar payload com todas as seções (mesmo conteúdo)
-        secoes_enviar = []
-        for s in secoes_data.get("secoes", []):
-            if not isinstance(s, dict):
-                continue
-            conteudo = html.unescape(s.get("conteudo", "") or "")
-            secoes_enviar.append(
-                {
-                    "id": str(s.get("id")),
-                    "idSecaoModelo": str(s.get("idSecaoModelo")),
-                    "conteudo": sanitize_iso8859(conteudo),
-                }
-            )
-
-        # Editar (derruba assinatura se permitido)
-        result = await backend.alterar_secoes(doc_id, secoes_enviar, versao)
-        return _json(
+    # Montar payload com todas as seções (mesmo conteúdo)
+    secoes_enviar = []
+    for s in secoes_data.get("secoes", []):
+        if not isinstance(s, dict):
+            continue
+        conteudo = html.unescape(s.get("conteudo", "") or "")
+        secoes_enviar.append(
             {
-                "mensagem": "Assinatura cancelada com sucesso. O documento foi editado (nova versão).",
-                "versao": result,
+                "id": str(s.get("id")),
+                "idSecaoModelo": str(s.get("idSecaoModelo")),
+                "conteudo": sanitize_iso8859(conteudo),
             }
         )
-    except DocumentoAssinadoError as e:
-        return _json(
-            {
-                "error": "Não foi possível cancelar a assinatura.",
-                "motivo": str(e),
-                "dica": "O documento está travado: o processo já foi lido e/ou "
-                "enviado para outra unidade. Nesse estado a assinatura NÃO pode "
-                "mais ser cancelada — por nenhum meio, nem pela interface web do "
-                "SEI. O cancelamento só é possível enquanto o processo permanece "
-                "exclusivamente na unidade geradora, sem leitura ou tramitação.",
-            }
-        )
-    except (SEIError, httpx.HTTPError) as e:
-        return _error(str(e))
+
+    # Editar derruba a assinatura se o documento ainda puder ser editado. Se
+    # estiver travado (processo lido/enviado), o SEI rejeita e o erro propaga.
+    result = await backend.alterar_secoes(doc_id, secoes_enviar, versao)
+    return _json(
+        {
+            "mensagem": "Assinatura cancelada com sucesso. O documento foi editado (nova versão).",
+            "versao": result,
+        }
+    )
 
 
 @mcp.tool(annotations=_IDEM)

@@ -41,7 +41,6 @@ from todos.mcp_app import (
     MAX_BINARY_SIZE,
     _aplicar_gate_documento,
     _backend,
-    _e_nao_autorizado,
     _error,
     _get_client,
     _has_rest,
@@ -200,16 +199,10 @@ async def sei_ler_documento(
             processo,
             confirmou=confirmar_acesso_restrito,
         )
-    except (SEIError, httpx.HTTPError) as e:
-        msg = str(e)
-        if _e_nao_autorizado(e):
-            return _json(
-                {
-                    "error": msg,
-                    "dica": "Acesso negado. Troque para a unidade geradora com sei_trocar_unidade.",
-                }
-            )
-        return _error(msg)
+    except httpx.RequestError as e:
+        # httpx não é ToolError → converte para o erro de domínio e propaga.
+        msg = f"SEI inacessível: {e}"
+        raise SEIConnectionError(msg) from e
 
 
 def _envelopar_anexo(content: bytes, disclaimer: dict | None) -> str:
@@ -541,39 +534,17 @@ async def sei_criar_documento_externo(
     return _json(result)
 
 
-async def _reconsultar_documento_externo(
-    ctx: Context | None, backend: SEIBackend, id_documento: str
-) -> tuple[dict | None, str]:
-    """Tenta recuperar um 'não autorizado' resolvendo número SEI → id interno.
-
-    A resolução número SEI → id é uma pesquisa Solr (REST-only); a reconsulta
-    dos metadados volta a passar pelo backend composto. Retorna
-    `(result, id_resolvido)` em caso de sucesso; `(None, id_documento)` quando o
-    id não pôde ser resolvido para um id interno diferente.
-    """
-    if not _has_rest(ctx):
-        return None, id_documento
-    try:
-        doc_id, _ = await _resolver_documento(_get_client(ctx), id_documento)
-        if doc_id == id_documento:
-            return None, id_documento
-        result = await backend.consultar_documento_externo(doc_id, None)
-    except (SEIError, httpx.HTTPError):
-        return None, id_documento
-    return result, doc_id
-
-
 @mcp.tool(annotations=_READ)
 async def sei_consultar_documento_externo(
     id_documento: str,
     processo: str | None = None,
     ctx: Context | None = None,
 ) -> str:
-    """Consulta metadados de um documento externo pelo ID.
+    """Consulta metadados de um documento externo pelo ID INTERNO.
 
-    Aceita tanto o id interno (ex: "3149544") quanto o número SEI /
-    protocoloFormatado (ex: "2867926") — auto-resolve via pesquisa Solr
-    quando necessário.
+    Passe o id interno do documento (ex.: "3149544"). Se você só tem o número
+    SEI / protocoloFormatado (ex.: "2867926"), resolva-o antes com
+    sei_buscar_documento — o SEI rejeita o número SEI aqui com "não autorizado".
 
     - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
 
@@ -588,29 +559,7 @@ async def sei_consultar_documento_externo(
     Se falhar com erro inesperado, use sei_versao para verificar a versão.
     """
     try:
-        backend = _backend(ctx)
-        try:
-            result = await backend.consultar_documento_externo(id_documento, processo)
-        except (SEIError, httpx.HTTPError) as primeira:
-            msg = str(primeira)
-            if not _e_nao_autorizado(primeira):
-                raise
-            # Se não autorizado, pode ser id errado (passou número SEI). Tenta resolver.
-            result, id_documento = await _reconsultar_documento_externo(ctx, backend, id_documento)
-            if result is None:
-                return _json(
-                    {
-                        "error": msg,
-                        "dica": (
-                            "SEI retornou 'não autorizado' para o id "
-                            f"{id_documento!r}. Verifique se você passou o id "
-                            "INTERNO do documento (ex.: 3149544) e não o número "
-                            "SEI / protocoloFormatado (ex.: 2867926). Use "
-                            "sei_buscar_documento para resolver número SEI → id."
-                        ),
-                    }
-                )
-
+        result = await _backend(ctx).consultar_documento_externo(id_documento, processo)
         nivel, hipotese = access_control.extrair_nivel(result)
         if nivel is None:
             nivel = access_control.extrair_nivel_web(result)

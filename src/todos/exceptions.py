@@ -20,9 +20,11 @@ class SEIError(ToolError):
 
     Subclasse de `ToolError`: o FastMCP entrega a mensagem de um `ToolError`
     diretamente ao agente (exceções comuns são mascaradas como "internal error").
-    Por isso as tools podem simplesmente deixar o `SEIError` propagar — não há
-    mais `_to_tool_error`. Onde uma orientação acionável importa, criamos um erro
-    específico do cenário (ex.: `DocumentoAssinadoError`) carregando a mensagem.
+    Por isso as tools simplesmente deixam o `SEIError` propagar — sem
+    `_to_tool_error`, sem tradução e sem reembrulho. A orientação acionável vem
+    na mensagem que o cliente/scraper coloca ao levantar o erro (o SEI já devolve
+    um texto explicativo); quem só precisa da categoria captura por TIPO
+    (`except SEIAuthError`, `SEINotFoundError`, …).
     """
 
 
@@ -56,22 +58,3 @@ class SEIValidationError(SEIError):
 
 class SEINotImplementedError(SEIError):
     """Operação não suportada pelo backend ativo (ex: REST-only sem mod-wssei)."""
-
-
-# ── Erros de domínio compartilhados ──────────────────────────────────────────
-# Cenários recorrentes que mais de um backend reconhece. Ficam aqui (e não num
-# mixin) para que tanto quem levanta (backends) quanto quem trata (tools/app)
-# possam referenciá-los por TIPO via `isinstance`, em vez de inspecionar o texto
-# da mensagem.
-
-
-class DocumentoNaoAutorizadoError(SEIPermissionError):
-    """Acesso ao documento negado — id interno vs número SEI, processo fora da caixa, ou permissão."""
-
-
-class DocumentoAssinadoError(SEIValidationError):
-    """Documento já assinado — não pode ser alterado sem cancelar a assinatura."""
-
-
-class ProcessoEmOutraUnidadeError(SEIValidationError):
-    """Processo aberto/tramitando em outra unidade — receba-o antes de agir."""

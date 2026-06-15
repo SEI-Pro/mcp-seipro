@@ -1,57 +1,24 @@
 """Mixin REST — documentos internos, externos, seções, assinaturas e ciências.
 
-Os erros específicos deste domínio são definidos aqui (subclasses das categorias
-de `todos.exceptions`) e levantados pelos métodos que conhecem o contexto, via
-`try/except … raise XxxError from e` (com re-raise do erro original quando não há
-condição conhecida).
+Sem tradução de erros: cada método delega ao SEIClient, que já levanta o SEIError
+adequado (com a mensagem do SEI). O erro original propaga sem reembrulho.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 import httpx
 
 from todos.backends.rest._session import _RestMixin
-from todos.exceptions import DocumentoAssinadoError, DocumentoNaoAutorizadoError, SEIError
+from todos.exceptions import SEIError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
-
     from todos.backends.models import NovoDocumentoExterno, NovoDocumentoInterno
-
-_T = TypeVar("_T")
-
-
-def _traduzir_erro_documento(e: SEIError) -> SEIError | None:
-    """Mapeia um erro de documento numa exceção específica, ou None se desconhecido."""
-    low = str(e).lower()
-    if "assinad" in low:
-        return DocumentoAssinadoError(
-            "Documento já assinado — cancele a assinatura (sei_cancelar_assinatura) "
-            "ou edite pela interface web do SEI antes de alterar."
-        )
-    if "não autorizado" in low or "nao autorizado" in low:
-        return DocumentoNaoAutorizadoError(
-            "Acesso ao documento negado. Confirme se passou o id INTERNO do documento "
-            "(ex.: 3149544) e não o número SEI / protocoloFormatado — use "
-            "sei_buscar_documento para resolver —, ou verifique seu nível de acesso."
-        )
-    return None
 
 
 class DocumentosRest(_RestMixin):
     """Operações REST de documentos."""
-
-    async def _doc(self, coro: Awaitable[_T]) -> _T:
-        """Executa uma chamada de documento, traduzindo erros conhecidos do SEI."""
-        try:
-            return await coro
-        except SEIError as e:
-            especifico = _traduzir_erro_documento(e)
-            if especifico is not None:
-                raise especifico from e
-            raise
 
     async def buscar_documento(self, numero_sei: str, processo: str = "") -> dict:
         """Busca um documento pelo número SEI via pesquisa textual REST (Solr)."""
@@ -102,26 +69,26 @@ class DocumentosRest(_RestMixin):
     ) -> dict:
         """Consulta metadados de um documento interno."""
         del processo  # REST localiza o documento pelo id; protocolo não é necessário
-        return await self._doc(self._rest.consultar_documento_interno(id_documento))
+        return await self._rest.consultar_documento_interno(id_documento)
 
     async def consultar_documento_externo(
         self, id_documento: str, processo: str | None = None
     ) -> dict:
         """Consulta metadados de um documento externo."""
         del processo  # contrato exige o parâmetro; a REST resolve só pelo id
-        return await self._doc(self._rest.consultar_documento_externo(id_documento))
+        return await self._rest.consultar_documento_externo(id_documento)
 
     async def visualizar_documento_interno(
         self, id_documento: str, processo: str | None = None
     ) -> str:
         """Retorna o HTML de um documento interno."""
         del processo  # REST localiza o documento pelo id; protocolo não é necessário
-        return await self._doc(self._rest.visualizar_documento_interno(id_documento))
+        return await self._rest.visualizar_documento_interno(id_documento)
 
     async def baixar_anexo(self, id_documento: str, processo: str | None = None) -> bytes:
         """Baixa os bytes de um documento externo (anexo)."""
         del processo  # contrato exige o parâmetro; a REST resolve só pelo id
-        return await self._doc(self._rest.baixar_anexo(id_documento))
+        return await self._rest.baixar_anexo(id_documento)
 
     async def criar_documento_interno(self, processo: str, dados: NovoDocumentoInterno) -> dict:
         """Cria um documento interno (editor HTML) em um processo."""
@@ -154,13 +121,11 @@ class DocumentosRest(_RestMixin):
         hipotese_legal: str = "",
     ) -> dict:
         """Altera metadados de um documento interno."""
-        return await self._doc(
-            self._rest.alterar_documento_interno(
-                id_documento=id_documento,
-                descricao=descricao,
-                nivel_acesso=nivel_acesso,
-                id_hipotese_legal=hipotese_legal,
-            )
+        return await self._rest.alterar_documento_interno(
+            id_documento=id_documento,
+            descricao=descricao,
+            nivel_acesso=nivel_acesso,
+            id_hipotese_legal=hipotese_legal,
         )
 
     async def alterar_documento_externo(
@@ -172,14 +137,12 @@ class DocumentosRest(_RestMixin):
         arquivo_path: str = "",
     ) -> dict:
         """Altera metadados (e opcionalmente o arquivo) de um documento externo."""
-        return await self._doc(
-            self._rest.alterar_documento_externo(
-                id_documento=id_documento,
-                descricao=descricao,
-                nivel_acesso=nivel_acesso,
-                id_hipotese_legal=hipotese_legal,
-                arquivo_path=arquivo_path,
-            )
+        return await self._rest.alterar_documento_externo(
+            id_documento=id_documento,
+            descricao=descricao,
+            nivel_acesso=nivel_acesso,
+            id_hipotese_legal=hipotese_legal,
+            arquivo_path=arquivo_path,
         )
 
     async def listar_secoes(self, id_documento: str) -> dict:
@@ -188,9 +151,7 @@ class DocumentosRest(_RestMixin):
 
     async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str = "") -> dict:
         """Edita seções de um documento interno."""
-        return await self._doc(
-            self._rest.alterar_secao_documento(id_documento, secoes, versao or "1")
-        )
+        return await self._rest.alterar_secao_documento(id_documento, secoes, versao or "1")
 
     async def sugestao_assuntos_documento(self, id_serie: str) -> list[dict]:
         """Sugere assuntos para um tipo de documento."""

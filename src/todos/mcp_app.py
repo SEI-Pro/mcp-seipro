@@ -20,7 +20,6 @@ from todos.exceptions import (
     SEIConnectionError,
     SEIError,
     SEINotFoundError,
-    SEIPermissionError,
 )
 from todos.sei_client import SEIClient
 from todos.sei_styles import (
@@ -449,20 +448,6 @@ async def _solicitar_consentimento_via_elicit(
     return "recusou"
 
 
-def _e_nao_autorizado(exc: Exception) -> bool:
-    """Detecta se o erro indica acesso negado ao documento.
-
-    Reconhece tanto a exceção tipada que os backends levantam
-    (`SEIPermissionError`, ex.: `DocumentoNaoAutorizadoError`) — cuja mensagem
-    traduzida já NÃO contém "não autorizado" — quanto mensagens cruas que ainda
-    tragam o texto do SEI.
-    """
-    if isinstance(exc, SEIPermissionError):
-        return True
-    low = str(exc).lower()
-    return "não autorizado" in low or "nao autorizado" in low or "acesso negado" in low
-
-
 async def _consultar_meta_documento(
     backend: _SEIBackendV2,
     id_documento: str,
@@ -504,20 +489,9 @@ async def _aplicar_gate_documento(
     try:
         meta = await _consultar_meta_documento(backend, id_documento, tipo_documento, processo)
     except (SEIError, httpx.HTTPError) as e:
-        msg = str(e)
-        if _e_nao_autorizado(e):
-            return (
-                "erro",
-                None,
-                (
-                    f"SEI retornou 'não autorizado' para o id {id_documento!r}. "
-                    "Verifique se você passou o id INTERNO do documento (ex.: 3149544) "
-                    "e não o número SEI / protocoloFormatado (ex.: 2867926). "
-                    "Se tiver apenas o número SEI, use sei_buscar_documento ou "
-                    "sei_ler_documento (que faz auto-resolução)."
-                ),
-            )
-        return ("erro", None, f"Falha ao consultar metadados: {msg}")
+        # Falha FECHADA: a mensagem original do SEI (já acionável) vira o erro do
+        # gate, sem tradução nem reinspeção de texto.
+        return ("erro", None, f"Falha ao consultar metadados: {e}")
 
     nivel, hipotese = access_control.extrair_nivel(meta)
     if nivel is None:

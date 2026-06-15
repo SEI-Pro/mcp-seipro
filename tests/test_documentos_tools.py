@@ -13,7 +13,7 @@ import asyncio
 import pytest
 
 from todos import access_control
-from todos.exceptions import DocumentoAssinadoError, SEIPermissionError
+from todos.exceptions import SEIError
 from todos.tools import assinatura as a
 from todos.tools import documentos as d
 
@@ -197,17 +197,18 @@ class _GateErroBackend:
         self, id_documento: str, processo: str | None = None
     ) -> dict:
         del id_documento, processo
-        # Real backends translate "não autorizado" into this typed error whose
-        # message no longer carries the substring — must be detected by type.
-        msg = "Acesso ao documento negado."
-        raise SEIPermissionError(msg)
+        # The client raises a SEIError carrying the SEI message; it propagates
+        # untouched (no translation), surfacing through the gate.
+        msg = "documento não autorizado"
+        raise SEIError(msg)
 
 
-def test_ler_documento_surfaces_nao_autorizado_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ler_documento_surfaces_original_consult_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(d, "_backend", lambda _ctx: _GateErroBackend())
     monkeypatch.setattr(d, "_has_rest", lambda _ctx: False)
     out = asyncio.run(d.sei_ler_documento("D", tipo_documento="I", processo="PF", ctx=None))
-    assert "id INTERNO" in out
+    # Fail-closed gate surfaces the original SEI message (no tailored hint).
+    assert "não autorizado" in out
 
 
 class _AnexoBackend:
@@ -250,42 +251,29 @@ def test_consultar_documento_externo_attaches_aviso_for_restricted(
     assert "_aviso_acesso" in out
 
 
-_NUMERO_SEI = "2867926"  # protocoloFormatado the user might pass by mistake
-_ID_INTERNO = "3149544"  # the internal id it resolves to
-
-
-class _ReconsultaBackend:
+class _ConsultaErroBackend:
     name = "fake"
 
     async def consultar_documento_externo(
         self, id_documento: str, processo: str | None = None
     ) -> dict:
-        del processo
-        if id_documento == _NUMERO_SEI:  # número SEI → permission denied
-            msg = "Acesso ao documento negado."
-            raise SEIPermissionError(msg)
-        return {"nivelAcesso": "0", "id": id_documento}
+        del id_documento, processo
+        msg = "documento não autorizado"
+        raise SEIError(msg)
 
 
-def test_consultar_documento_externo_recovers_via_reconsulta(
+def test_consultar_documento_externo_propagates_original_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Regression guard: a typed SEIPermissionError (translated message, no
-    # "não autorizado" substring) must still trigger número SEI → id recovery.
-    async def _fake_resolver(_client: object, _ref: str) -> tuple[str, str]:
-        return _ID_INTERNO, "X"
-
-    monkeypatch.setattr(d, "_backend", lambda _ctx: _ReconsultaBackend())
-    monkeypatch.setattr(d, "_has_rest", lambda _ctx: True)
-    monkeypatch.setattr(d, "_get_client", lambda _ctx: object())
-    monkeypatch.setattr(d, "_resolver_documento", _fake_resolver)
-
-    out = asyncio.run(d.sei_consultar_documento_externo(_NUMERO_SEI, ctx=None))
-    assert _ID_INTERNO in out  # recovered and returned the resolved doc's metadata
+    # No translation / no auto-recovery: the SEIError (a ToolError) propagates
+    # with the SEI's own message.
+    monkeypatch.setattr(d, "_backend", lambda _ctx: _ConsultaErroBackend())
+    with pytest.raises(SEIError, match="não autorizado"):
+        asyncio.run(d.sei_consultar_documento_externo("D", processo="PF", ctx=None))
 
 
 # ---------------------------------------------------------------------------
-# sei_cancelar_assinatura — detect the signed-lock by TYPE, not message
+# sei_cancelar_assinatura — original SEI error propagates when the doc is locked
 # ---------------------------------------------------------------------------
 
 
@@ -305,8 +293,9 @@ class _CancelarBackend:
     async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str) -> dict:
         del id_documento, secoes, versao
         if self._locked:
-            msg = "Documento já assinado — edite pela interface web."
-            raise DocumentoAssinadoError(msg)
+            # The SEIClient raises this with the SEI's own message; it propagates.
+            msg = "Erro ao alterar documento: documento já assinado."
+            raise SEIError(msg)
         return {"versao": "5"}
 
 
@@ -319,15 +308,12 @@ def _patch_cancelar(monkeypatch: pytest.MonkeyPatch, backend: _CancelarBackend) 
     monkeypatch.setattr(a, "_resolver_documento", _fake_resolver)
 
 
-def test_cancelar_assinatura_reports_signed_lock_by_type(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The backend raises DocumentoAssinadoError; the tool must catch it by TYPE
-    # and return the web-fallback guidance (not a generic error).
+def test_cancelar_assinatura_propagates_lock_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Locked document ⇒ the SEIError (a ToolError) propagates with the SEI
+    # message — no JSON envelope, no translation.
     _patch_cancelar(monkeypatch, _CancelarBackend(locked=True))
-    out = asyncio.run(a.sei_cancelar_assinatura("D", ctx=None))
-    assert "Não foi possível cancelar" in out
-    # Honest guidance: once read/sent it cannot be cancelled by any means.
-    assert "NÃO pode" in out
-    assert "nenhum meio" in out
+    with pytest.raises(SEIError, match="assinado"):
+        asyncio.run(a.sei_cancelar_assinatura("D", ctx=None))
 
 
 def test_cancelar_assinatura_success(monkeypatch: pytest.MonkeyPatch) -> None:
