@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from todos.backends.base import SEIBackend
-from todos.tools import processos
+from todos.tools import documentos, processos
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,6 +37,7 @@ _MODULES = [
     "todos.tools.blocos_internos",
     "todos.tools.catalogos",
     "todos.tools.credenciamento",
+    "todos.tools.documentos",
     "todos.tools.marcadores",
     "todos.tools.processos",
     "todos.tools.unidades",
@@ -500,6 +501,43 @@ _ROUTES: list[tuple[str, str, dict, str, list[object]]] = [
         "executar_acao",
         ["P", "A"],
     ),
+    # --- documentos (migrated onto the composite contract) ---
+    ("documentos", "sei_listar_secoes", {"id_documento": "D"}, "listar_secoes", ["D"]),
+    (
+        "documentos",
+        "sei_sugestao_assuntos_documento",
+        {"id_serie": "S"},
+        "sugestao_assuntos_documento",
+        ["S"],
+    ),
+    (
+        "documentos",
+        "sei_listar_blocos_documento",
+        {"id_documento": "D"},
+        "listar_blocos_documento",
+        ["D"],
+    ),
+    (
+        "documentos",
+        "sei_alterar_documento_interno",
+        {"id_documento": "D", "descricao": "Desc"},
+        "alterar_documento_interno",
+        ["D", "Desc"],
+    ),
+    (
+        "documentos",
+        "sei_alterar_documento_externo",
+        {"id_documento": "D", "descricao": "Desc"},
+        "alterar_documento_externo",
+        ["D", "Desc"],
+    ),
+    (
+        "documentos",
+        "sei_criar_documento_externo",
+        {"processo": "PF", "id_serie": "S", "arquivo_path": "doc.pdf"},
+        "criar_documento_externo",
+        ["PF"],
+    ),
     # --- unidades ---
     ("unidades", "sei_pesquisar_unidades", {"filtro": "fil"}, "pesquisar_unidades", ["fil"]),
     ("unidades", "sei_pesquisar_usuarios", {"filtro": "fil"}, "pesquisar_usuarios", ["fil"]),
@@ -565,6 +603,34 @@ def test_executar_acao_dry_run_does_not_touch_backend(monkeypatch: pytest.Monkey
     result = asyncio.run(processos.sei_executar_acao("P", "procedimento_concluir", ctx=None))
     assert fake.calls == []
     assert "dry_run" in result
+
+
+def test_editar_secao_reads_then_writes_via_composite(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Migrated tool: must fetch current sections then submit the full set, both
+    # through the composite (no direct REST client).
+    fake = RecordingBackend({"secoes": [], "ultimaVersaoDocumento": "3"})
+    monkeypatch.setattr(documentos, "_backend", lambda _ctx: fake)
+
+    asyncio.run(
+        documentos.sei_editar_secao("D", [{"idSecaoModelo": "1", "conteudo": "x"}], ctx=None)
+    )
+    ops = [c[0] for c in fake.calls]
+    assert ops == ["listar_secoes", "alterar_secoes"]
+
+
+def test_criar_documento_routes_to_composite(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Migrated hybrid create: routes through backend.criar_documento_interno
+    # regardless of REST/web; the processo and a NovoDocumentoInterno are passed.
+    # _has_rest only gates the id_serie validation message, so stub it.
+    fake = RecordingBackend()
+    monkeypatch.setattr(documentos, "_backend", lambda _ctx: fake)
+    monkeypatch.setattr(documentos, "_has_rest", lambda _ctx: True)
+
+    asyncio.run(documentos.sei_criar_documento("PF", id_serie="S", descricao="d", ctx=None))
+    op, args, _ = fake.calls[0]
+    assert op == "criar_documento_interno"
+    assert args[0] == "PF"
+    assert args[1].id_serie == "S"
 
 
 def test_no_route_targets_a_nonexistent_contract_op() -> None:

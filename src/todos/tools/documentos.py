@@ -21,6 +21,7 @@ import httpx
 from fastmcp import Context
 
 from todos import access_control
+from todos.backends import NovoDocumentoExterno, NovoDocumentoInterno
 from todos.exceptions import SEIConnectionError, SEIError
 from todos.html_utils import (
     html_to_markdown,
@@ -36,6 +37,7 @@ from todos.mcp_app import (
     MAX_BINARY_SIZE,
     _aplicar_gate_documento,
     _aplicar_gate_documento_web,
+    _backend,
     _error,
     _get_client,
     _get_web_client,
@@ -43,7 +45,6 @@ from todos.mcp_app import (
     _http_mode,
     _json,
     _resolver_documento,
-    _resolver_processo,
     mcp,
 )
 from todos.sei_client import SEIClient
@@ -390,35 +391,21 @@ async def sei_criar_documento(
     O documento é criado vazio. Use sei_listar_secoes e sei_editar_secao
     para inserir conteúdo.
     """
-    try:
-        if _has_rest(ctx):
-            if not id_serie:
-                return _error(
-                    "id_serie é obrigatório no modo REST. "
-                    "Use sei_pesquisar_tipos_documento para listar os tipos disponíveis."
-                )
-            client = _get_client(ctx)
-            id_procedimento = await _resolver_processo(client, processo)
-            result = await client.criar_documento_interno(
-                id_procedimento=id_procedimento,
-                id_serie=id_serie,
-                descricao=descricao,
-                nivel_acesso=nivel_acesso,
-                hipotese_legal=hipotese_legal,
-                id_unidade=id_unidade,
-            )
-            return _json(result)
-        result = await _get_web_client(ctx).criar_documento_interno_web(
-            protocolo=processo,
-            id_serie=id_serie,
-            descricao=descricao,
-            nivel_acesso=nivel_acesso,
-            hipotese_legal=hipotese_legal,
+    # id_serie é obrigatório no caminho REST; no web vazio retorna os tipos.
+    if _has_rest(ctx) and not id_serie:
+        return _error(
+            "id_serie é obrigatório no modo REST. "
+            "Use sei_pesquisar_tipos_documento para listar os tipos disponíveis."
         )
-        return _json(result)
-    except httpx.RequestError as e:
-        msg = f"SEI inacessível: {e}"
-        raise SEIConnectionError(msg) from e
+    dados = NovoDocumentoInterno(
+        id_serie=id_serie,
+        descricao=descricao,
+        nivel_acesso=nivel_acesso,
+        hipotese_legal=hipotese_legal,
+        id_unidade=id_unidade,
+    )
+    result = await _backend(ctx).criar_documento_interno(processo, dados)
+    return _json(result)
 
 
 @mcp.tool(annotations=_READ)
@@ -429,13 +416,8 @@ async def sei_listar_secoes(id_documento: str, ctx: Context | None = None) -> st
     e a versão do documento (campo ultimaVersaoDocumento),
     necessária para usar sei_editar_secao.
     """
-    try:
-        client = _get_client(ctx)
-        result = await client.listar_secao_documento(id_documento)
-        return _json(result)
-    except httpx.RequestError as e:
-        msg = f"SEI inacessível: {e}"
-        raise SEIConnectionError(msg) from e
+    result = await _backend(ctx).listar_secoes(id_documento)
+    return _json(result)
 
 
 @mcp.tool(annotations=_READ)
@@ -565,56 +547,48 @@ async def sei_editar_secao(
     IMPORTANTE: O SEI exige que TODAS as seções sejam enviadas. Esta tool
     faz isso automaticamente — basta informar as seções que deseja alterar.
     """
-    try:
-        client = _get_client(ctx)
+    backend = _backend(ctx)
 
-        # Buscar todas as seções atuais do documento
-        secoes_data = await client.listar_secao_documento(id_documento)
-        secoes_atuais = secoes_data.get("secoes", [])
-        if not versao:
-            versao = str(secoes_data.get("ultimaVersaoDocumento", "1"))
+    # Buscar todas as seções atuais do documento
+    secoes_data = await backend.listar_secoes(id_documento)
+    secoes_atuais = secoes_data.get("secoes", [])
+    if not versao:
+        versao = str(secoes_data.get("ultimaVersaoDocumento", "1"))
 
-        # Indexar seções novas por idSecaoModelo
-        alteracoes = {}
-        for s in secoes:
-            modelo = s.get("idSecaoModelo", "")
-            if modelo:
-                alteracoes[modelo] = s.get("conteudo", "")
+    # Indexar seções novas por idSecaoModelo
+    alteracoes = {}
+    for s in secoes:
+        modelo = s.get("idSecaoModelo", "")
+        if modelo:
+            alteracoes[modelo] = s.get("conteudo", "")
 
-        # Montar payload completo com TODAS as seções
-        secoes_enviar = []
-        for s in secoes_atuais:
-            if not isinstance(s, dict):
-                continue
-            sid = s.get("id") or s.get("IdSecaoDocumento")
-            modelo = s.get("idSecaoModelo") or s.get("IdSecaoModelo")
-            if not sid or not modelo:
-                continue
+    # Montar payload completo com TODAS as seções
+    secoes_enviar = []
+    for s in secoes_atuais:
+        if not isinstance(s, dict):
+            continue
+        sid = s.get("id") or s.get("IdSecaoDocumento")
+        modelo = s.get("idSecaoModelo") or s.get("IdSecaoModelo")
+        if not sid or not modelo:
+            continue
 
-            if str(modelo) in alteracoes:
-                # Seção alterada pelo usuário
-                conteudo = alteracoes[str(modelo)]
-            else:
-                # Seção original — fazer unescape do HTML-escaped
-                conteudo = html_module.unescape(s.get("conteudo", "") or "")
+        if str(modelo) in alteracoes:
+            # Seção alterada pelo usuário
+            conteudo = alteracoes[str(modelo)]
+        else:
+            # Seção original — fazer unescape do HTML-escaped
+            conteudo = html_module.unescape(s.get("conteudo", "") or "")
 
-            secoes_enviar.append(
-                {
-                    "id": str(sid),
-                    "idSecaoModelo": str(modelo),
-                    "conteudo": sanitize_iso8859(conteudo),
-                }
-            )
-
-        result = await client.alterar_secao_documento(
-            id_documento=id_documento,
-            secoes=secoes_enviar,
-            versao=versao,
+        secoes_enviar.append(
+            {
+                "id": str(sid),
+                "idSecaoModelo": str(modelo),
+                "conteudo": sanitize_iso8859(conteudo),
+            }
         )
-        return _json(result)
-    except httpx.RequestError as e:
-        msg = f"SEI inacessível: {e}"
-        raise SEIConnectionError(msg) from e
+
+    result = await backend.alterar_secoes(id_documento, secoes_enviar, versao)
+    return _json(result)
 
 
 @mcp.tool(annotations=_WRITE)
@@ -634,20 +608,14 @@ async def sei_criar_documento_externo(
     - descricao: descrição do documento
     - nivel_acesso: 0=público (padrão), 1=restrito, 2=sigiloso
     """
-    try:
-        client = _get_client(ctx)
-        id_proc = await _resolver_processo(client, processo)
-        result = await client.criar_documento_externo(
-            id_procedimento=id_proc,
-            id_serie=id_serie,
-            arquivo_path=arquivo_path,
-            descricao=descricao,
-            nivel_acesso=nivel_acesso,
-        )
-        return _json(result)
-    except httpx.RequestError as e:
-        msg = f"SEI inacessível: {e}"
-        raise SEIConnectionError(msg) from e
+    dados = NovoDocumentoExterno(
+        id_serie=id_serie,
+        arquivo_path=arquivo_path,
+        descricao=descricao,
+        nivel_acesso=nivel_acesso,
+    )
+    result = await _backend(ctx).criar_documento_externo(processo, dados)
+    return _json(result)
 
 
 async def _reconsultar_documento_externo(
@@ -761,18 +729,13 @@ async def sei_alterar_documento_interno(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    try:
-        client = _get_client(ctx)
-        result = await client.alterar_documento_interno(
-            id_documento=id_documento,
-            descricao=descricao,
-            nivel_acesso=nivel_acesso,
-            id_hipotese_legal=hipotese_legal,
-        )
-        return _json(result)
-    except httpx.RequestError as e:
-        msg = f"SEI inacessível: {e}"
-        raise SEIConnectionError(msg) from e
+    result = await _backend(ctx).alterar_documento_interno(
+        id_documento=id_documento,
+        descricao=descricao,
+        nivel_acesso=nivel_acesso,
+        hipotese_legal=hipotese_legal,
+    )
+    return _json(result)
 
 
 @mcp.tool(annotations=_IDEM)
@@ -795,19 +758,14 @@ async def sei_alterar_documento_externo(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    try:
-        client = _get_client(ctx)
-        result = await client.alterar_documento_externo(
-            id_documento=id_documento,
-            descricao=descricao,
-            nivel_acesso=nivel_acesso,
-            id_hipotese_legal=hipotese_legal,
-            arquivo_path=arquivo_path,
-        )
-        return _json(result)
-    except httpx.RequestError as e:
-        msg = f"SEI inacessível: {e}"
-        raise SEIConnectionError(msg) from e
+    result = await _backend(ctx).alterar_documento_externo(
+        id_documento=id_documento,
+        descricao=descricao,
+        nivel_acesso=nivel_acesso,
+        hipotese_legal=hipotese_legal,
+        arquivo_path=arquivo_path,
+    )
+    return _json(result)
 
 
 @mcp.tool(annotations=_READ)
@@ -821,13 +779,8 @@ async def sei_sugestao_assuntos_documento(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    try:
-        client = _get_client(ctx)
-        result = await client.sugestao_assuntos_documento(id_serie)
-        return _json(result)
-    except httpx.RequestError as e:
-        msg = f"SEI inacessível: {e}"
-        raise SEIConnectionError(msg) from e
+    result = await _backend(ctx).sugestao_assuntos_documento(id_serie)
+    return _json(result)
 
 
 @mcp.tool(annotations=_READ)
@@ -840,13 +793,8 @@ async def sei_listar_blocos_documento(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    try:
-        client = _get_client(ctx)
-        result = await client.listar_blocos_documento(id_documento)
-        return _json(result)
-    except httpx.RequestError as e:
-        msg = f"SEI inacessível: {e}"
-        raise SEIConnectionError(msg) from e
+    result = await _backend(ctx).listar_blocos_documento(id_documento)
+    return _json(result)
 
 
 @mcp.tool(annotations=_WRITE)
