@@ -319,10 +319,9 @@ def _validate_credentials(conn: _SEIConnConfig) -> None:
             id_unid = unidade.get("id_unidade") or "N/A"
             print_green(f"    Usuário: {nome_usuario} (ID: {id_usuario}, Órgão: {orgao_usuario})")
             print_green(f"    Unidade Ativa: {sigla_unid} - {nome_unid} (ID: {id_unid})")
-    except SEICredenciaisError:
+    except SEICredenciaisError as e:
         web_client.limpar_senha()
-        print_yellow("[!] Verifique se digitou a senha certa e tente novamente.")
-        _confirmar_ou_abortar("\n[ERRO] Senha incorreta — o SEI rejeitou as credenciais.")
+        _confirmar_ou_abortar(f"\n[ERRO] {e}")
     except SEIAuthError as e:
         web_client.limpar_senha()
         _confirmar_ou_abortar(f"\n[ERRO] Falha de autenticação no SEI: {e}")

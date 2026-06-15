@@ -198,7 +198,14 @@ class SEIWebClient:
 
         self._usuario = sei_usuario or os.environ.get("SEI_USUARIO", "")
 
-        self._senha = sei_senha or os.environ.get("SEI_SENHA", "")
+        _env_senha = os.environ.get("SEI_SENHA", "")
+        self._senha = sei_senha or _env_senha
+        # Rastreia a fonte da senha para mensagem de erro acionável
+        self._senha_source_hint = (
+            "SEI_SENHA (variável de ambiente)"
+            if (not sei_senha and _env_senha)
+            else "senha configurada"
+        )
         # Pre-compute keyring key so login() can do the actual lookup in a thread
         self._keyring_user: str | None = None
         if not self._senha and self._usuario:
@@ -317,8 +324,7 @@ class SEIWebClient:
 
     async def login(self) -> None:
         """Faz login via formulário SIP e captura a inbox URL com infra_hash."""
-        # Rastreia a fonte da senha para mensagem de erro acionável
-        _senha_source = "SEI_SENHA (variável de ambiente)"
+        _senha_source = self._senha_source_hint
         if not self._senha and self._keyring_user:
             keyring_user = self._keyring_user
             self._keyring_user = None  # prevent concurrent / empty-string repeated lookups
@@ -343,8 +349,6 @@ class SEIWebClient:
             except (ImportError, OSError, RuntimeError, ValueError, AttributeError) as e:
                 self._keyring_user = keyring_user  # restore: transient error, allow retry
                 logger.warning("Não foi possível obter a senha do keyring: %s", e)
-        elif self._senha:
-            _senha_source = "SEI_SENHA (variável de ambiente)"
 
         if not self.sei_root:
             raise RuntimeError(
@@ -459,10 +463,12 @@ class SEIWebClient:
                         f"ou defina SEI_SENHA na configuração do MCP."
                     )
                 else:
-                    dica = (
-                        f"A senha em {_senha_source} foi recusada pelo SEI. "
-                        f"Verifique o valor de SEI_SENHA na configuração do MCP."
+                    acao = (
+                        "Verifique o valor de SEI_SENHA na configuração do MCP."
+                        if "SEI_SENHA" in _senha_source
+                        else "Verifique e atualize a senha nas configurações."
                     )
+                    dica = f"A senha em {_senha_source} foi recusada pelo SEI. {acao}"
                 raise SEICredenciaisError(
                     f"Credenciais rejeitadas pelo SEI "
                     f"(usuário: {self._usuario!r}, órgão selOrgao={form.get('selOrgao', '?')!r}). "
