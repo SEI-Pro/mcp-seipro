@@ -1052,6 +1052,31 @@ class SEIWebClient:
         nos = parse_arvore_nos(r2.text)
         arvore_html = r2.text
 
+        # Step 2b: resolve nós AGUARDE — SEI pagina a árvore quando há muitos
+        # documentos; cada placeholder AGUARDE representa uma página adicional.
+        # O link do nó aponta para a página, ou derivamos via pagina_arvore=N.
+        aguarde_nos = [n for n in nos[1:] if n.get("tipo_no") == "AGUARDE"]
+        if aguarde_nos:
+            arvore_url_str = str(arvore_url)
+            real_nos: list[dict] = [nos[0], *(n for n in nos[1:] if n.get("tipo_no") != "AGUARDE")]
+            for aguarde in aguarde_nos:
+                link = aguarde.get("link", "").replace("&amp;", "&")
+                if link:
+                    page_url = urljoin(str(r2.url), link)
+                else:
+                    m_page = re.search(r"\d+", aguarde.get("id", ""))
+                    if not m_page:
+                        continue
+                    sep = "&" if "?" in arvore_url_str else "?"
+                    page_url = f"{arvore_url_str}{sep}pagina_arvore={m_page.group()}"
+                r_pag = await self._http.get(page_url, headers={"Referer": trab_url})
+                if r_pag.is_success:
+                    page_nos = parse_arvore_nos(r_pag.text)
+                    real_nos.extend(n for n in page_nos if n.get("tipo_no") != "AGUARDE")
+                    arvore_html = r_pag.text
+                    logger.debug("AGUARDE %s resolvido: %d nós extras", aguarde.get("id"), len(page_nos))
+            nos = real_nos
+
         # Step 3: Se houver PASTA colapsadas, fetch novamente com abrir_pastas=1
         has_collapsed = len(nos) > 1 and any(n.get("tipo_no") == "PASTA" for n in nos[1:])
         if has_collapsed:
