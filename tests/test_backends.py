@@ -494,3 +494,63 @@ def test_criar_documento_externo_file_path_prefers_rest() -> None:
     dados = NovoDocumentoExterno(id_serie="S", arquivo_path="x.pdf")
     out = asyncio.run(c.criar_documento_externo("P", dados))
     assert out["src"] == "rest"
+
+
+# ---------------------------------------------------------------------------
+# Dispatch error priority: a real REST failure must win over a web "can't serve"
+# ---------------------------------------------------------------------------
+
+
+class _RestConnErr(SEIBackend):
+    name = "rest"
+
+    async def consultar_documento_externo(
+        self, id_documento: str, processo: str | None = None
+    ) -> dict:
+        del id_documento, processo
+        msg = "SEI inacessível: timeout"
+        raise SEIConnectionError(msg)
+
+
+class _WebNeedsProcesso(SEIBackend):
+    name = "web"
+
+    async def consultar_documento_externo(
+        self, id_documento: str, processo: str | None = None
+    ) -> dict:
+        del id_documento, processo
+        # Mirrors the web backend: "can't serve this op without processo".
+        msg = "forneça o parâmetro 'processo'"
+        raise SEINotImplementedError(msg)
+
+
+def test_rest_connection_error_wins_over_web_unsupported() -> None:
+    # Regression: a transient REST failure with processo=None must surface as a
+    # connection error, NOT the web's misleading "no mod-wssei / forneça processo".
+    c = CompositeBackend(_RestConnErr(), _WebNeedsProcesso())
+    with pytest.raises(SEIConnectionError):
+        asyncio.run(c.consultar_documento_externo("X", None))
+
+
+def test_web_unsupported_surfaces_when_it_is_the_only_error() -> None:
+    # Web-only (no REST): the SEINotImplementedError guidance must still surface.
+    c = CompositeBackend(None, _WebNeedsProcesso())
+    with pytest.raises(SEINotImplementedError, match="processo"):
+        asyncio.run(c.consultar_documento_externo("X", None))
+
+
+class _RestVersaoAntiga(SEIBackend):
+    name = "rest"
+
+    async def listar_relacionamentos(self, processo: str) -> dict:
+        del processo
+        msg = "requer mod-wssei 3.0.2+"
+        raise SEINotImplementedError(msg)
+
+
+def test_informative_not_implemented_preserved_over_base_stub() -> None:
+    # REST raises an informative SEINotImplementedError; web only has the base
+    # stub (bare NotImplementedError). The informative message must win.
+    c = CompositeBackend(_RestVersaoAntiga(), _FakeWeb())
+    with pytest.raises(SEINotImplementedError, match="mod-wssei"):
+        asyncio.run(c.listar_relacionamentos("X"))

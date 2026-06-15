@@ -490,6 +490,8 @@ async def _aplicar_gate_documento(
     (texto "Restrito"/"Sigiloso"). Falha FECHADA: se a consulta de metadados
     falhar, retorna "erro" em vez de liberar conteúdo potencialmente restrito
     sem checar o nível (mais seguro que o antigo fail-open do caminho web).
+    Isso vale INCLUSIVE com `confirmou=True`: sem metadados não há como verificar
+    o nível, então o consentimento prévio não basta para liberar a leitura.
 
     Retorna (acao, payload, erro):
       - acao="liberar": prossiga; payload é o disclaimer acompanhante (ou None

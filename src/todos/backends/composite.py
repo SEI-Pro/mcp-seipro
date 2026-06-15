@@ -125,6 +125,31 @@ class CompositeBackend(SEIBackend):
         return cast("dict", result)
 
 
+# Exceções que significam "este backend não atendeu" → tenta o próximo. Erros
+# definitivos de domínio (permissão, validação, auth) NÃO estão aqui: propagam.
+_FALLBACK_EXCS = (
+    NotImplementedError,
+    SEINotImplementedError,
+    SEINotFoundError,
+    SEIParseError,
+    SEIConnectionError,
+)
+
+
+def _prioridade_erro(exc: Exception) -> int:
+    """Prioridade de um erro de fallback (maior = mais informativo, prevalece).
+
+    Um erro real de "este backend tentou e não conseguiu" (rede/404/HTML) deve
+    prevalecer sobre um "este backend não serve esta op" (SEINotImplementedError),
+    que por sua vez prevalece sobre o stub genérico (`NotImplementedError`).
+    """
+    if isinstance(exc, (SEINotFoundError, SEIParseError, SEIConnectionError)):
+        return 3
+    if isinstance(exc, SEIError):  # SEINotImplementedError carrega orientação útil
+        return 2
+    return 1  # NotImplementedError (stub da base, sem mensagem acionável)
+
+
 async def _dispatch_in_order(
     op_name: str,
     backends: tuple[SEIBackend | None, ...],
@@ -133,10 +158,10 @@ async def _dispatch_in_order(
 ) -> object:
     """Tenta a operação nos backends em ordem, com a semântica de fallback padrão.
 
-    Cai para o próximo backend em `NotImplementedError` (op ausente), nos sinais
-    de "este backend não atendeu" (`SEINotFoundError`, `SEIParseError`,
-    `SEIConnectionError`) e em erros de transporte (`httpx.RequestError`). Erros
-    definitivos de domínio (permissão, validação) propagam sem fallback.
+    Cai para o próximo backend nos sinais de "este backend não atendeu"
+    (`_FALLBACK_EXCS`) e em erros de transporte (`httpx.RequestError`), mantendo o
+    erro mais informativo via `_prioridade_erro`. Erros definitivos de domínio
+    (permissão, validação, auth) propagam imediatamente, sem fallback.
     """
     ultimo: Exception | None = None
     for backend in backends:
@@ -144,24 +169,14 @@ async def _dispatch_in_order(
             continue
         try:
             return await getattr(backend, op_name)(*args, **kwargs)
-        except NotImplementedError as exc:
-            # backend não implementa esta op → tenta o próximo, mas NÃO sobrescreve
-            # um erro mais informativo já capturado (ex.: 404 real do REST numa op
-            # sem mixin web), senão reportaríamos "não suportada" em vez de "não
-            # encontrada".
-            if not isinstance(ultimo, SEIError):
+        except _FALLBACK_EXCS as exc:
+            if ultimo is None or _prioridade_erro(exc) >= _prioridade_erro(ultimo):
                 ultimo = exc
-        except (SEINotFoundError, SEIParseError, SEIConnectionError) as exc:
-            # Sinais de que ESTE backend não atendeu (endpoint/ação ausente,
-            # HTML mudou no scraper, ou indisponibilidade) — tenta o próximo;
-            # se for o último, propaga. Erros definitivos de domínio
-            # (permissão, validação) NÃO são capturados aqui de propósito.
-            ultimo = exc
         except httpx.RequestError as exc:
-            # Erro de transporte (rede/timeout) num backend não deve abortar se
-            # o outro pode atender — tenta o próximo, guardando o erro.
-            ultimo = SEIConnectionError(f"SEI inacessível: {exc}")
-            ultimo.__cause__ = exc
+            conn = SEIConnectionError(f"SEI inacessível: {exc}")
+            conn.__cause__ = exc
+            if ultimo is None or _prioridade_erro(conn) >= _prioridade_erro(ultimo):
+                ultimo = conn
     if isinstance(ultimo, SEIError):
         raise ultimo
     msg = f"Operação '{op_name}' não é suportada por nenhum backend disponível."
