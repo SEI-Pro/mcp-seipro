@@ -13,7 +13,7 @@ import asyncio
 import pytest
 
 from todos import access_control
-from todos.exceptions import SEIError
+from todos.exceptions import SEIPermissionError
 from todos.tools import documentos as d
 
 
@@ -161,6 +161,15 @@ class TestIncluirValidation:
         out = asyncio.run(d.sei_incluir_documento_externo("PF", id_serie="S", ctx=None))
         assert "Informe arquivo_path" in out
 
+    def test_remote_mode_blocks_server_file_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Security guard: in HTTP/remote mode a local path would point at the
+        # server's filesystem, so arquivo_path must be rejected in favor of base64.
+        monkeypatch.setattr(d, "_http_mode", True)
+        out = asyncio.run(
+            d.sei_incluir_documento_externo("PF", arquivo_path="/etc/passwd", ctx=None)
+        )
+        assert "modo remoto" in out
+
 
 def test_criar_documento_requires_id_serie_in_rest(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(d, "_has_rest", lambda _ctx: True)
@@ -187,8 +196,10 @@ class _GateErroBackend:
         self, id_documento: str, processo: str | None = None
     ) -> dict:
         del id_documento, processo
-        msg = "Acesso não autorizado"
-        raise SEIError(msg)
+        # Real backends translate "não autorizado" into this typed error whose
+        # message no longer carries the substring — must be detected by type.
+        msg = "Acesso ao documento negado."
+        raise SEIPermissionError(msg)
 
 
 def test_ler_documento_surfaces_nao_autorizado_hint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,3 +247,37 @@ def test_consultar_documento_externo_attaches_aviso_for_restricted(
     monkeypatch.setattr(d, "_backend", lambda _ctx: _RestritoBackend())
     out = asyncio.run(d.sei_consultar_documento_externo("D", processo="PF", ctx=None))
     assert "_aviso_acesso" in out
+
+
+_NUMERO_SEI = "2867926"  # protocoloFormatado the user might pass by mistake
+_ID_INTERNO = "3149544"  # the internal id it resolves to
+
+
+class _ReconsultaBackend:
+    name = "fake"
+
+    async def consultar_documento_externo(
+        self, id_documento: str, processo: str | None = None
+    ) -> dict:
+        del processo
+        if id_documento == _NUMERO_SEI:  # número SEI → permission denied
+            msg = "Acesso ao documento negado."
+            raise SEIPermissionError(msg)
+        return {"nivelAcesso": "0", "id": id_documento}
+
+
+def test_consultar_documento_externo_recovers_via_reconsulta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression guard: a typed SEIPermissionError (translated message, no
+    # "não autorizado" substring) must still trigger número SEI → id recovery.
+    async def _fake_resolver(_client: object, _ref: str) -> tuple[str, str]:
+        return _ID_INTERNO, "X"
+
+    monkeypatch.setattr(d, "_backend", lambda _ctx: _ReconsultaBackend())
+    monkeypatch.setattr(d, "_has_rest", lambda _ctx: True)
+    monkeypatch.setattr(d, "_get_client", lambda _ctx: object())
+    monkeypatch.setattr(d, "_resolver_documento", _fake_resolver)
+
+    out = asyncio.run(d.sei_consultar_documento_externo(_NUMERO_SEI, ctx=None))
+    assert _ID_INTERNO in out  # recovered and returned the resolved doc's metadata

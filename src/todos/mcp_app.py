@@ -19,6 +19,7 @@ from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import (
     SEIError,
     SEINotFoundError,
+    SEIPermissionError,
 )
 from todos.sei_client import SEIClient
 from todos.sei_styles import (
@@ -447,6 +448,20 @@ async def _solicitar_consentimento_via_elicit(
     return "recusou"
 
 
+def _e_nao_autorizado(exc: Exception) -> bool:
+    """Detecta se o erro indica acesso negado ao documento.
+
+    Reconhece tanto a exceção tipada que os backends levantam
+    (`SEIPermissionError`, ex.: `DocumentoNaoAutorizadoError`) — cuja mensagem
+    traduzida já NÃO contém "não autorizado" — quanto mensagens cruas que ainda
+    tragam o texto do SEI.
+    """
+    if isinstance(exc, SEIPermissionError):
+        return True
+    low = str(exc).lower()
+    return "não autorizado" in low or "nao autorizado" in low or "acesso negado" in low
+
+
 async def _consultar_meta_documento(
     backend: _SEIBackendV2,
     id_documento: str,
@@ -487,8 +502,7 @@ async def _aplicar_gate_documento(
         meta = await _consultar_meta_documento(backend, id_documento, tipo_documento, processo)
     except (SEIError, httpx.HTTPError) as e:
         msg = str(e)
-        low = msg.lower()
-        if "não autorizado" in low or "nao autorizado" in low or "acesso negado" in low:
+        if _e_nao_autorizado(e):
             return (
                 "erro",
                 None,

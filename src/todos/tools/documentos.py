@@ -41,6 +41,7 @@ from todos.mcp_app import (
     MAX_BINARY_SIZE,
     _aplicar_gate_documento,
     _backend,
+    _e_nao_autorizado,
     _error,
     _get_client,
     _has_rest,
@@ -201,7 +202,7 @@ async def sei_ler_documento(
         )
     except (SEIError, httpx.HTTPError) as e:
         msg = str(e)
-        if "não autorizado" in msg.lower() or "nao autorizado" in msg.lower():
+        if _e_nao_autorizado(e):
             return _json(
                 {
                     "error": msg,
@@ -592,12 +593,7 @@ async def sei_consultar_documento_externo(
             result = await backend.consultar_documento_externo(id_documento, processo)
         except (SEIError, httpx.HTTPError) as primeira:
             msg = str(primeira)
-            low = msg.lower()
-            if (
-                "não autorizado" not in low
-                and "nao autorizado" not in low
-                and "acesso negado" not in low
-            ):
+            if not _e_nao_autorizado(primeira):
                 raise
             # Se não autorizado, pode ser id errado (passou número SEI). Tenta resolver.
             result, id_documento = await _reconsultar_documento_externo(ctx, backend, id_documento)

@@ -17,7 +17,7 @@ import asyncio
 import pytest
 
 from todos.backends.base import SEIBackend
-from todos.exceptions import SEIError
+from todos.exceptions import SEIError, SEIPermissionError
 from todos.mcp_app import _aplicar_gate_documento
 
 
@@ -117,7 +117,17 @@ class TestGateFailClosed:
         assert payload is None
         assert "Falha ao consultar" in erro
 
-    def test_nao_autorizado_returns_id_hint(self) -> None:
-        acao, _, erro = _gate(_GateBackend(exc=SEIError("Acesso não autorizado")))
+    def test_permission_error_returns_id_hint(self) -> None:
+        # Backends raise a typed SEIPermissionError whose translated message no
+        # longer contains "não autorizado" — detection must be by TYPE, not by
+        # substring (this is the regression the migration introduced).
+        exc = SEIPermissionError("Acesso ao documento negado.")
+        acao, _, erro = _gate(_GateBackend(exc=exc))
+        assert acao == "erro"
+        assert "id INTERNO" in erro
+
+    def test_raw_nao_autorizado_message_still_detected(self) -> None:
+        # An untranslated error that still carries the SEI text is also caught.
+        acao, _, erro = _gate(_GateBackend(exc=SEIError("não autorizado")))
         assert acao == "erro"
         assert "id INTERNO" in erro
