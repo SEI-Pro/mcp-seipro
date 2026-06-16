@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from todos.backends.web._session import _WebMixin
 from todos.exceptions import SEIError
+
+logger = logging.getLogger(__name__)
 
 
 class BlocosWeb(_WebMixin):
@@ -43,14 +47,16 @@ class BlocosWeb(_WebMixin):
             try:
                 r = await self._web.retirar_documento_bloco_assinatura_web(id_bloco, id_doc)
                 resultados.append(r)
-            except (SEIError, httpx.HTTPError) as exc:
-                erros.append(f"{id_doc}: {exc}")
-        if erros:
-            msg = (
-                f"Falha ao retirar {len(erros)} de {len(ids)} documento(s): {'; '.join(erros)}. "
-                f"{len(resultados)} retirado(s) com sucesso."
-            )
+            except (SEIError, httpx.HTTPError) as _e:
+                logger.warning(
+                    "Falha ao retirar documento %s do bloco %s: %s", id_doc, id_bloco, _e
+                )
+                erros.append(f"{id_doc}: {_e}")
+        if erros and not resultados:
+            msg = f"Falha ao retirar todos os documentos: {'; '.join(erros)}"
             raise SEIError(msg)
+        if erros:
+            logger.warning("Falha parcial ao retirar documentos do bloco: %s", "; ".join(erros))
         return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
 
     async def alterar_bloco_assinatura(self, id_bloco: str, descricao: str) -> dict:
@@ -66,14 +72,14 @@ class BlocosWeb(_WebMixin):
             try:
                 r = await self._web.excluir_bloco_assinatura_web(id_bloco)
                 resultados.append(r)
-            except (SEIError, httpx.HTTPError) as exc:
-                erros.append(f"{id_bloco}: {exc}")
-        if erros:
-            msg = (
-                f"Falha ao excluir {len(erros)} de {len(ids)} bloco(s): {'; '.join(erros)}. "
-                f"{len(resultados)} excluído(s) com sucesso."
-            )
+            except (SEIError, httpx.HTTPError) as _e:
+                logger.warning("Falha ao excluir bloco %s: %s", id_bloco, _e)
+                erros.append(f"{id_bloco}: {_e}")
+        if erros and not resultados:
+            msg = f"Falha ao excluir todos os blocos: {'; '.join(erros)}"
             raise SEIError(msg)
+        if erros:
+            logger.warning("Falha parcial ao excluir blocos de assinatura: %s", "; ".join(erros))
         return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
 
     async def concluir_blocos_assinatura(self, ids_blocos: str) -> dict:
@@ -85,14 +91,14 @@ class BlocosWeb(_WebMixin):
             try:
                 r = await self._web.concluir_bloco_assinatura_web(id_bloco)
                 resultados.append(r)
-            except (SEIError, httpx.HTTPError) as exc:
-                erros.append(f"{id_bloco}: {exc}")
-        if erros:
-            msg = (
-                f"Falha ao concluir {len(erros)} de {len(ids)} bloco(s): {'; '.join(erros)}. "
-                f"{len(resultados)} concluído(s) com sucesso."
-            )
+            except (SEIError, httpx.HTTPError) as _e:
+                logger.warning("Falha ao concluir bloco %s: %s", id_bloco, _e)
+                erros.append(f"{id_bloco}: {_e}")
+        if erros and not resultados:
+            msg = f"Falha ao concluir todos os blocos: {'; '.join(erros)}"
             raise SEIError(msg)
+        if erros:
+            logger.warning("Falha parcial ao concluir blocos de assinatura: %s", "; ".join(erros))
         return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
 
     async def reabrir_bloco_assinatura(self, id_bloco: str) -> dict:
