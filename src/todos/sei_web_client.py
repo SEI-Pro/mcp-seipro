@@ -665,6 +665,8 @@ class SEIWebClient:
                     m.group(2),
                     m.group(3),
                 )
+            else:
+                logger.warning("Formato inesperado no título da página de login: %r", title)
 
         unidade: dict[str, str] = {"sigla": sigla, "nome": nome}
         if self._inbox_url is not None:
@@ -1740,6 +1742,11 @@ class SEIWebClient:
             tentados[mid] = self._split_marcador_desc(desc)[0]
             self._invalidar_arvore(protocolo)
         else:
+            logger.warning(
+                "Loop de remoção de marcador atingiu o limite de %d iterações para %s",
+                max_iter_marcador,
+                protocolo,
+            )
             raise SEIConnectionError(
                 f"Remoção de marcador interrompida após {max_iter_marcador} iterações "
                 f"para {protocolo}."

@@ -91,13 +91,15 @@ def _detect_organs(
         print_yellow(
             "    Isso ocorre comumente em redes governamentais com proxies ou certificados internos."
         )
-        sys.stderr.write(
-            "\033[91m"
-            "⚠️  AVISO DE SEGURANÇA: Desabilitar verificação SSL expõe suas credenciais\n"
-            "    a ataques de interceptação (man-in-the-middle). Use apenas em ambientes\n"
-            "    controlados (ex: rede corporativa com certificado auto-assinado conhecido).\n"
-            "\033[0m"
-        )
+        print_red("=" * 70)
+        print_red("AVISO DE SEGURANÇA — RISCO DE INTERCEPTAÇÃO DE CREDENCIAIS")
+        print_red("=" * 70)
+        print_red("A verificação SSL protege contra ataques man-in-the-middle (MITM).")
+        print_red("Desabilitá-la permite que um atacante intercepte suas credenciais")
+        print_red("(usuário e senha) em trânsito, sem que você perceba.")
+        print_red("Use esta opção SOMENTE em redes internas onde você controla a CA")
+        print_red("(ex: rede corporativa com certificado auto-assinado próprio).")
+        print_red("=" * 70)
         confirm_ssl = (
             input("Deseja tentar a conexão desativando a verificação de certificado SSL? (s/n): ")
             .strip()

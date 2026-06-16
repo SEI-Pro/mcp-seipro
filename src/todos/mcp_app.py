@@ -47,12 +47,14 @@ async def lifespan(_server: FastMCP):
         if _http_mode:
             clients: dict[str, SEIClient] = {}
             web_clients: dict[str, SEIWebClient] = {}
-            sei_lock: asyncio.Lock = asyncio.Lock()
+            sei_by_session_lock: asyncio.Lock = asyncio.Lock()
+            sei_web_by_session_lock: asyncio.Lock = asyncio.Lock()
             try:
                 yield {
                     "sei_by_session": clients,
                     "sei_web_by_session": web_clients,
-                    "sei_lock": sei_lock,
+                    "sei_by_session_lock": sei_by_session_lock,
+                    "sei_web_by_session_lock": sei_web_by_session_lock,
                 }
             finally:
                 await asyncio.gather(
@@ -105,7 +107,7 @@ async def _get_client(ctx: Context | None) -> SEIClient:
             raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
 
         max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
-        lock: asyncio.Lock = ctx.lifespan_context["sei_lock"]
+        lock: asyncio.Lock = ctx.lifespan_context["sei_by_session_lock"]
         async with lock:
             clients = ctx.lifespan_context["sei_by_session"]
             client = clients.get(ctx.session_id)
@@ -116,7 +118,7 @@ async def _get_client(ctx: Context | None) -> SEIClient:
             clients[ctx.session_id] = client
 
         if evicted is not None:
-            with suppress(OSError, httpx.HTTPError):
+            with suppress(Exception):
                 await evicted.close()
         return client
 
@@ -148,7 +150,7 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
             raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
 
         max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
-        lock: asyncio.Lock = ctx.lifespan_context["sei_lock"]
+        lock: asyncio.Lock = ctx.lifespan_context["sei_web_by_session_lock"]
         async with lock:
             clients = ctx.lifespan_context["sei_web_by_session"]
             client = clients.get(ctx.session_id)
@@ -159,7 +161,7 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
             clients[ctx.session_id] = client
 
         if evicted is not None:
-            with suppress(OSError, httpx.HTTPError):
+            with suppress(Exception):
                 await evicted.close()
         return client
 
