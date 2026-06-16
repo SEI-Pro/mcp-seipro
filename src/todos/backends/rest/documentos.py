@@ -6,12 +6,15 @@ adequado (com a mensagem do SEI). O erro original propaga sem reembrulho.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import httpx
 
 from todos.backends.rest._session import _RestMixin
 from todos.exceptions import SEIError, SEIValidationError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from todos.backends.models import NovoDocumentoExterno, NovoDocumentoInterno
@@ -46,7 +49,8 @@ class DocumentosRest(_RestMixin):
                 continue
             try:
                 docs = await self._rest.listar_documentos(id_proc, limit=200)
-            except (SEIError, httpx.HTTPError):
+            except (SEIError, httpx.HTTPError) as exc:
+                logger.warning("Processo inacessível ao buscar documentos (%s): %s", id_proc, exc)
                 continue
             for d in docs:
                 if _match(d.get("atributos", {}).get("protocoloFormatado", "")):
@@ -180,8 +184,10 @@ class DocumentosRest(_RestMixin):
                         if raw is not None:
                             id_usuario = str(raw)
                         break
-            except (SEIError, httpx.HTTPError):
-                pass
+            except (SEIError, httpx.HTTPError) as exc:
+                logger.warning(
+                    "Falha ao resolver id do usuário '%s' via listar_usuarios: %s", login, exc
+                )
         if not id_usuario:
             msg = (
                 f"Não foi possível resolver o id do usuário para o login '{login}'. "
