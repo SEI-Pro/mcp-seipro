@@ -10,7 +10,7 @@ ser objetos reais (não strings adiadas).
 """
 
 import html
-from contextlib import suppress
+import logging
 from typing import Literal
 
 import httpx
@@ -27,6 +27,8 @@ from todos.mcp_app import (
     _resolver_documento,
     mcp,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _exigir_cargo(cargos: object) -> SEIValidationError:
@@ -68,8 +70,14 @@ async def sei_cancelar_assinatura(
 
     # Resolver número SEI → id interno (best-effort, pesquisa Solr REST-only)
     doc_id = id_documento.strip()
-    with suppress(SEIError, httpx.HTTPError):
+    try:
         doc_id, _ = await _resolver_documento(await _get_client(ctx), doc_id)
+    except (SEIError, httpx.HTTPError) as exc:
+        logger.warning(
+            "Resolução do documento falhou (%s) — usando referência original: %s",
+            exc,
+            doc_id,
+        )
 
     # Verificar se está assinado e capturar a versão atual
     secoes_data = await backend.listar_secoes(doc_id)

@@ -14,6 +14,7 @@ ser objetos reais (não strings adiadas).
 """
 
 import base64
+import re
 import tempfile
 from pathlib import Path
 
@@ -623,7 +624,8 @@ async def sei_gerar_pdf_processo(
         msg = f"PDF muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI."
         raise SEIValidationError(msg)
 
-    protocolo_safe = processo.replace("/", "-")
+    protocolo_safe = re.sub(r"[^\w\-]", "_", processo)
+    protocolo_safe = protocolo_safe.replace("..", "_")
     pdf_path = Path(tempfile.gettempdir()) / f"SEI_{protocolo_safe}.pdf"
     pdf_path.write_bytes(pdf_bytes)
 
@@ -667,7 +669,8 @@ async def sei_gerar_zip_processo(
         msg = f"ZIP muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI."
         raise SEIValidationError(msg)
 
-    protocolo_safe = processo.replace("/", "-")
+    protocolo_safe = re.sub(r"[^\w\-]", "_", processo)
+    protocolo_safe = protocolo_safe.replace("..", "_")
     zip_path = Path(tempfile.gettempdir()) / f"SEI_{protocolo_safe}.zip"
     zip_path.write_bytes(zip_bytes)
 

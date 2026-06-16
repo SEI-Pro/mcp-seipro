@@ -73,6 +73,14 @@ def _check(r: httpx.Response) -> None:
         raise SEIValidationError(str(exc)) from exc
 
 
+def _safe_int(val: str, default: int = 0) -> int:
+    """Convert val to int, returning default on ValueError (e.g. server returns 'N/A')."""
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+
 def _extrair_erro_sei(html: str) -> str | None:
     """Extrai mensagem de erro do HTML do SEI, se houver.
 
@@ -304,7 +312,8 @@ class SEIWebClient:
     @property
     def itens_painel(self) -> int:
         """Total de itens no painel (0 antes do primeiro listar_processos)."""
-        return int(self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0")
+        raw = self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0"
+        return _safe_int(raw)
 
     @property
     def is_authenticated(self) -> bool:
@@ -338,6 +347,7 @@ class SEIWebClient:
                 timeout=5.0,
             )
         except (TimeoutError, ImportError, OSError, RuntimeError, ValueError, AttributeError):
+            # AttributeError: Linux SecretService/dbus backend raises this on headless sessions
             return None
 
     async def login(self, *, _retry_keyring: bool = True) -> None:
@@ -370,6 +380,7 @@ class SEIWebClient:
                     "Timeout ao buscar senha do keyring (>5s); use SEI_SENHA como fallback"
                 )
             except (ImportError, OSError, RuntimeError, ValueError, AttributeError) as e:
+                # AttributeError: Linux SecretService/dbus backend raises this on headless sessions
                 self._keyring_user = keyring_user  # restore: transient error, allow retry
                 logger.warning("Não foi possível obter a senha do keyring: %s", e)
 
@@ -1619,7 +1630,8 @@ class SEIWebClient:
         await self.ensure_authenticated()
         alvo = marcador.strip().lower()
         tentados: dict[str, str] = {}  # mid -> nome (cada mid é tentado uma vez)
-        for _ in range(20):  # trava de segurança
+        max_iter_marcador = 20
+        for _iter in range(max_iter_marcador):  # trava de segurança
             body, soup, referer = await self._pagina_marcador(protocolo)
             aplicados = re.findall(r"acaoRemover\('(\d+)','([^']*)'\)", body)
             # Casa por id exato OU substring do NOME (sem a cor #rrggbb, que
@@ -1662,6 +1674,11 @@ class SEIWebClient:
                 raise SEIConnectionError(erro)
             tentados[mid] = self._split_marcador_desc(desc)[0]
             self._invalidar_arvore(protocolo)
+        else:
+            raise SEIConnectionError(
+                f"Remoção de marcador interrompida após {max_iter_marcador} iterações "
+                f"para {protocolo}."
+            )
         if not tentados:
             qual = f'"{marcador}" ' if marcador else ""
             raise SEINotFoundError(f"Marcador {qual}não está aplicado em {protocolo}.")
@@ -2707,7 +2724,8 @@ class SEIWebClient:
                         "atribuido": bool(atrib),
                     }
             seen += len(rows)
-            total = int(self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0")
+            _raw_total = self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0"
+            total = _safe_int(_raw_total)
             # `total == 0` quando o hidden não existe nesta instância — nesse caso
             # pagina até esvaziar (senão `seen >= 0` quebraria já na página 0).
             if not rows or (total > 0 and seen >= total):
@@ -3666,11 +3684,11 @@ class SEIWebClient:
         # pelo _extract_main_form via fetch_inbox). Esses campos têm o total
         # da seleção atual no servidor, não só da página visível.
         if layout == "detalhada":
-            total_servidor = int(self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0")
+            total_servidor = _safe_int(self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0")
         else:
-            total_servidor = int(self._form_hidden.get("hdnRecebidosNroItens", "0") or "0") + int(
-                self._form_hidden.get("hdnGeradosNroItens", "0") or "0"
-            )
+            total_servidor = _safe_int(
+                self._form_hidden.get("hdnRecebidosNroItens", "0") or "0"
+            ) + _safe_int(self._form_hidden.get("hdnGeradosNroItens", "0") or "0")
         if total_servidor == 0:
             total_servidor = len(rows)
 
@@ -3849,7 +3867,8 @@ class SEIWebClient:
         await self.ensure_authenticated()
         sei_base = f"{self.sei_root}/sei/"
         removidos = 0
-        for _ in range(20):  # trava de segurança
+        max_iter_acompanhamento = 20
+        for _iter in range(max_iter_acompanhamento):  # trava de segurança
             html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
             m = re.search(
                 r"(controlador\.php\?acao=acompanhamento_gerenciar[^\"'\s]*infra_hash=[a-f0-9]+)",
@@ -3890,6 +3909,11 @@ class SEIWebClient:
                 raise SEIConnectionError(erro)
             removidos += 1
             self._invalidar_arvore(protocolo)
+        else:
+            raise SEIConnectionError(
+                f"Remoção de acompanhamento interrompida após {max_iter_acompanhamento} iterações "
+                f"para {protocolo}. {removidos} removido(s); verifique se há mais."
+            )
         if removidos == 0:
             raise SEINotFoundError(f"Nenhum acompanhamento especial aplicado em {protocolo}.")
         return {"ok": True, "removidos": removidos, "protocolo": protocolo}
