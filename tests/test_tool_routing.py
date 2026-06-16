@@ -570,6 +570,13 @@ def _flatten(args: tuple, kwargs: dict) -> list[object]:
     return [*args, *kwargs.values()]
 
 
+def _aconst(v: object):
+    async def _f(_ctx: object) -> object:
+        return v
+
+    return _f
+
+
 @pytest.mark.parametrize("route", _ROUTES, ids=[f"{r[0]}.{r[1]}" for r in _ROUTES])
 def test_tool_routes_to_expected_op(
     monkeypatch: pytest.MonkeyPatch,
@@ -578,7 +585,7 @@ def test_tool_routes_to_expected_op(
     module_suffix, tool_name, call_kwargs, expected_op, sentinels = route
     module = importlib.import_module(f"todos.tools.{module_suffix}")
     fake = RecordingBackend()
-    monkeypatch.setattr(module, "_backend", lambda _ctx: fake)
+    monkeypatch.setattr(module, "_backend", _aconst(fake))
 
     tool = getattr(module, tool_name)
     result = asyncio.run(tool(ctx=None, **call_kwargs))
@@ -600,7 +607,7 @@ def test_consultar_processo_routes_and_keeps_public_payload(
     # ctx is positional-required here; the hybrid tool also runs the access gate
     # on the merged result, so verify a public payload routes cleanly.
     fake = RecordingBackend({"IdProcedimento": "42", "nivelAcesso": "0"})
-    monkeypatch.setattr(processos, "_backend", lambda _ctx: fake)
+    monkeypatch.setattr(processos, "_backend", _aconst(fake))
 
     result = asyncio.run(processos.sei_consultar_processo("50300.000123/2025-00", ctx=None))
     assert fake.calls[0][0] == "consultar_processo"
@@ -612,7 +619,7 @@ def test_executar_acao_dry_run_does_not_touch_backend(monkeypatch: pytest.Monkey
     # Default confirmar=False must short-circuit to a dry-run preview, never
     # delegating a potentially irreversible action to the backend.
     fake = RecordingBackend()
-    monkeypatch.setattr(processos, "_backend", lambda _ctx: fake)
+    monkeypatch.setattr(processos, "_backend", _aconst(fake))
 
     result = asyncio.run(processos.sei_executar_acao("P", "procedimento_concluir", ctx=None))
     assert fake.calls == []
@@ -623,7 +630,7 @@ def test_editar_secao_reads_then_writes_via_composite(monkeypatch: pytest.Monkey
     # Migrated tool: must fetch current sections then submit the full set, both
     # through the composite (no direct REST client).
     fake = RecordingBackend({"secoes": [], "ultimaVersaoDocumento": "3"})
-    monkeypatch.setattr(documentos, "_backend", lambda _ctx: fake)
+    monkeypatch.setattr(documentos, "_backend", _aconst(fake))
 
     asyncio.run(
         documentos.sei_editar_secao("D", [{"idSecaoModelo": "1", "conteudo": "x"}], ctx=None)
@@ -637,8 +644,8 @@ def test_criar_documento_routes_to_composite(monkeypatch: pytest.MonkeyPatch) ->
     # regardless of REST/web; the processo and a NovoDocumentoInterno are passed.
     # _has_rest only gates the id_serie validation message, so stub it.
     fake = RecordingBackend()
-    monkeypatch.setattr(documentos, "_backend", lambda _ctx: fake)
-    monkeypatch.setattr(documentos, "_has_rest", lambda _ctx: True)
+    monkeypatch.setattr(documentos, "_backend", _aconst(fake))
+    monkeypatch.setattr(documentos, "_has_rest", _aconst(True))
 
     asyncio.run(documentos.sei_criar_documento("PF", id_serie="S", descricao="d", ctx=None))
     op, args, _ = fake.calls[0]
@@ -686,8 +693,8 @@ def test_ler_documento_gates_then_reads_via_composite(monkeypatch: pytest.Monkey
     # Web-only mode (no auto-resolution): gate consults then content is read,
     # both through the composite. Public doc → content released.
     backend = _ReadBackend()
-    monkeypatch.setattr(documentos, "_backend", lambda _ctx: backend)
-    monkeypatch.setattr(documentos, "_has_rest", lambda _ctx: False)
+    monkeypatch.setattr(documentos, "_backend", _aconst(backend))
+    monkeypatch.setattr(documentos, "_has_rest", _aconst(False))
 
     out = asyncio.run(
         documentos.sei_ler_documento("D", tipo_documento="I", processo="PF", ctx=None)
@@ -698,8 +705,8 @@ def test_ler_documento_gates_then_reads_via_composite(monkeypatch: pytest.Monkey
 
 def test_baixar_anexo_gates_then_downloads_via_composite(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = _ReadBackend()
-    monkeypatch.setattr(documentos, "_backend", lambda _ctx: backend)
-    monkeypatch.setattr(documentos, "_has_rest", lambda _ctx: False)
+    monkeypatch.setattr(documentos, "_backend", _aconst(backend))
+    monkeypatch.setattr(documentos, "_has_rest", _aconst(False))
 
     out = asyncio.run(documentos.sei_baixar_anexo("D", processo="PF", ctx=None))
     assert backend.calls == ["consultar_documento_externo", "baixar_anexo"]
