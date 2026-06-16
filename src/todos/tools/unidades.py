@@ -14,6 +14,8 @@ from fastmcp import Context
 
 from todos.mcp_app import _IDEM, _READ, _backend, _json, mcp
 
+_DEFAULT_LIMIT = 50
+
 
 @mcp.tool(annotations=_READ)
 async def sei_unidade_atual(ctx: Context) -> str:
@@ -56,7 +58,7 @@ async def sei_trocar_unidade(id_unidade: str, ctx: Context) -> str:
 @mcp.tool(annotations=_READ)
 async def sei_pesquisar_unidades(
     filtro: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -133,7 +135,7 @@ async def sei_listar_contextos(id_orgao: str, ctx: Context) -> str:
 async def sei_pesquisar_usuarios(
     filtro: str = "",
     id_orgao: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -155,7 +157,7 @@ async def sei_pesquisar_usuarios(
 @mcp.tool(annotations=_READ)
 async def sei_pesquisar_outras_unidades(
     filtro: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
