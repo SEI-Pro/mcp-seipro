@@ -24,8 +24,10 @@ logger = logging.getLogger(__name__)
 
 def _safe_int(val: str | int | None, default: int = 0) -> int:
     """Convert val to int, returning default on ValueError (e.g. server returns 'N/A')."""
+    if val is None:
+        return default
     try:
-        return int(val or default)
+        return int(val)
     except (TypeError, ValueError):
         return default
 

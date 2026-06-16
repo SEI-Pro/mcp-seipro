@@ -107,7 +107,7 @@ async def _delete_auth_code(code: str) -> None:
 
     _auth_codes.pop(code, None)
     cache = get_catalog_cache()
-    await cache.set({"module": "auth"}, f"code:{code}", None)
+    await cache.delete({"module": "auth"}, f"code:{code}")
 
 
 def _sign(payload: dict) -> str:
@@ -553,6 +553,11 @@ _SUCCESS_HTML = """<!DOCTYPE html>
 def get_sei_credentials_from_token(token: str) -> dict | None:
     """Extrai credenciais SEI de um access token. Usado pelo server.py.
 
+    Design: servidor pessoal (single-user). A senha do SEI não é armazenada
+    no token — ela é lida da variável de ambiente SEI_SENHA em cada request.
+    Em deployments multi-usuário esta abordagem não funciona: cada usuário
+    precisaria do seu próprio processo com SEI_SENHA configurado individualmente.
+
     §31.1 — O token não contém sei_senha. A senha é injetada aqui a partir
     da variável de ambiente SEI_SENHA para que SEIClient/SEIWebClient possam
     autenticar sem que a credencial trafegue no token.
@@ -565,4 +570,10 @@ def get_sei_credentials_from_token(token: str) -> dict | None:
         return None
     # Injeta sei_senha a partir do ambiente — nunca do token
     senha = os.environ.get("SEI_SENHA", "")
+    if not senha:
+        _err = (
+            "SEI_SENHA não configurado no servidor. "
+            "Defina a variável de ambiente SEI_SENHA com a senha do SEI antes de iniciar o servidor."
+        )
+        raise RuntimeError(_err)
     return {**sei, "sei_senha": senha}

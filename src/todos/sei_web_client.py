@@ -58,8 +58,11 @@ def _decode_response(content: bytes, content_type: str) -> str:
     try:
         return content.decode(charset)
     except (UnicodeDecodeError, LookupError):
-        logger.warning("Falha ao decodificar resposta com charset %r; re-lançando exceção", charset)
-        raise
+        logger.warning(
+            "Charset %r inválido ou incompatível com os bytes; fallback iso-8859-1/replace",
+            charset,
+        )
+        return content.decode("iso-8859-1", "replace")
 
 
 def _tag_str(tag: Tag, attr: str, default: str = "") -> str:

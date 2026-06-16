@@ -109,6 +109,18 @@ class CatalogCache:
             if random.random() < _SWEEP_PROBABILITY:
                 conn.execute("DELETE FROM catalogs WHERE expires_at < ?", (now,))
 
+    async def delete(self, namespace: dict[str, str], key: str) -> None:
+        """Remove uma entrada do cache imediatamente (executado em thread worker)."""
+        try:
+            await asyncio.to_thread(self._delete_sync, namespace, key)
+        except sqlite3.Error:
+            logger.warning("Falha ao remover entrada do cache de catalogos", exc_info=True)
+
+    def _delete_sync(self, namespace: dict[str, str], key: str) -> None:
+        db_key = self.make_key(namespace, key)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM catalogs WHERE key = ?", (db_key,))
+
     async def ttl(self, namespace: dict[str, str], key: str) -> float | None:
         """Retorne o TTL restante de uma entrada (executado em thread worker)."""
         try:
