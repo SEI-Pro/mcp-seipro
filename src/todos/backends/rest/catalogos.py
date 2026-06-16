@@ -5,13 +5,29 @@ from __future__ import annotations
 from todos.backends.rest._session import _RestMixin
 
 
+def _validar_pagina(pagina: int) -> None:
+    """Valida que o número de página é não-negativo.
+
+    O parâmetro ``pagina`` é um índice de página 0-based que é repassado como
+    ``start`` para a API REST do mod-wssei.  Valores negativos são rejeitados
+    para evitar que o servidor receba um offset silenciosamente inválido.
+    """
+    if pagina < 0:
+        msg = f"pagina deve ser >= 0, recebido: {pagina}"
+        raise ValueError(msg)
+
+
 class CatalogosRest(_RestMixin):
     """Operações REST de catálogos."""
 
     async def pesquisar_tipos_processo(
         self, filtro: str = "", favoritos: str = "", limit: int = 50, pagina: int = 0
     ) -> dict:
-        """Pesquisa tipos de processo."""
+        """Pesquisa tipos de processo.
+
+        ``pagina`` é um índice de página 0-based (mapeado para ``start`` na API REST).
+        """
+        _validar_pagina(pagina)
         return await self._rest.pesquisar_tipos_processo(
             filtro=filtro, favoritos=favoritos, limit=limit, start=pagina
         )
@@ -24,7 +40,11 @@ class CatalogosRest(_RestMixin):
         limit: int = 50,
         pagina: int = 0,
     ) -> dict:
-        """Pesquisa tipos de documento (séries)."""
+        """Pesquisa tipos de documento (séries).
+
+        ``pagina`` é um índice de página 0-based (mapeado para ``start`` na API REST).
+        """
+        _validar_pagina(pagina)
         return await self._rest.pesquisar_tipos_documento(
             filtro=filtro,
             favoritos=favoritos,
@@ -36,7 +56,11 @@ class CatalogosRest(_RestMixin):
     async def pesquisar_tipos_documento_externo(
         self, filtro: str = "", limit: int = 50, pagina: int = 0
     ) -> dict:
-        """Pesquisa tipos de documento externo."""
+        """Pesquisa tipos de documento externo.
+
+        ``pagina`` é um índice de página 0-based (mapeado para ``start`` na API REST).
+        """
+        _validar_pagina(pagina)
         return await self._rest.pesquisar_tipos_documento_externo(
             filtro=filtro, limit=limit, start=pagina
         )
@@ -44,7 +68,11 @@ class CatalogosRest(_RestMixin):
     async def pesquisar_tipos_conferencia(
         self, filtro: str = "", limit: int = 50, pagina: int = 0
     ) -> dict:
-        """Pesquisa tipos de conferência de documentos externos."""
+        """Pesquisa tipos de conferência de documentos externos.
+
+        ``pagina`` é um índice de página 0-based (mapeado para ``start`` na API REST).
+        """
+        _validar_pagina(pagina)
         return await self._rest.pesquisar_tipos_conferencia(
             filtro=filtro, limit=limit, start=pagina
         )
@@ -52,11 +80,19 @@ class CatalogosRest(_RestMixin):
     async def pesquisar_hipoteses_legais(
         self, filtro: str = "", limit: int = 50, pagina: int = 0
     ) -> dict:
-        """Pesquisa hipóteses legais para restrição/sigilo."""
+        """Pesquisa hipóteses legais para restrição/sigilo.
+
+        ``pagina`` é um índice de página 0-based (mapeado para ``start`` na API REST).
+        """
+        _validar_pagina(pagina)
         return await self._rest.pesquisar_hipoteses_legais(filtro=filtro, limit=limit, start=pagina)
 
     async def pesquisar_assuntos(self, filtro: str = "", limit: int = 50, pagina: int = 0) -> dict:
-        """Pesquisa assuntos para classificação de processos."""
+        """Pesquisa assuntos para classificação de processos.
+
+        ``pagina`` é um índice de página 0-based (mapeado para ``start`` na API REST).
+        """
+        _validar_pagina(pagina)
         return await self._rest.pesquisar_assuntos(filtro=filtro, limit=limit, start=pagina)
 
     async def pesquisar_contatos(self, filtro: str = "", limit: int = 50) -> dict:
@@ -72,17 +108,29 @@ class CatalogosRest(_RestMixin):
     async def pesquisar_textos_padrao(
         self, filtro: str = "", limit: int = 50, pagina: int = 0
     ) -> dict:
-        """Pesquisa textos padrão da unidade."""
+        """Pesquisa textos padrão da unidade.
+
+        ``pagina`` é um índice de página 0-based (mapeado para ``start`` na API REST).
+        """
+        _validar_pagina(pagina)
         return await self._rest.pesquisar_textos_padrao(filtro=filtro, limit=limit, start=pagina)
 
     async def listar_grupos_modelos(self, limit: int = 50, pagina: int = 0) -> dict:
-        """Lista grupos de modelos de documento."""
+        """Lista grupos de modelos de documento.
+
+        ``pagina`` é um índice de página 0-based (mapeado para ``start`` na API REST).
+        """
+        _validar_pagina(pagina)
         return await self._rest.listar_grupos_modelos(limit=limit, start=pagina)
 
     async def listar_modelos(
         self, id_grupo: str = "", filtro: str = "", limit: int = 50, pagina: int = 0
     ) -> dict:
-        """Lista modelos de documento."""
+        """Lista modelos de documento.
+
+        ``pagina`` é um índice de página 0-based (mapeado para ``start`` na API REST).
+        """
+        _validar_pagina(pagina)
         return await self._rest.listar_modelos(
             id_grupo=id_grupo, filtro=filtro, limit=limit, start=pagina
         )
