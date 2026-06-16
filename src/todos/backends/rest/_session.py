@@ -7,6 +7,7 @@ resolução de referência compartilhados por todos os mixins: `_resolver_proces
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import httpx
@@ -15,6 +16,8 @@ from todos.exceptions import SEIError, SEINotFoundError
 
 if TYPE_CHECKING:
     from todos.sei_client import SEIClient
+
+logger = logging.getLogger(__name__)
 
 _MIN_DOC_CONTENT_LENGTH = 10  # minimum bytes for a non-empty internal document
 
@@ -67,7 +70,13 @@ class _RestBase(_RestMixin):
                     continue
                 try:
                     docs = await self._rest.listar_documentos(id_proc, limit=200)
-                except (SEIError, httpx.RequestError):
+                except (SEIError, httpx.RequestError) as exc:
+                    logger.warning(
+                        "Falha ao listar documentos do processo %s ao resolver '%s': %s",
+                        id_proc,
+                        referencia,
+                        exc,
+                    )
                     continue
                 for d in docs:
                     proto = d.get("atributos", {}).get("protocoloFormatado", "")
@@ -77,15 +86,23 @@ class _RestBase(_RestMixin):
                             continue
                         tipo = d.get("atributos", {}).get("tipoDocumento", "I")
                         return doc_id, tipo
-        except (SEIError, httpx.RequestError):
-            pass
+        except (SEIError, httpx.RequestError) as exc:
+            logger.warning(
+                "Estratégia de pesquisa Solr falhou ao resolver documento '%s': %s",
+                referencia,
+                exc,
+            )
 
         try:
             raw = await self._rest.visualizar_documento_interno(referencia)
             if raw and len(raw) > _MIN_DOC_CONTENT_LENGTH:
                 return referencia, "I"
-        except (SEIError, httpx.HTTPError):
-            pass
+        except (SEIError, httpx.HTTPError) as exc:
+            logger.warning(
+                "Estratégia de visualização direta falhou ao resolver documento '%s': %s",
+                referencia,
+                exc,
+            )
 
         msg = (
             f"Documento '{referencia}' não encontrado via pesquisa. "
