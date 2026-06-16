@@ -80,9 +80,10 @@ ignore = [
     "S603",
 ]
 "src/todos/sei_client.py" = [
-    # __init__ has 7 keyword-only params (sei_url, sei_web_url, sei_usuario, sei_senha,
-    # sei_orgao, sei_contexto, sei_verify_ssl) — grouping into a dataclass would break
-    # the existing env-var-based constructor contract used by all call sites
+    # __init__ has 7 keyword-only config params (URL + credential fields) — a dataclass
+    # would break the env-var-based constructor contract used everywhere.
+    # criar_documento_externo has 6 params; NovoDocumentoExterno model mismatch (id_unidade
+    # vs arquivo_base64/nome_arquivo) prevents a clean migration in this wave.
     "PLR0913",
 ]
 "src/todos/sei_web_client.py" = [
