@@ -9,13 +9,9 @@ and exercise only the pure formatting logic on top of it.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import pytest
 
 from todos import html_utils as hu
-
-if TYPE_CHECKING:
-    import pytest
-
 
 # ---------------------------------------------------------------------------
 # html_to_text
@@ -166,6 +162,78 @@ class TestPdfToMarkdown:
     def test_empty_extraction_returns_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hu, "_extract_pdf_pages", lambda _c: [])
         assert "sem texto extraível" in hu.pdf_to_markdown(b"ignored")
+
+
+# ---------------------------------------------------------------------------
+# pdf_to_text / pdf_to_markdown — real extraction (no monkeypatching)
+# ---------------------------------------------------------------------------
+
+pdfplumber = pytest.importorskip("pdfplumber")
+
+# Minimal valid PDF that contains the text "Hello SEI" encoded as a Type1 font
+# stream.  pdfplumber can extract this text natively without OCR.
+_MINIMAL_PDF = b"""%PDF-1.4
+1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
+2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj
+3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj
+4 0 obj<</Length 44>>stream
+BT /F1 12 Tf 100 700 Td (Hello SEI) Tj ET
+endstream
+endobj
+5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj
+xref
+0 6
+0000000000 65535 f
+0000000009 00000 n
+0000000058 00000 n
+0000000115 00000 n
+0000000266 00000 n
+0000000360 00000 n
+trailer<</Size 6/Root 1 0 R>>
+startxref
+441
+%%EOF"""
+
+
+class TestRealPdfExtraction:
+    """Exercises the real pdfplumber extraction path without any monkeypatching."""
+
+    def test_pdf_to_text_returns_nonempty(self) -> None:
+        """pdf_to_text on a valid minimal PDF must return a non-empty string."""
+        result = hu.pdf_to_text(_MINIMAL_PDF)
+        assert result
+        assert "sem texto extraível" not in result
+
+    def test_pdf_to_text_contains_hello(self) -> None:
+        """pdfplumber must extract the 'Hello' text embedded in the PDF stream."""
+        result = hu.pdf_to_text(_MINIMAL_PDF)
+        assert "Hello" in result
+
+    def test_pdf_to_markdown_returns_nonempty(self) -> None:
+        """pdf_to_markdown on a valid minimal PDF must return a non-empty string."""
+        result = hu.pdf_to_markdown(_MINIMAL_PDF)
+        assert result
+        assert "sem texto extraível" not in result
+
+    def test_pdf_to_markdown_contains_hello(self) -> None:
+        """pdfplumber must also surface the text in the markdown path."""
+        result = hu.pdf_to_markdown(_MINIMAL_PDF)
+        assert "Hello" in result
+
+    def test_pdf_to_text_empty_bytes_returns_fallback(self) -> None:
+        """Empty bytes must return the fallback string, not raise."""
+        result = hu.pdf_to_text(b"")
+        assert "sem texto extraível" in result
+
+    def test_pdf_to_text_invalid_bytes_returns_fallback(self) -> None:
+        """Invalid PDF bytes must return the fallback string, not raise."""
+        result = hu.pdf_to_text(b"not a pdf at all")
+        assert "sem texto extraível" in result
+
+    def test_pdf_to_markdown_empty_bytes_returns_fallback(self) -> None:
+        """Empty bytes must return the fallback string, not raise."""
+        result = hu.pdf_to_markdown(b"")
+        assert "sem texto extraível" in result
 
 
 # ---------------------------------------------------------------------------
