@@ -14,11 +14,13 @@ from fastmcp import Context
 
 from todos.mcp_app import _READ, _WRITE, _backend, _json, mcp
 
+_DEFAULT_LIMIT = 50
+
 
 @mcp.tool(annotations=_READ)
 async def sei_pesquisar_hipoteses_legais(
     filtro: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -44,7 +46,7 @@ async def sei_pesquisar_hipoteses_legais(
 async def sei_pesquisar_tipos_processo(
     filtro: str = "",
     favoritos: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -73,7 +75,7 @@ async def sei_pesquisar_tipos_documento(
     filtro: str = "",
     favoritos: str = "",
     aplicabilidade: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -103,7 +105,7 @@ async def sei_pesquisar_tipos_documento(
 @mcp.tool(annotations=_READ)
 async def sei_pesquisar_tipos_documento_externo(
     filtro: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -127,7 +129,7 @@ async def sei_pesquisar_tipos_documento_externo(
 @mcp.tool(annotations=_READ)
 async def sei_pesquisar_tipos_conferencia(
     filtro: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -151,7 +153,7 @@ async def sei_pesquisar_tipos_conferencia(
 @mcp.tool(annotations=_READ)
 async def sei_pesquisar_assuntos(
     filtro: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -174,7 +176,7 @@ async def sei_pesquisar_assuntos(
 @mcp.tool(annotations=_READ)
 async def sei_pesquisar_contatos(
     filtro: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa contatos cadastrados no SEI.
@@ -207,7 +209,7 @@ async def sei_criar_contato(
 @mcp.tool(annotations=_READ)
 async def sei_pesquisar_textos_padrao(
     filtro: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -230,7 +232,7 @@ async def sei_pesquisar_textos_padrao(
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_grupos_modelos(
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -249,7 +251,7 @@ async def sei_listar_grupos_modelos(
 async def sei_listar_modelos(
     id_grupo: str = "",
     filtro: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
