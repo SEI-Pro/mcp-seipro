@@ -1,4 +1,9 @@
-"""Mixin REST — credenciamento em processos sigilosos."""
+"""Mixin REST — credenciamento em processos sigilosos.
+
+Thin delegation layer: these methods resolve the process identifier and delegate
+directly to the REST client. Response schema validation is the REST client's
+responsibility.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,12 @@ from todos.backends.rest._session import _RestMixin
 
 
 class CredenciamentoRest(_RestMixin):
-    """Operações REST de credenciamento."""
+    """Operações REST de credenciamento.
+
+    Each method resolves the process identifier via ``_resolver_processo`` and
+    then delegates directly to ``self._rest``.  This class intentionally adds no
+    schema validation — that is the REST client's responsibility.
+    """
 
     async def listar_credenciamentos(self, processo: str) -> list[dict]:
         """Lista os credenciamentos de um processo sigiloso."""
