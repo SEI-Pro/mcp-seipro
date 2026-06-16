@@ -2,7 +2,7 @@
 
 import sys
 from collections.abc import Callable
-from typing import TypeAlias
+from typing import TypeAlias, TypeGuard
 
 import httpx
 from fastmcp import Context
@@ -200,13 +200,18 @@ def _validar_campo(nome: str) -> dict[str, str | _Extrator]:
     return campo
 
 
+def _is_extrator(val: str | _Extrator | None) -> TypeGuard[_Extrator]:
+    """TypeGuard: retorna True quando val é um callable _Extrator, não uma str."""
+    return callable(val) and not isinstance(val, str)
+
+
 def _extrator_de_campo(campo: dict[str, str | _Extrator], nome_campo: str) -> _Extrator:
     """Retorna o extrator callable de um campo, com erro contextualizado se ausente."""
     ext = campo.get("extract")
-    if not callable(ext):
+    if not _is_extrator(ext):
         msg = f"campo 'extract' não é callable para campo={nome_campo!r}"
         raise TypeError(msg)
-    return ext  # type: ignore[return-value]  # narrowed by callable() check above
+    return ext
 
 
 def _agrupar_processos(
