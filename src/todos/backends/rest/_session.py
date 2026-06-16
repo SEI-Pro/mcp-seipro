@@ -28,8 +28,12 @@ _MIN_DOC_CONTENT_LENGTH = 10
 
 
 def _normalizar_protocolo(p: str) -> str:
-    """Remove zeros à esquerda de cada segmento numérico do protocolo formatado."""
-    return re.sub(r"\b0+(\d)", r"\1", p)
+    """Remove zeros à esquerda de segmentos numéricos do protocolo formatado.
+
+    Aplica apenas após início da string ou separadores `.` `/` ` ` — não toca
+    no sufixo de verificação `-XX` (ex: `2024-01` permanece `2024-01`).
+    """
+    return re.sub(r"(^|[./ ])0+(\d)", r"\1\2", p)
 
 
 class _RestMixin:

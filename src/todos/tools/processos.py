@@ -606,7 +606,11 @@ def _salvar_arquivo_temp(
     protocolo_safe = re.sub(r"[^\w\-]", "_", protocolo)
     protocolo_safe = protocolo_safe.replace("..", "_")
     caminho = Path(tempfile.gettempdir()) / f"SEI_{protocolo_safe}.{extensao}"
-    caminho.write_bytes(conteudo)
+    try:
+        caminho.write_bytes(conteudo)
+    except OSError as exc:
+        msg = f"Erro ao salvar {extensao.upper()} em disco: {exc}"
+        raise SEIValidationError(msg) from exc
 
     return {
         "arquivo": str(caminho),

@@ -29,6 +29,7 @@ from todos.backends.base import SEIBackend
 from todos.exceptions import (
     SEIConnectionError,
     SEINotFoundError,
+    SEINotImplementedError,
     SEIPermissionError,
     SEIValidationError,
 )
@@ -88,7 +89,8 @@ def _formatar_doc_externo(content: bytes, formato: str, disclaimer: dict | None)
         raise SEIValidationError(msg)
     if formato == "markdown":
         return _aplicar_disclaimer(pdf_to_markdown(content), disclaimer, formato)
-    return _aplicar_disclaimer(pdf_to_text(content), disclaimer, formato)
+    # PDFs are plain text — never wrap in HTML even if formato='html' was requested
+    return _aplicar_disclaimer(pdf_to_text(content), disclaimer, "texto")
 
 
 def _formatar_doc_interno(raw: str, formato: str, disclaimer: dict | None) -> str:
@@ -129,7 +131,7 @@ async def _ler_documento_via_backend(
     if tipo_documento == "auto":
         try:
             raw = await backend.visualizar_documento_interno(str(id_documento), processo)
-        except (SEINotFoundError, SEIPermissionError):
+        except (SEINotFoundError, SEIPermissionError, SEIConnectionError, SEINotImplementedError):
             content = await backend.baixar_anexo(str(id_documento), processo)
             return _formatar_doc_externo(content, formato, disclaimer)
         return _formatar_doc_interno(raw, formato, disclaimer)

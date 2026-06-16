@@ -65,7 +65,8 @@ _RISCOS_BASE = [
 ]
 
 _RISCOS_EXTRA_RAW = os.environ.get("SEI_RISCOS_EXTRA", "")
-_RISCOS_EXTRA: list[str] = [r.strip() for r in _RISCOS_EXTRA_RAW.split(",") if r.strip()]
+# Use "|" as separator so legal citations like "art. 6, II LGPD" can contain commas
+_RISCOS_EXTRA: list[str] = [r.strip() for r in _RISCOS_EXTRA_RAW.split("|") if r.strip()]
 _RISCOS = _RISCOS_BASE + _RISCOS_EXTRA
 
 _COMO_LIBERAR = [
