@@ -16,7 +16,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-CATALOG_CACHE_TTL = 24 * 60 * 60
+_raw_catalog_ttl = os.environ.get("CATALOG_CACHE_TTL", "")
+try:
+    CATALOG_CACHE_TTL: int = int(_raw_catalog_ttl) if _raw_catalog_ttl else 24 * 60 * 60
+except ValueError as exc:
+    _ttl_err = f"CATALOG_CACHE_TTL deve ser um inteiro em segundos; recebido: {_raw_catalog_ttl!r}"
+    raise RuntimeError(_ttl_err) from exc
 _SWEEP_PROBABILITY = 0.05  # probabilistic expired-row sweep: run on ~5% of writes
 
 

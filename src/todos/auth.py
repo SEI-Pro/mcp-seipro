@@ -29,20 +29,27 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.requests import Request
 from starlette.responses import HTMLResponse
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Crypto helpers (HMAC-SHA256 para assinatura, sem dep externa)
 # ---------------------------------------------------------------------------
-
-logger = logging.getLogger(__name__)
 
 _JWT_SECRET_MIN_LEN = 32
 
 _JWT_SECRET = os.environ.get("JWT_SECRET", "")
 if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
-    logger.warning(
-        "JWT_SECRET está ausente ou muito curto (%d chars); tokens não são seguros.",
-        len(_JWT_SECRET),
+    _jwt_config_err = (
+        f"JWT_SECRET deve ter pelo menos {_JWT_SECRET_MIN_LEN} caracteres "
+        f"(atual: {len(_JWT_SECRET)}). "
+        'Gere um com: python -c "import secrets; print(secrets.token_hex(32))"'
     )
+    raise RuntimeError(_jwt_config_err)
+
+_JWT_CONFIG_ERR = (
+    "JWT_SECRET não configurado ou muito curto — "
+    "defina JWT_SECRET com pelo menos 32 caracteres antes de iniciar o servidor HTTP."
+)
 TOKEN_TTL = 86400 * 30  # 30 dias
 
 
@@ -50,6 +57,8 @@ def _sign(payload: dict) -> str:
     """Cria um token JWT-like: base64(payload).base64(signature)."""
     import base64
 
+    if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+        raise RuntimeError(_JWT_CONFIG_ERR)
     raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     sig = hmac.new(_JWT_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
     return f"{raw}.{sig}"
@@ -59,6 +68,8 @@ def _verify(token: str) -> dict | None:
     """Verifica e decodifica um token. Retorna None se invalido."""
     import base64
 
+    if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+        raise RuntimeError(_JWT_CONFIG_ERR)
     parts = token.split(".")
     if len(parts) != 2:
         return None
@@ -71,6 +82,8 @@ def _verify(token: str) -> dict | None:
         payload = json.loads(base64.urlsafe_b64decode(padded))
     except (ValueError, UnicodeDecodeError):
         return None
+    if "exp" not in payload:
+        logger.warning("Token sem campo 'exp' — tratado como expirado.")
     if payload.get("exp", 0) < time.time():
         return None
     return payload

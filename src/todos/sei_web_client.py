@@ -630,9 +630,11 @@ class SEIWebClient:
             title = _tag_str(user_link, "title").strip()
             m = re.match(r"^(.+?)\s+\((\d+)/(\w+)\)$", title)
             if m:
-                self._nome_usuario = m.group(1)
-                self._id_usuario = m.group(2)
-                self._orgao_usuario = m.group(3)
+                self._nome_usuario, self._id_usuario, self._orgao_usuario = (
+                    m.group(1),
+                    m.group(2),
+                    m.group(3),
+                )
 
         unidade: dict[str, str] = {"sigla": sigla, "nome": nome}
         if self._inbox_url is not None:
@@ -1781,12 +1783,12 @@ class SEIWebClient:
     async def listar_assinaturas_web(self, protocolo: str, id_documento: str) -> list[dict]:
         """Lista assinaturas de um documento via scrape de documento_consultar."""
         data = await self.consultar_documento_web(protocolo, id_documento)
-        return data.get("assinaturas", [])  # type: ignore[return-value]
+        return data.get("assinaturas") or []
 
     async def listar_ciencias_web(self, protocolo: str, id_documento: str) -> list[dict]:
         """Lista ciências de um documento via scrape de documento_consultar."""
         data = await self.consultar_documento_web(protocolo, id_documento)
-        return data.get("ciencias", [])  # type: ignore[return-value]
+        return data.get("ciencias") or []
 
     async def visualizar_documento_interno_web(self, protocolo: str, id_documento: str) -> str:
         """Retorna HTML de um documento interno via documento_visualizar."""
@@ -4164,14 +4166,30 @@ def parse_arvore_nos(html: str) -> list[dict]:
 
 _RE_PARENS = re.compile(r"^\s*\(\s*|\s*\)\s*$")
 # Parseia label de documento: "Despacho GPF 2874369" ou "Relatório (2869849)"
+# Três alternações com grupos nomeados por ramo para facilitar detecção de qual casou:
+#   ramo "interno":  Tipo SIGLA NUMERO
+#   ramo "externo":  Tipo (NUMERO)  — corpo pode conter sigla; extraída por _RE_DOC_LABEL_SIGLA
+#   ramo "fallback": qualquer coisa com número ≥5 dígitos no final
 _RE_DOC_LABEL = re.compile(
-    r"^(.+?)\s+([A-Z][A-Z0-9/_-]+)\s+(\d+)$"  # interno: Tipo SIGLA NUMERO
-    r"|^(.+?)\s+\((\d+)\)$"  # externo: Tipo (NUMERO)
-    r"|^(.+?)\s+([A-Z][A-Z0-9/_-]+)\s+(\d+)\s+\((\d+)\)$"  # misto: Tipo SIGLA NUMERO (SEI)
+    r"^(?P<int_tipo>.+?)\s+(?P<int_sigla>[A-Z][A-Z0-9/_-]+)\s+(?P<int_num>\d+)$"  # interno
+    r"|^(?P<ext_corpo>.+?)\s+\((?P<ext_num>\d+)\)$"  # externo
+    r"|(?P<fb_num>\d{5,})$"  # fallback: número longo no final
 )
+_RE_DOC_LABEL_SIGLA = re.compile(r"^(?P<tipo>.+?)\s+(?P<sigla>[A-Z][A-Z0-9/_-]+)\s+\d*$")
 
 
 _RE_TOOLTIP = re.compile(r"infraTooltipMostrar\(\s*'([^']*)'\s*,\s*'([^']*)'\s*\)")
+
+# Colunas sem header textual na Visualização Detalhada do painel de processos do SEI.
+# A ordem é invariante: checkbox / ícones de status / link do processo / atribuição.
+# Colunas além do índice 3 recebem nome genérico ("col4", "col5"…) e dependem da
+# configuração do painel de cada usuário.
+_COLUNAS_DETALHADA: dict[int, str] = {
+    0: "_check",
+    1: "icones",
+    2: "_processo",
+    3: "atribuicao",
+}
 
 
 def _parse_doc_label(label: str) -> dict:
@@ -4188,36 +4206,31 @@ def _parse_doc_label(label: str) -> dict:
     if not label:
         return result
 
-    # Tenta formato interno: "Tipo SIGLA NUMERO"
-    m = re.match(r"^(.+?)\s+([A-Z][A-Z0-9/_-]+)\s+(\d+)$", label)
-    if m:
-        result["tipo_documento"] = m.group(1).strip()
-        result["sigla_unidade"] = m.group(2)
-        result["numero_sei"] = m.group(3)
+    m = _RE_DOC_LABEL.search(label)
+    if m is None:
+        result["tipo_documento"] = label
         return result
 
-    # Tenta formato com parênteses: "Tipo (NUMERO)" ou "Tipo SIGLA (NUMERO)"
-    m = re.match(r"^(.+?)\s+\((\d+)\)$", label)
-    if m:
-        corpo = m.group(1).strip()
-        result["numero_sei"] = m.group(2)
-        # tenta extrair sigla do corpo: "Comprovante e-CGU - SA 4"
-        m2 = re.match(r"^(.+?)\s+([A-Z][A-Z0-9/_-]+)\s+\d*$", corpo)
+    if m.group("int_tipo") is not None:
+        # Ramo interno: "Tipo SIGLA NUMERO"
+        result["tipo_documento"] = m.group("int_tipo").strip()
+        result["sigla_unidade"] = m.group("int_sigla")
+        result["numero_sei"] = m.group("int_num")
+    elif m.group("ext_corpo") is not None:
+        # Ramo externo: "Tipo (NUMERO)" — corpo pode conter sigla opcional
+        corpo = m.group("ext_corpo").strip()
+        result["numero_sei"] = m.group("ext_num")
+        m2 = _RE_DOC_LABEL_SIGLA.match(corpo)
         if m2:
-            result["tipo_documento"] = m2.group(1).strip()
-            result["sigla_unidade"] = m2.group(2)
+            result["tipo_documento"] = m2.group("tipo").strip()
+            result["sigla_unidade"] = m2.group("sigla")
         else:
             result["tipo_documento"] = corpo
-        return result
-
-    # fallback: label inteiro como tipo
-    # tenta ao menos extrair o número no final
-    m = re.search(r"(\d{5,})$", label)
-    if m:
-        result["numero_sei"] = m.group(1)
-        result["tipo_documento"] = label[: m.start()].strip()
     else:
-        result["tipo_documento"] = label
+        # Ramo fallback: número longo encontrado no final
+        result["numero_sei"] = m.group("fb_num")
+        result["tipo_documento"] = label[: m.start()].strip()
+
     return result
 
 
@@ -4269,9 +4282,7 @@ def parse_inbox(html: str) -> tuple[str, list[dict]]:
             if h:
                 col_names.append(h)
             else:
-                col_names.append(
-                    {0: "_check", 1: "icones", 2: "_processo", 3: "atribuicao"}.get(i, f"col{i}")
-                )
+                col_names.append(_COLUNAS_DETALHADA.get(i, f"col{i}"))
 
         for tr in tbl.find_all("tr", id=re.compile(r"^P\d+$")):
             tds = tr.find_all("td", recursive=False)

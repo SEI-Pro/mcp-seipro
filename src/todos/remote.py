@@ -69,6 +69,6 @@ def run_remote(mcp: FastMCP, *, port: int) -> None:
     base_url = os.environ.get("BASE_URL", f"http://localhost:{port}").rstrip("/")
     app = build_remote_app(mcp, base_url=base_url)
     config = uvicorn.Config(
-        app, host=os.environ.get("SEI_HOST", "0.0.0.0"), port=port, log_level="info"
+        app, host=os.environ.get("MCP_HOST", "0.0.0.0"), port=port, log_level="info"
     )
     anyio.run(uvicorn.Server(config).serve)
