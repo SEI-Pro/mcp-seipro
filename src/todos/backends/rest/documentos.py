@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from todos.backends.rest._session import _RestMixin
-from todos.exceptions import SEIError
+from todos.exceptions import SEIError, SEIValidationError
 
 if TYPE_CHECKING:
     from todos.backends.models import NovoDocumentoExterno, NovoDocumentoInterno
@@ -176,10 +176,18 @@ class DocumentosRest(_RestMixin):
                 res = await self._rest.listar_usuarios(filtro=login, apenas_unidade=False)
                 for u in res.get("usuarios", []):
                     if u.get("sigla", "").lower() == login.lower():
-                        id_usuario = str(u.get("id_usuario") or "")
+                        raw = u.get("id_usuario")
+                        if raw is not None:
+                            id_usuario = str(raw)
                         break
             except (SEIError, httpx.HTTPError):
                 pass
+        if not id_usuario:
+            msg = (
+                f"Não foi possível resolver o id do usuário para o login '{login}'. "
+                "Verifique se o login está correto e se o usuário pertence à unidade ativa."
+            )
+            raise SEIValidationError(msg)
         return await self._rest.assinar_documento(
             id_documento=doc_id,
             login=login,
