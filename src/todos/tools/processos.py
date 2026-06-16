@@ -65,7 +65,7 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
     inclui o campo `_aviso_acesso` — um aviso INFORMATIVO de privacidade,
     NÃO um erro de permissão. Os metadados foram retornados com sucesso.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     # O composite combina metadados da REST + árvore de documentos do web.
     merged = await backend.consultar_processo(protocolo_formatado)
 
@@ -95,7 +95,7 @@ async def sei_arvore_processo(
 
     Para ler o conteúdo de um documento, use sei_ler_documento com o id.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     if ctx:
         await ctx.report_progress(0, 100, "Buscando árvore do processo…")
     result = await backend.arvore_processo(protocolo_formatado)
@@ -117,7 +117,7 @@ async def sei_listar_documentos(
     Cada documento tem: id, nome_composto, tipo_documento, sigla_unidade,
     numero_sei. Para ler o conteúdo, use sei_ler_documento com o id.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_documentos(protocolo_formatado)
     return _json(result)
 
@@ -128,7 +128,7 @@ async def sei_listar_unidades_processo(
     ctx: Context | None = None,
 ) -> str:
     """Lista as unidades onde o processo está aberto."""
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_unidades_processo(processo)
     return _json(result)
 
@@ -139,7 +139,7 @@ async def sei_listar_interessados(
     ctx: Context | None = None,
 ) -> str:
     """Lista os interessados de um processo."""
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_interessados(processo)
     return _json(result)
 
@@ -150,7 +150,7 @@ async def sei_listar_sobrestamentos(
     ctx: Context | None = None,
 ) -> str:
     """Lista o histórico de sobrestamentos de um processo."""
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_sobrestamentos(processo)
     return _json(result)
 
@@ -166,7 +166,7 @@ async def sei_consultar_atribuicao(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.consultar_atribuicao(processo)
     return _json(result)
 
@@ -186,7 +186,7 @@ async def sei_historico_atribuicoes(
     Útil para fluxos de trabalho (devolver ao responsável anterior).
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_historico_atribuicoes(processo)
     return _json(result)
 
@@ -203,7 +203,7 @@ async def sei_verificar_acesso(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.verificar_acesso(processo)
     return _json(result)
 
@@ -218,7 +218,7 @@ async def sei_listar_relacionamentos(
     REQUER mod-wssei 3.0.2+ (SEI 5.0.x). Não disponível em versões anteriores.
     Se falhar, use sei_versao para verificar. Precisa ser >= 3.0.2.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_relacionamentos(processo)
     return _json(result)
 
@@ -236,7 +236,7 @@ async def sei_listar_atividades(
 
     Aceita protocolo formatado (ex: 50300.000123/2025-00).
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_atividades(processo)
     return _json(result)
 
@@ -280,7 +280,7 @@ async def sei_listar_processos(
     - Login web é executado uma vez por sessão (~3 s); listagens subsequentes
       custam ~600 ms cada, contra ~14 s da REST API.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_processos(
         pagina=pagina,
         apenas_meus=apenas_meus,
@@ -320,7 +320,7 @@ async def sei_criar_processo(
 
     Retorna o IdProcedimento e ProtocoloFormatado do processo criado.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.criar_processo(
         NovoProcesso(
             tipo_processo=tipo_processo,
@@ -356,7 +356,7 @@ async def sei_alterar_processo(
 
     Informe apenas os campos que deseja alterar.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.alterar_processo(
         processo,
         especificacao=especificacao,
@@ -378,7 +378,7 @@ async def sei_concluir_processo(numero_processo: str, ctx: Context | None = None
     O processo é removido da caixa da unidade mas permanece acessível.
     Use sei_reabrir_processo para reverter.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.concluir_processo(numero_processo)
     return _json(result)
 
@@ -391,7 +391,7 @@ async def sei_reabrir_processo(processo: str, ctx: Context | None = None) -> str
 
     O processo volta para a caixa da unidade atual.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.reabrir_processo(processo)
     return _json(result)
 
@@ -405,7 +405,7 @@ async def sei_receber_processo(
 
     - processo: protocolo formatado ou IdProcedimento
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.receber_processo(processo)
     return _json(result)
 
@@ -419,7 +419,7 @@ async def sei_remover_atribuicao(
 
     - processo: protocolo formatado ou IdProcedimento
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.remover_atribuicao(processo)
     return _json(result)
 
@@ -434,7 +434,7 @@ async def sei_remover_sobrestamento(
     - processo: protocolo formatado (ex: 50300.018905/2018-67) ou IdProcedimento
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.remover_sobrestamento(processo)
     return _json(result)
 
@@ -451,7 +451,7 @@ async def sei_registrar_andamento(
     - descricao: texto do andamento
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.registrar_andamento(processo, descricao)
     return _json(result)
 
@@ -471,7 +471,7 @@ async def sei_criar_anotacao(
     - prioridade: nível de prioridade (1=normal, 2=alta)
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.criar_anotacao(processo, descricao, prioridade)
     return _json(result)
 
@@ -487,7 +487,7 @@ async def sei_remover_anotacao(
     - processo: protocolo formatado (ex: 50300.018905/2018-67) ou IdProcedimento
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.remover_anotacao(processo)
     return _json(result)
 
@@ -505,7 +505,7 @@ async def sei_criar_observacao(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.criar_observacao(processo, descricao)
     return _json(result)
 
@@ -523,7 +523,7 @@ async def sei_marcar_nao_lido(
 
     - numero_processo: protocolo formatado (ex: 50300.012639/2023-26)
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     unidade = await backend.unidade_atual()
     id_unidade = unidade.get("id_unidade")
     if not id_unidade:
@@ -580,7 +580,7 @@ async def sei_executar_acao(
                 "acao": acao,
             }
         )
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.executar_acao(processo, acao)
     return _json(result)
 
@@ -610,7 +610,7 @@ async def sei_gerar_pdf_processo(
     Nota: o processo precisa estar aberto na caixa da unidade atual.
     Para processos de outras unidades, use sei_trocar_unidade primeiro.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
 
     if ctx:
         await ctx.report_progress(0, 100, "Gerando PDF do processo…")
@@ -654,7 +654,7 @@ async def sei_gerar_zip_processo(
 
     Retorna base64 do ZIP, tamanho e caminho do arquivo salvo em disco.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
 
     if ctx:
         await ctx.report_progress(0, 100, "Gerando ZIP do processo…")
