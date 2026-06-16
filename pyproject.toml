@@ -121,16 +121,13 @@ ignore = [
     "DTZ005",
 ]
 "src/todos/sei_web_client.py" = [
-    "TRY002", "TRY003", "EM101", "EM102",
     "ARG002",  # listar_usuarios_web.apenas_unidade: interface parity with SEIClient; web form ignores it by design
-    # Magic values: HTTP status codes and HTML column counts for SEI layout invariants
-    "PLR2004",
     # Scraper methods are inherently complex (multi-step web flows, branching HTML layouts)
     "C901", "PLR0912", "PLR0913", "PLR0915",
     # Optional heavy deps (keyring, mimetypes, os, datetime) must be deferred at import time
     "PLC0415",
     # Sync path ops inside async — architectural constraint; aiofiles refactor tracked separately
-    "ASYNC230", "ASYNC240", "PTH113", "PTH119", "PTH123", "PTH202",
+    "ASYNC230", "ASYNC240",
     # date.today() without tz — local date intentional for Brazilian government form fields
     "DTZ011",
     # Web scraper response dicts contain heterogeneous API values; Any is the correct element type
