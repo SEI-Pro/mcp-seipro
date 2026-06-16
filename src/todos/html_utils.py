@@ -132,16 +132,25 @@ class _SEIMarkdownConverter(MarkdownConverter):
 
         cells = el.find_all(["td", "th"]) if isinstance(el, Tag) else []
         is_first_row = isinstance(el, Tag) and el.find_previous_sibling() is None
+        parent = el.parent if isinstance(el, Tag) else None
+        is_tag_parent = isinstance(parent, Tag)
         is_headrow = isinstance(el, Tag) and (
             all(cell.name == "th" for cell in cells)
-            or (el.parent.name == "thead" and len(el.parent.find_all("tr")) == 1)
+            or (is_tag_parent and parent.name == "thead" and len(parent.find_all("tr")) == 1)
         )
-        is_head_row_missing = isinstance(el, Tag) and (
-            (is_first_row and el.parent.name != "tbody")
-            or (
-                is_first_row
-                and el.parent.name == "tbody"
-                and len(el.parent.parent.find_all(["thead"])) < 1
+        grandparent = parent.parent if is_tag_parent else None
+        is_tag_grandparent = isinstance(grandparent, Tag)
+        is_head_row_missing = (
+            isinstance(el, Tag)
+            and is_tag_parent
+            and (
+                (is_first_row and parent.name != "tbody")
+                or (
+                    is_first_row
+                    and parent.name == "tbody"
+                    and is_tag_grandparent
+                    and len(grandparent.find_all(["thead"])) < 1
+                )
             )
         )
 
@@ -153,7 +162,7 @@ class _SEIMarkdownConverter(MarkdownConverter):
         for cell in cells:
             colspan = 1
             if "colspan" in cell.attrs and str(cell["colspan"]).isdigit():
-                colspan = max(1, min(1000, int(cell["colspan"])))
+                colspan = max(1, min(1000, int(str(cell["colspan"]))))
             full_colspan += colspan
             # Read align from HTML attribute first; fall back to left-align when absent.
             raw_align = cell.get("align")
@@ -161,17 +170,19 @@ class _SEIMarkdownConverter(MarkdownConverter):
             col_alignments.extend([_align_to_separator(align_val)] * colspan)
 
         separator_row = "| " + " | ".join(col_alignments) + " |"
+        opts: dict[str, object] = getattr(self, "options", {})
 
         if (
-            is_headrow or (is_head_row_missing and self.options["table_infer_header"])
+            is_headrow or (is_head_row_missing and opts.get("table_infer_header", True))
         ) and is_first_row:
             underline += separator_row + "\n"
-        elif (is_head_row_missing and not self.options["table_infer_header"]) or (
+        elif (is_head_row_missing and not opts.get("table_infer_header", True)) or (
             is_first_row
             and isinstance(el, Tag)
+            and is_tag_parent
             and (
-                el.parent.name == "table"
-                or (el.parent.name == "tbody" and not el.parent.find_previous_sibling())
+                parent.name == "table"
+                or (parent.name == "tbody" and not parent.find_previous_sibling())
             )
         ):
             overline += "| " + " | ".join([""] * full_colspan) + " |\n"
