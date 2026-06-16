@@ -92,7 +92,8 @@ def _evict_oldest(clients: dict, max_sessions: int) -> SEIClient | SEIWebClient 
 async def _get_client(ctx: Context | None) -> SEIClient:
     """Obtém o SEIClient REST, criando sob demanda em modo HTTP."""
     if ctx is None:
-        raise ValueError("Contexto MCP nao disponivel.")
+        msg = "Contexto MCP nao disponivel."
+        raise ValueError(msg)
 
     if _http_mode:
         from fastmcp.server.dependencies import get_access_token
@@ -101,10 +102,12 @@ async def _get_client(ctx: Context | None) -> SEIClient:
 
         access_token = get_access_token()
         if not access_token:
-            raise ValueError("Autenticacao necessaria. Reconecte o MCP.")
+            msg = "Autenticacao necessaria. Reconecte o MCP."
+            raise ValueError(msg)
         creds = get_sei_credentials_from_token(access_token.token)
         if not creds:
-            raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
+            msg = "Token invalido ou expirado. Reconecte o MCP."
+            raise ValueError(msg)
 
         max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
         lock: asyncio.Lock = ctx.lifespan_context["sei_by_session_lock"]
@@ -125,7 +128,8 @@ async def _get_client(ctx: Context | None) -> SEIClient:
     client = ctx.lifespan_context.get("sei")
     if client is not None:
         return client
-    raise ValueError("SEIClient nao configurado. Verifique as variaveis de ambiente.")
+    msg = "SEIClient nao configurado. Verifique as variaveis de ambiente."
+    raise ValueError(msg)
 
 
 async def _get_web_client(ctx: Context | None) -> SEIWebClient:
@@ -135,7 +139,8 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
     instanciado uma vez por contexto, não por chamada.
     """
     if ctx is None:
-        raise ValueError("Contexto MCP nao disponivel.")
+        msg = "Contexto MCP nao disponivel."
+        raise ValueError(msg)
 
     if _http_mode:
         from fastmcp.server.dependencies import get_access_token
@@ -144,10 +149,12 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
 
         access_token = get_access_token()
         if not access_token:
-            raise ValueError("Autenticacao necessaria. Reconecte o MCP.")
+            msg = "Autenticacao necessaria. Reconecte o MCP."
+            raise ValueError(msg)
         creds = get_sei_credentials_from_token(access_token.token)
         if not creds:
-            raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
+            msg = "Token invalido ou expirado. Reconecte o MCP."
+            raise ValueError(msg)
 
         max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
         lock: asyncio.Lock = ctx.lifespan_context["sei_web_by_session_lock"]
@@ -168,7 +175,8 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
     client = ctx.lifespan_context.get("sei_web")
     if client is not None:
         return client
-    raise ValueError("SEIWebClient nao configurado.")
+    msg = "SEIWebClient nao configurado."
+    raise ValueError(msg)
 
 
 async def _has_rest(ctx: Context | None) -> bool:
@@ -613,11 +621,12 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
     # Não tentar como externo automaticamente — risco alto de confusão id/proto
     # O fallback para externo só deve ser usado com id_procedimento conhecido
 
-    raise SEINotFoundError(
+    msg = (
         f"Documento '{referencia}' não encontrado via pesquisa. "
         "Se é um documento recém-criado, o Solr pode não ter indexado ainda. "
         "Use sei_arvore_processo com o protocolo do processo para encontrá-lo."
     )
+    raise SEINotFoundError(msg)
 
 
 def _json(data: object) -> str:

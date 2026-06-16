@@ -122,7 +122,7 @@ ignore = [
 # server.py (tool registrations) + mcp_app.py (shared core extracted from it):
 # same code, same framework-dictated/boundary-file justifications below.
 "src/todos/{server,mcp_app}.py" = [
-    "TRY002", "TRY003", "EM101", "EM102", "PLR0912", "C901",
+    "PLR0912", "C901",  # 121 tools + scraper helpers — complexity is architectural
     "PLR0911",  # multiple return paths in tools inherent to the dual web/REST dispatch model
     "PLR0913",  # tools need ctx + ≥4 business params; grouping into dataclasses hides the MCP schema
     "ANN201", "D103",  # lifespan() is a FastMCP protocol function; signature is framework-dictated
@@ -130,13 +130,11 @@ ignore = [
     # Deferred/conditional imports: fastmcp auth, tempfile, html, setup_wizard, remote are
     # all runtime-optional — moving to top-level would fail on envs where they're absent
     "PLC0415",
-    # cast() with Callable type expressions — moving cast args to string literals degrades readability
-    "TC006",
     # TRY201/TRY301: raise primeira re-raises a captured *outer* exception (not the current handler)
     # so bare `raise` would re-raise the wrong exception; explicit `raise primeira` is correct
     "TRY201", "TRY301",
-    # ASYNC230/PTH123/PTH118: sync write to tempfile for MCP output artifacts — acceptable here
-    "ASYNC230", "PTH123", "PTH118",
+    # ASYNC230: sync write to tempfile for MCP output artifacts — acceptable here
+    "ASYNC230",
 ]  # boundary file: 121 tools, complexity is inherent
 # per-domain tool modules split out of server.py: same framework-dictated MCP
 # signature constraint — tools need ctx + ≥4 business params, and grouping into
