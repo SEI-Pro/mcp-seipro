@@ -16,7 +16,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-CATALOG_CACHE_TTL = 24 * 60 * 60
+CATALOG_CACHE_TTL: int = int(os.environ.get("CATALOG_CACHE_TTL", str(24 * 60 * 60)))
 _SWEEP_PROBABILITY = 0.05  # probabilistic expired-row sweep: run on ~5% of writes
 
 
