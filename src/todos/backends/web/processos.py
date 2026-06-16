@@ -104,6 +104,8 @@ class ProcessosWeb(_WebMixin):
     async def criar_processo(self, dados: NovoProcesso) -> dict:
         """Cria um novo processo."""
         assuntos_ids = [a.strip() for a in dados.assuntos.split(",") if a.strip()]
+        # Lista vazia é válida: _serializar_assuntos usa os assuntos pré-carregados
+        # do tipo de processo como default (mesmo comportamento do form web).
         interessados_ids = [i.strip() for i in dados.interessados.split(",") if i.strip()]
         return await self._web.criar_processo_web(
             tipo_processo=dados.tipo_processo,
