@@ -25,4 +25,31 @@ dependencies = [
 mcp-seipro = "mcp_seipro.server:main"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/mcp_seipro/", "pyproject.toml", "README.md"]
+include = ["src/mcp_seipro/", "src/todos/", "pyproject.toml", "README.md"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "W191", "E101",
+    "E111", "E114", "E117",
+    "D206", "D300",
+    "Q000", "Q001", "Q002", "Q003",
+    "COM812", "COM819",
+    "ISC001", "ISC002",
+    "E501",
+    "D203",
+    "D213",
+    "RUF001", "RUF002", "RUF003",
+    "CPY001",
+    "FIX001", "FIX002", "FIX003", "FIX004",
+    "TD001", "TD002", "TD003", "TD004", "TD005", "TD006", "TD007",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/todos/setup_wizard.py" = [
+    "S603",  # subprocess calls use controlled Path objects — not shell injection
+]
