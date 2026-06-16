@@ -27,6 +27,15 @@ class FiltrosPesquisaProcessos:
     limit: int = 50
     pagina: int = 0
 
+    def __post_init__(self) -> None:
+        """Valida os campos numéricos."""
+        if self.limit < 1:
+            msg = f"limit deve ser >= 1, recebido: {self.limit}"
+            raise ValueError(msg)
+        if self.pagina < 0:
+            msg = f"pagina deve ser >= 0, recebido: {self.pagina}"
+            raise ValueError(msg)
+
 
 @dataclass(frozen=True)
 class NovoProcesso:
