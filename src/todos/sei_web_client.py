@@ -24,7 +24,7 @@ import re
 import time
 import warnings
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -46,6 +46,20 @@ logger = logging.getLogger(__name__)
 # o TTL curto limita apenas a janela de staleness do conteúdo da árvore)
 _ARVORE_CACHE_TTL = 30.0
 SEI_WEB_PAGE_SIZE = 10
+
+
+def _decode_response(content: bytes, content_type: str) -> str:
+    """Decode HTTP response bytes using charset from Content-Type, defaulting to iso-8859-1."""
+    charset = "iso-8859-1"
+    for part in content_type.split(";"):
+        if "charset=" in part.lower():
+            charset = part.split("=", 1)[1].strip().strip('"')
+            break
+    try:
+        return content.decode(charset)
+    except (UnicodeDecodeError, LookupError):
+        logger.warning("Falha ao decodificar resposta com charset %r; re-lançando exceção", charset)
+        raise
 
 
 def _tag_str(tag: Tag, attr: str, default: str = "") -> str:
@@ -293,6 +307,10 @@ class SEIWebClient:
         # serializa leituras/escritas nos caches mutáveis — previne check-then-set
         # concorrente entre coroutines chamando os mesmos métodos em paralelo
         self._cache_lock = asyncio.Lock()
+        # lock separado para _arvore_cache (não mantido durante fetch HTTP)
+        self._arvore_lock: asyncio.Lock = asyncio.Lock()
+        # lock separado para _trabalhar_links e _form_hidden/_form_action
+        self._form_lock: asyncio.Lock = asyncio.Lock()
 
     @property
     def nome_usuario(self) -> str:
@@ -467,6 +485,15 @@ class SEIWebClient:
 
         action = _tag_str(login_form, "action") or self.login_url
         post_url = urljoin(self.login_url, action)
+        _login_host = urlparse(self.login_url).netloc
+        _action_host = urlparse(post_url).netloc
+        if _action_host and _action_host != _login_host:
+            logger.warning(
+                "Ação de login redirecionaria para host diferente: %s (esperado %s) — usando URL de login padrão",
+                _action_host,
+                _login_host,
+            )
+            post_url = self.login_url
         post_resp = await self._http.post(
             post_url,
             data=form,
@@ -789,31 +816,40 @@ class SEIWebClient:
         inbox_url = str(self._inbox_url)
 
         # Caso simples: GET inicial sem detalhada/filtros/paginação
-        if not detalhada and pagina == 0 and not apenas_meus and self._form_action is None:
+        async with self._form_lock:
+            _form_action_snapshot = self._form_action
+        if not detalhada and pagina == 0 and not apenas_meus and _form_action_snapshot is None:
             resp = await self._http.get(
                 inbox_url,
                 headers={"Referer": inbox_url},
             )
             _check(resp)
             _soup = BeautifulSoup(resp.text, "html.parser")
-            self._extract_main_form(resp.text, _soup)
-            self._populate_trabalhar_links(resp.text, _soup)
-            self._extract_unidade_atual(resp.text, _soup)
+            async with self._form_lock:
+                self._extract_main_form(resp.text, _soup)
+                self._populate_trabalhar_links(resp.text, _soup)
+                self._extract_unidade_atual(resp.text, _soup)
             return len(resp.content), resp.text
 
         # Precisa do form action — fetch inicial se ainda não temos
-        if self._form_action is None:
+        async with self._form_lock:
+            _form_action_snapshot = self._form_action
+        if _form_action_snapshot is None:
             seed = await self._http.get(
                 inbox_url,
                 headers={"Referer": inbox_url},
             )
             _check(seed)
-            self._extract_main_form(seed.text)
-            if self._form_action is None:
+            async with self._form_lock:
+                self._extract_main_form(seed.text)
+                _form_action_snapshot = self._form_action
+            if _form_action_snapshot is None:
                 raise SEIParseError("Form principal de procedimento_controlar não encontrado")
 
         # POST para alternar visualização / aplicar filtros / navegar páginas
-        post_data = dict(self._form_hidden)
+        async with self._form_lock:
+            post_data = dict(self._form_hidden)
+            post_url = urljoin(str(self._inbox_url), self._form_action)
         if detalhada:
             post_data["hdnTipoVisualizacao"] = "D"
         # apenas_meus: sempre seta explicitamente (M ou T) para não herdar
@@ -823,7 +859,6 @@ class SEIWebClient:
         if pagina > 0:
             post_data["hdnInfraPaginaAtual"] = str(pagina)
 
-        post_url = urljoin(str(self._inbox_url), self._form_action)
         resp = await self._http.post(
             post_url,
             data=post_data,
@@ -835,19 +870,21 @@ class SEIWebClient:
         body = resp.text
         if 'name="txtUsuario"' in body or 'id="txtUsuario"' in body:
             logger.info("Sessão SEI expirou, re-logando")
-            self._form_action = None
-            self._form_hidden = {}
+            async with self._form_lock:
+                self._form_action = None
+                self._form_hidden = {}
             await self.login()
             return await self.fetch_inbox(
                 detalhada=detalhada, pagina=pagina, apenas_meus=apenas_meus
             )
 
-        # atualiza cache do form (action e hashCriterios podem mudar entre páginas)
+        # atualiza cache do form (action e hashCriterios podem mudam entre páginas)
         _soup = BeautifulSoup(body, "html.parser")
-        self._extract_main_form(body, _soup)
-        self._extract_pesquisa_rapida(body, _soup)
-        self._populate_trabalhar_links(body, _soup)
-        self._extract_unidade_atual(body, _soup)
+        async with self._form_lock:
+            self._extract_main_form(body, _soup)
+            self._extract_pesquisa_rapida(body, _soup)
+            self._populate_trabalhar_links(body, _soup)
+            self._extract_unidade_atual(body, _soup)
         return len(resp.content), body
 
     # ------------------------------------------------------------------
@@ -883,7 +920,8 @@ class SEIWebClient:
         if "procedimento_trabalhar" in final_url:
             # Redirecionou direto para o processo
             href = final_url.replace(sei_base, "") if final_url.startswith(sei_base) else final_url
-            self._trabalhar_links[protocolo] = href
+            async with self._form_lock:
+                self._trabalhar_links[protocolo] = href
             return
 
         # Página de resultados (protocolo_pesquisar) — busca o link correto
@@ -893,13 +931,15 @@ class SEIWebClient:
             txt = a.get_text(strip=True).replace(" ", "")
             if proto_norm in txt:
                 href = _tag_str(a, "href").replace("&amp;", "&")
-                self._trabalhar_links[protocolo] = href
+                async with self._form_lock:
+                    self._trabalhar_links[protocolo] = href
                 return
 
         # Tenta também via links com id_procedimento (tooltip ou linha da tabela)
         for a in soup.find_all("a", href=re.compile(r"procedimento_trabalhar")):
             href = _tag_str(a, "href").replace("&amp;", "&")
-            self._trabalhar_links[protocolo] = href
+            async with self._form_lock:
+                self._trabalhar_links[protocolo] = href
             return
 
         raise SEINotFoundError(
@@ -1092,13 +1132,18 @@ class SEIWebClient:
         await self.ensure_authenticated()
 
         # garante que o protocolo está no cache de links da inbox
-        if protocolo_formatado not in self._trabalhar_links:
+        async with self._form_lock:
+            _in_links = protocolo_formatado in self._trabalhar_links
+        if not _in_links:
             await self.fetch_inbox(detalhada=False)
-        if protocolo_formatado not in self._trabalhar_links:
+        async with self._form_lock:
+            _in_links = protocolo_formatado in self._trabalhar_links
+        if not _in_links:
             # processo fora da caixa — usa pesquisa rápida
             await self.pesquisar_processo(protocolo_formatado)
 
-        trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
+        async with self._form_lock:
+            trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
 
         # Step 1: procedimento_trabalhar.php (frameset, leve)
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
@@ -1107,8 +1152,9 @@ class SEIWebClient:
         # detecta sessão expirada
         if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
             logger.info("Sessão SEI expirou, re-logando")
-            self._form_action = None
-            self._form_hidden = {}
+            async with self._form_lock:
+                self._form_action = None
+                self._form_hidden = {}
             await self.login()
             return await self.consultar_processo(protocolo_formatado)
 
@@ -1274,11 +1320,16 @@ class SEIWebClient:
 
     async def _garantir_link_trabalhar(self, protocolo: str) -> str:
         """Garante que _trabalhar_links[protocolo] existe e retorna o href."""
-        if protocolo not in self._trabalhar_links:
+        async with self._form_lock:
+            in_cache = protocolo in self._trabalhar_links
+        if not in_cache:
             await self.fetch_inbox(detalhada=False)
-        if protocolo not in self._trabalhar_links:
+        async with self._form_lock:
+            in_cache = protocolo in self._trabalhar_links
+        if not in_cache:
             await self.pesquisar_processo(protocolo)
-        href = self._trabalhar_links.get(protocolo)
+        async with self._form_lock:
+            href = self._trabalhar_links.get(protocolo)
         if not href:
             raise SEINotFoundError(f"Processo {protocolo!r} não encontrado")
         return href
@@ -1288,13 +1339,18 @@ class SEIWebClient:
 
         Resultado cacheado por _ARVORE_CACHE_TTL segundos; ações que alteram
         o processo invalidam a entrada via _invalidar_arvore().
+
+        Usa double-checked locking: verifica o cache sem o lock primeiro,
+        depois adquire o lock para verificar novamente antes de escrever.
+        O lock NÃO é mantido durante o fetch HTTP para não serializar requisições.
         """
-        em_cache = self._arvore_cache.get(protocolo)
-        if em_cache is not None:
-            ts, resultado = em_cache
-            if time.monotonic() - ts <= _ARVORE_CACHE_TTL:
-                return resultado
-            del self._arvore_cache[protocolo]
+        async with self._arvore_lock:
+            em_cache = self._arvore_cache.get(protocolo)
+            if em_cache is not None:
+                ts, resultado = em_cache
+                if time.monotonic() - ts <= _ARVORE_CACHE_TTL:
+                    return resultado
+                del self._arvore_cache[protocolo]
 
         href = await self._garantir_link_trabalhar(protocolo)
         trab_url = urljoin(str(self._inbox_url), href)
@@ -1302,9 +1358,10 @@ class SEIWebClient:
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
         _check(r1)
         if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
-            self._form_action = None
-            self._form_hidden = {}
-            self._trabalhar_links.pop(protocolo, None)
+            async with self._form_lock:
+                self._form_action = None
+                self._form_hidden = {}
+                self._trabalhar_links.pop(protocolo, None)
             await self.login()
             return await self._arvore_do_processo(protocolo)
 
@@ -1317,7 +1374,8 @@ class SEIWebClient:
         r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
         _check(r2)
         resultado = (r2.text, str(r2.url))
-        self._arvore_cache[protocolo] = (time.monotonic(), resultado)
+        async with self._arvore_lock:
+            self._arvore_cache[protocolo] = (time.monotonic(), resultado)
         return resultado
 
     def _invalidar_arvore(self, protocolo: str) -> None:
@@ -1361,7 +1419,7 @@ class SEIWebClient:
         r = await self._http.get(acao_url, headers={"Referer": url_arvore})
         _check(r)
 
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
@@ -1393,7 +1451,7 @@ class SEIWebClient:
                 },
             )
             _check(r2)
-            body2 = r2.content.decode("iso-8859-1", "replace")
+            body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
             erro2 = _extrair_erro_sei(body2)
             if erro2:
                 raise SEIConnectionError(erro2)
@@ -1444,7 +1502,7 @@ class SEIWebClient:
         r = await self._http.get(acao_url, headers={"Referer": url_arvore})
         _check(r)
 
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         soup = BeautifulSoup(body, "html.parser")
         form = soup.find("form")
         if form is None:
@@ -1490,7 +1548,7 @@ class SEIWebClient:
         listar_url = await self._obter_link_toolbar("procedimento_sobrestado_listar")
         r = await self._http.get(listar_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         alvo = protocolo.strip()
         m_row = re.search(
             rf"acaoRemoverSobrestamento\('(\d+)','{re.escape(alvo)}'\)",
@@ -1522,7 +1580,7 @@ class SEIWebClient:
             headers={"Referer": str(r.url), "Content-Type": "application/x-www-form-urlencoded"},
         )
         _check(r2)
-        erro = _extrair_erro_sei(r2.content.decode("iso-8859-1", "replace"))
+        erro = _extrair_erro_sei(_decode_response(r2.content, r2.headers.get("content-type", "")))
         if erro:
             raise SEIConnectionError(erro)
         self._invalidar_arvore(protocolo)
@@ -1547,7 +1605,7 @@ class SEIWebClient:
         url = urljoin(url_arvore, m.group(1).replace("&amp;", "&"))
         r = await self._http.get(url, headers={"Referer": url_arvore})
         _check(r)
-        return r.content.decode("iso-8859-1", "replace"), str(r.url)
+        return _decode_response(r.content, r.headers.get("content-type", "")), str(r.url)
 
     async def _link_acao_visualizacao(self, protocolo: str, nome_var: str) -> str | None:
         """Extrai a URL assinada de uma ação JS (`var link<Acao> = '...'`).
@@ -1578,7 +1636,7 @@ class SEIWebClient:
             )
         r = await self._http.get(url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        erro = _extrair_erro_sei(r.content.decode("iso-8859-1", "replace"))
+        erro = _extrair_erro_sei(_decode_response(r.content, r.headers.get("content-type", "")))
         if erro:
             raise SEIConnectionError(erro)
         self._invalidar_arvore(protocolo)
@@ -1601,7 +1659,7 @@ class SEIWebClient:
         url = urljoin(f"{self.sei_root}/sei/", m.group(1).replace("&amp;", "&"))
         r = await self._http.get(url, headers={"Referer": url_arvore})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         return body, BeautifulSoup(body, "html.parser"), url_arvore
 
     @staticmethod
@@ -1671,7 +1729,9 @@ class SEIWebClient:
                 headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
             )
             _check(rr)
-            erro = _extrair_erro_sei(rr.content.decode("iso-8859-1", "replace"))
+            erro = _extrair_erro_sei(
+                _decode_response(rr.content, rr.headers.get("content-type", ""))
+            )
             if erro:
                 raise SEIConnectionError(erro)
             tentados[mid] = self._split_marcador_desc(desc)[0]
@@ -1773,7 +1833,7 @@ class SEIWebClient:
         )
         r = await self._http.get(url, headers={"Referer": referer})
         _check(r)
-        html = r.content.decode("iso-8859-1", "replace")
+        html = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(html)
         if erro:
             # SEI retorna 200 com página de erro (sessão expirada, sem permissão)
@@ -1798,7 +1858,7 @@ class SEIWebClient:
         )
         r = await self._http.get(url, headers={"Referer": referer})
         _check(r)
-        html = r.content.decode("iso-8859-1", "replace")
+        html = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(html)
         if erro:
             # SEI retorna 200 com página de erro; sem este check o erro seria
@@ -1817,7 +1877,7 @@ class SEIWebClient:
         _check(r)
         if "text/html" in r.headers.get("content-type", "").lower():
             # Anexo não chega como text/html: é página de erro com status 200
-            erro = _extrair_erro_sei(r.content.decode("iso-8859-1", "replace"))
+            erro = _extrair_erro_sei(_decode_response(r.content, r.headers.get("content-type", "")))
             raise SEIConnectionError(
                 f"documento_download_anexo: {erro or 'resposta HTML inesperada'}"
             )
@@ -1846,7 +1906,7 @@ class SEIWebClient:
         r = await self._http.get(consultar_url, headers={"Referer": url_arvore})
         _check(r)
 
-        html = r.content.decode("iso-8859-1", "replace")
+        html = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(html)
         if erro:
             raise SEIConnectionError(f"procedimento_consultar: {erro}")
@@ -1864,28 +1924,32 @@ class SEIWebClient:
         """
 
         def _find_link(proto: str) -> str | None:
-            if proto in self._trabalhar_links:
-                return self._trabalhar_links[proto]
             proto_norm = proto.replace(" ", "")
             for k, v in self._trabalhar_links.items():
-                if k.replace(" ", "") == proto_norm:
+                if k == proto or k.replace(" ", "") == proto_norm:
                     return v
             return None
 
-        if _find_link(protocolo_formatado) is None:
+        async with self._form_lock:
+            _trab_href = _find_link(protocolo_formatado)
+        if _trab_href is None:
             await self.fetch_inbox(detalhada=False)
-        if _find_link(protocolo_formatado) is None:
+            async with self._form_lock:
+                _trab_href = _find_link(protocolo_formatado)
+        if _trab_href is None:
             await self.pesquisar_processo(protocolo_formatado)
+            async with self._form_lock:
+                _trab_href = _find_link(protocolo_formatado)
 
-        trab_href = _find_link(protocolo_formatado)
-        trab_url = urljoin(str(self._inbox_url), trab_href)
+        trab_url = urljoin(str(self._inbox_url), _trab_href)
 
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
         _check(r1)
 
         if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
-            self._form_action = None
-            self._form_hidden = {}
+            async with self._form_lock:
+                self._form_action = None
+                self._form_hidden = {}
             await self.login()
             return await self._gerar_arquivo_processo(protocolo_formatado, acao)
 
@@ -1911,7 +1975,9 @@ class SEIWebClient:
         r3 = await self._http.get(form_url, headers={"Referer": str(r2.url)})
         _check(r3)
 
-        soup3 = BeautifulSoup(r3.content.decode("iso-8859-1", "replace"), "html.parser")
+        soup3 = BeautifulSoup(
+            _decode_response(r3.content, r3.headers.get("content-type", "")), "html.parser"
+        )
         form = soup3.find("form", id=re.compile(r"(?i)frmProcedimento(Pdf|Zip)"))
         if not form:
             raise SEIParseError("Formulário frmProcedimento(Pdf|Zip) não encontrado")
@@ -1934,7 +2000,7 @@ class SEIWebClient:
         )
         _check(r4)
 
-        body4 = r4.content.decode("iso-8859-1", "replace")
+        body4 = _decode_response(r4.content, r4.headers.get("content-type", ""))
         m_dl = re.search(
             r"getElementById\(['\"]ifrDownload['\"]\)\.src\s*=\s*'([^']+)'",
             body4,
@@ -2006,11 +2072,16 @@ class SEIWebClient:
 
     async def _navegar_historico(self, protocolo_formatado: str) -> tuple[str, str, str]:
         """Navega até o histórico do processo; retorna (hist_url, id_proc, referer)."""
-        if protocolo_formatado not in self._trabalhar_links:
+        async with self._form_lock:
+            _in_links = protocolo_formatado in self._trabalhar_links
+        if not _in_links:
             await self.fetch_inbox(detalhada=False)
-        if protocolo_formatado not in self._trabalhar_links:
+        async with self._form_lock:
+            _in_links = protocolo_formatado in self._trabalhar_links
+        if not _in_links:
             await self.pesquisar_processo(protocolo_formatado)
-        trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
+        async with self._form_lock:
+            trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
         _check(r1)
         soup_fs = BeautifulSoup(r1.text, "html.parser")
@@ -2187,7 +2258,7 @@ class SEIWebClient:
         r = await self._http.get(tramitar_url, headers={"Referer": url_arvore})
         _check(r)
 
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
@@ -2236,7 +2307,7 @@ class SEIWebClient:
             raise SEIConnectionError(
                 f"POST procedimento_tramitar falhou com status={r2.status_code}"
             )
-        body2 = r2.content.decode("iso-8859-1", "replace")
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro2 = _extrair_erro_sei(body2)
         if erro2:
             raise SEIConnectionError(erro2)
@@ -2261,7 +2332,7 @@ class SEIWebClient:
             headers={"Referer": inbox_url},
         )
         _check(r)
-        html = r.content.decode("iso-8859-1", "replace")
+        html = _decode_response(r.content, r.headers.get("content-type", ""))
         m = re.search(
             rf"(controlador\.php\?acao={re.escape(acao)}[^\"'\s]*infra_hash=[a-fA-F0-9]+)",
             html,
@@ -2277,7 +2348,7 @@ class SEIWebClient:
         cadastrar_url = await self._obter_link_toolbar("procedimento_cadastrar")
         r = await self._http.get(cadastrar_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         soup = BeautifulSoup(body, "html.parser")
         sel = soup.find("select", {"name": re.compile(r"selTipoProcedimento", re.IGNORECASE)})
         if sel is None:
@@ -2307,15 +2378,20 @@ class SEIWebClient:
         usuários da unidade atual (equivalente a apenas_unidade=True).
         """
         await self.ensure_authenticated()
-        if not self._trabalhar_links:
+        async with self._form_lock:
+            _has_links = bool(self._trabalhar_links)
+        if not _has_links:
             await self.fetch_inbox(detalhada=False)
-        if not self._trabalhar_links:
+        async with self._form_lock:
+            _has_links = bool(self._trabalhar_links)
+        if not _has_links:
             return {
                 "usuarios": [],
                 "total_itens": 0,
                 "_aviso": "Inbox vazia; não foi possível carregar usuários.",
             }
-        protocolo = next(iter(self._trabalhar_links))
+        async with self._form_lock:
+            protocolo = next(iter(self._trabalhar_links))
         form_info = await self.obter_form_acao(protocolo, "procedimento_atribuicao_cadastrar")
         opcoes = form_info.get("selects", {}).get("selAtribuicao", [])
         usuarios: list[dict[str, str]] = []
@@ -2346,7 +2422,7 @@ class SEIWebClient:
         lista_url = await self._obter_link_toolbar("bloco_assinatura_listar")
         r = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         soup = BeautifulSoup(body, "html.parser")
         tbl = soup.find("table", id=re.compile(r"tblBlocos?", re.IGNORECASE))
         if tbl is None:
@@ -2399,7 +2475,7 @@ class SEIWebClient:
         lista_url = await self._obter_link_toolbar("bloco_assinatura_listar")
         r = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         pat = re.compile(
             rf"(controlador\.php\?[^\"'\s]*acao={re.escape(nome_acao)}[^\"'\s]*id_bloco={re.escape(id_bloco)}[^\"'\s]*infra_hash=[a-fA-F0-9]+|"
             rf"controlador\.php\?[^\"'\s]*id_bloco={re.escape(id_bloco)}[^\"'\s]*acao={re.escape(nome_acao)}[^\"'\s]*infra_hash=[a-fA-F0-9]+)"
@@ -2422,7 +2498,7 @@ class SEIWebClient:
             incluir_url = await self._obter_link_toolbar("bloco_assinatura_cadastrar")
         r = await self._http.get(incluir_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
@@ -2451,7 +2527,7 @@ class SEIWebClient:
         )
         if r2.status_code not in (200, 302):
             raise SEIConnectionError(f"POST bloco_assinatura_incluir status={r2.status_code}")
-        body2 = r2.content.decode("iso-8859-1", "replace")
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro2 = _extrair_erro_sei(body2)
         if erro2:
             raise SEIConnectionError(erro2)
@@ -2471,7 +2547,7 @@ class SEIWebClient:
         r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
         if r.status_code not in (200, 302):
             raise SEIConnectionError(f"bloco_assinatura_disponibilizar status={r.status_code}")
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
@@ -2488,7 +2564,7 @@ class SEIWebClient:
         r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
         if r.status_code not in (200, 302):
             raise SEIConnectionError(f"bloco_assinatura_cancelar status={r.status_code}")
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
@@ -2504,7 +2580,7 @@ class SEIWebClient:
         r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
         if r.status_code not in (200, 302):
             raise SEIConnectionError(f"{nome_acao} status={r.status_code}")
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
@@ -2541,7 +2617,7 @@ class SEIWebClient:
         lista_url = await self._obter_link_toolbar("bloco_assinatura_listar")
         r = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         pat = re.compile(
             rf"controlador\.php\?[^\"'\s]*(?:acao=bloco_assinatura_alterar|bloco_assinatura_alterar)[^\"'\s]*id_bloco={re.escape(id_bloco)}[^\"'\s]*infra_hash=[a-fA-F0-9]+"
             rf"|controlador\.php\?[^\"'\s]*id_bloco={re.escape(id_bloco)}[^\"'\s]*acao=bloco_assinatura_alterar[^\"'\s]*infra_hash=[a-fA-F0-9]+"
@@ -2552,7 +2628,7 @@ class SEIWebClient:
         detail_url = urljoin(sei_base, m.group().replace("&amp;", "&"))
         r2 = await self._http.get(detail_url, headers={"Referer": lista_url})
         _check(r2)
-        body2 = r2.content.decode("iso-8859-1", "replace")
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         soup = BeautifulSoup(body2, "html.parser")
         tbl = soup.find("table", id=re.compile(r"tblDocumentos?", re.IGNORECASE))
         if tbl is None:
@@ -2581,7 +2657,7 @@ class SEIWebClient:
         lista_url = await self._obter_link_toolbar("bloco_assinatura_listar")
         r_list = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
         _check(r_list)
-        body_list = r_list.content.decode("iso-8859-1", "replace")
+        body_list = _decode_response(r_list.content, r_list.headers.get("content-type", ""))
         pat = re.compile(
             rf"controlador\.php\?[^\"'\s]*acao=bloco_assinatura_alterar[^\"'\s]*id_bloco={re.escape(id_bloco)}[^\"'\s]*infra_hash=[a-fA-F0-9]+"
             rf"|controlador\.php\?[^\"'\s]*id_bloco={re.escape(id_bloco)}[^\"'\s]*acao=bloco_assinatura_alterar[^\"'\s]*infra_hash=[a-fA-F0-9]+"
@@ -2592,7 +2668,7 @@ class SEIWebClient:
         edit_url = urljoin(sei_base, m.group().replace("&amp;", "&"))
         r = await self._http.get(edit_url, headers={"Referer": lista_url})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         soup = BeautifulSoup(body, "html.parser")
         form = soup.find("form")
         if form is None:
@@ -2615,7 +2691,7 @@ class SEIWebClient:
         )
         if r2.status_code not in (200, 302):
             raise SEIConnectionError(f"POST bloco_assinatura_alterar status={r2.status_code}")
-        body2 = r2.content.decode("iso-8859-1", "replace")
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body2)
         if erro:
             raise SEIConnectionError(erro)
@@ -2749,7 +2825,7 @@ class SEIWebClient:
         cadastrar_url = await self._obter_link_toolbar("procedimento_cadastrar")
         r = await self._http.get(cadastrar_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         soup = BeautifulSoup(body, "html.parser")
         sel = soup.find("select", {"name": re.compile(r"selHipoteseLegal", re.IGNORECASE)})
         if sel is None:
@@ -2769,12 +2845,16 @@ class SEIWebClient:
     async def pesquisar_marcadores_web(self, filtro: str = "") -> dict:
         """Extrai marcadores disponíveis via select selMarcador do form marcacao_salvar."""
         await self.ensure_authenticated()
-        if not self._trabalhar_links:
+        async with self._form_lock:
+            _has_links = bool(self._trabalhar_links)
+        if not _has_links:
             await self.fetch_inbox(detalhada=False)
-        if not self._trabalhar_links:
+        async with self._form_lock:
+            _links_snapshot = list(self._trabalhar_links)
+        if not _links_snapshot:
             return {"marcadores": [], "total_itens": 0}
         opcoes: list[dict[str, str]] = []
-        for protocolo in self._trabalhar_links:
+        for protocolo in _links_snapshot:
             try:
                 form_info = await self.obter_form_acao(protocolo, "marcacao_salvar")
                 opcoes = form_info.get("selects", {}).get("selMarcador", [])
@@ -2814,7 +2894,7 @@ class SEIWebClient:
         escolher_url = urljoin(sei_base, incluir_href)
         r3 = await self._http.get(escolher_url, headers={"Referer": url_arvore})
         _check(r3)
-        body3 = r3.content.decode("iso-8859-1", "replace")
+        body3 = _decode_response(r3.content, r3.headers.get("content-type", ""))
         soup3 = BeautifulSoup(body3, "html.parser")
         form3 = soup3.find("form", id="frmDocumentoEscolherTipo")
         if form3 is None:
@@ -2830,17 +2910,23 @@ class SEIWebClient:
 
         r4 = await self._http.post(post3_url, data=post3_data, headers={"Referer": str(r3.url)})
         _check(r4)
-        return BeautifulSoup(r4.content.decode("iso-8859-1", "replace"), "html.parser")
+        return BeautifulSoup(
+            _decode_response(r4.content, r4.headers.get("content-type", "")), "html.parser"
+        )
 
     async def pesquisar_tipos_documento_web(self, filtro: str = "") -> dict:
         """Extrai tipos de documento (séries) via select selSerie em documento_receber."""
         await self.ensure_authenticated()
-        if not self._trabalhar_links:
+        async with self._form_lock:
+            _has_links = bool(self._trabalhar_links)
+        if not _has_links:
             await self.fetch_inbox(detalhada=False)
-        if not self._trabalhar_links:
+        async with self._form_lock:
+            _links_snapshot = list(self._trabalhar_links)
+        if not _links_snapshot:
             return {"tipos": [], "total_itens": 0}
         soup: BeautifulSoup | None = None
-        for protocolo in self._trabalhar_links:
+        for protocolo in _links_snapshot:
             try:
                 soup = await self._obter_soup_documento_receber(protocolo)
                 break
@@ -2864,12 +2950,16 @@ class SEIWebClient:
     async def pesquisar_tipos_conferencia_web(self, filtro: str = "") -> dict:
         """Extrai tipos de conferência via select selTipoConferencia em documento_receber."""
         await self.ensure_authenticated()
-        if not self._trabalhar_links:
+        async with self._form_lock:
+            _has_links = bool(self._trabalhar_links)
+        if not _has_links:
             await self.fetch_inbox(detalhada=False)
-        if not self._trabalhar_links:
+        async with self._form_lock:
+            _links_snapshot = list(self._trabalhar_links)
+        if not _links_snapshot:
             return {"tipos": [], "total_itens": 0}
         soup: BeautifulSoup | None = None
-        for protocolo in self._trabalhar_links:
+        for protocolo in _links_snapshot:
             try:
                 soup = await self._obter_soup_documento_receber(protocolo)
                 break
@@ -2925,7 +3015,9 @@ class SEIWebClient:
         if escolher_url is not None:
             r = await self._http.get(escolher_url, headers={"Referer": str(self._inbox_url)})
             _check(r)
-            soup = BeautifulSoup(r.content.decode("iso-8859-1", "replace"), "html.parser")
+            soup = BeautifulSoup(
+                _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
+            )
             form = soup.find("form", id="frmProcedimentoEscolherTipo")
             if form is None:
                 raise SEIParseError("Form procedimento_escolher_tipo não encontrado.")
@@ -2936,7 +3028,9 @@ class SEIWebClient:
                 {"hdnFiltroTipoProcedimento": "T", "hdnIdTipoProcedimento": ""},
                 str(r.url),
             )
-            soup = BeautifulSoup(r.content.decode("iso-8859-1", "replace"), "html.parser")
+            soup = BeautifulSoup(
+                _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
+            )
             form = soup.find("form", id="frmProcedimentoEscolherTipo")
             if form is None:
                 raise SEIParseError("Form de escolha de tipo não recarregou.")
@@ -2944,10 +3038,14 @@ class SEIWebClient:
             r = await self._post_form_preservando(
                 form, str(r.url), {"hdnIdTipoProcedimento": tipo_processo}, str(r.url)
             )
-            soup = BeautifulSoup(r.content.decode("iso-8859-1", "replace"), "html.parser")
+            soup = BeautifulSoup(
+                _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
+            )
             form = soup.find("form", id="frmProcedimentoCadastro")
             if form is None:
-                erro = _extrair_erro_sei(r.content.decode("iso-8859-1", "replace"))
+                erro = _extrair_erro_sei(
+                    _decode_response(r.content, r.headers.get("content-type", ""))
+                )
                 raise SEIParseError(
                     erro or f"Form de cadastro não retornou para o tipo {tipo_processo}."
                 )
@@ -2956,7 +3054,7 @@ class SEIWebClient:
         cadastrar_url = await self._obter_link_toolbar("procedimento_cadastrar")
         r = await self._http.get(cadastrar_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
@@ -3056,7 +3154,7 @@ class SEIWebClient:
         r = await self._post_form_preservando(form, url_atual, overrides, url_atual)
         if r.status_code not in (200, 302):
             raise SEIConnectionError(f"POST de cadastro falhou com status={r.status_code}")
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
@@ -3122,7 +3220,7 @@ class SEIWebClient:
         form_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
         r = await self._http.get(form_url, headers={"Referer": url_arvore})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
@@ -3159,7 +3257,7 @@ class SEIWebClient:
         r2 = await self._post_form_preservando(form, str(r.url), overrides, str(r.url))
         if r2.status_code not in {200, 302}:
             raise SEIConnectionError(f"POST procedimento_alterar status={r2.status_code}")
-        body2 = r2.content.decode("iso-8859-1", "replace")
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro2 = _extrair_erro_sei(body2)
         if erro2:
             raise SEIConnectionError(erro2)
@@ -3224,7 +3322,7 @@ class SEIWebClient:
         r3 = await self._http.get(escolher_url, headers={"Referer": url_arvore})
         _check(r3)
 
-        body3 = r3.content.decode("iso-8859-1", "replace")
+        body3 = _decode_response(r3.content, r3.headers.get("content-type", ""))
         erro3 = _extrair_erro_sei(body3)
         if erro3:
             raise SEIConnectionError(erro3)
@@ -3263,7 +3361,7 @@ class SEIWebClient:
         r4 = await self._http.get(editor_url, headers={"Referer": str(r3.url)})
         _check(r4)
 
-        body4 = r4.content.decode("iso-8859-1", "replace")
+        body4 = _decode_response(r4.content, r4.headers.get("content-type", ""))
         erro4 = _extrair_erro_sei(body4)
         if erro4:
             raise SEIConnectionError(erro4)
@@ -3301,7 +3399,7 @@ class SEIWebClient:
         )
         if r5.status_code not in (200, 302):
             raise SEIConnectionError(f"POST documento_gerar falhou com status={r5.status_code}")
-        body5 = r5.content.decode("iso-8859-1", "replace")
+        body5 = _decode_response(r5.content, r5.headers.get("content-type", ""))
         erro5 = _extrair_erro_sei(body5)
         if erro5:
             raise SEIConnectionError(erro5)
@@ -3364,18 +3462,24 @@ class SEIWebClient:
 
         await self.ensure_authenticated()
 
-        if protocolo_formatado not in self._trabalhar_links:
+        async with self._form_lock:
+            _in_links = protocolo_formatado in self._trabalhar_links
+        if not _in_links:
             await self.fetch_inbox(detalhada=False)
-        if protocolo_formatado not in self._trabalhar_links:
+        async with self._form_lock:
+            _in_links = protocolo_formatado in self._trabalhar_links
+        if not _in_links:
             await self.pesquisar_processo(protocolo_formatado)
 
-        trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
+        async with self._form_lock:
+            trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
 
         # --- Step 1: trabalhar → frameset ---
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
         _check(r1)
         if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
-            self._form_action = None
+            async with self._form_lock:
+                self._form_action = None
             await self.login()
             return await self.incluir_documento_externo(
                 protocolo_formatado,
@@ -3444,7 +3548,7 @@ class SEIWebClient:
         r3 = await self._http.get(escolher_url, headers={"Referer": str(r2.url)})
         _check(r3)
 
-        body3 = r3.content.decode("iso-8859-1", "replace")
+        body3 = _decode_response(r3.content, r3.headers.get("content-type", ""))
         soup3 = BeautifulSoup(body3, "html.parser")
         form3 = soup3.find("form", id="frmDocumentoEscolherTipo")
         if not form3:
@@ -3463,7 +3567,7 @@ class SEIWebClient:
         r4 = await self._http.post(post3_url, data=post3_data, headers={"Referer": str(r3.url)})
         _check(r4)
 
-        body4 = r4.content.decode("iso-8859-1", "replace")
+        body4 = _decode_response(r4.content, r4.headers.get("content-type", ""))
 
         # --- Step 5: Parse documento_receber ---
         # Validação de página: infraUpload deve estar presente no JS
@@ -3618,7 +3722,7 @@ class SEIWebClient:
         )
         _check(r6)
 
-        body6 = r6.content.decode("iso-8859-1", "replace")
+        body6 = _decode_response(r6.content, r6.headers.get("content-type", ""))
         final_url = str(r6.url)
         sucesso = "arvore_visualizar" in final_url
 
@@ -3764,7 +3868,9 @@ class SEIWebClient:
         lista_url = await self._obter_link_toolbar("acompanhamento_listar")
         r = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        return BeautifulSoup(r.content.decode("iso-8859-1", "replace"), "html.parser")
+        return BeautifulSoup(
+            _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
+        )
 
     @staticmethod
     def _parse_acompanhamento_tabela(tbl: Tag | None, limit: int) -> list[dict]:
@@ -3820,12 +3926,16 @@ class SEIWebClient:
     async def listar_grupos_acompanhamento_web(self, filtro: str = "") -> dict:
         """Extrai grupos de acompanhamento do select selGrupoAcompanhamento (acompanhamento_gerenciar)."""
         await self.ensure_authenticated()
-        if not self._trabalhar_links:
+        async with self._form_lock:
+            _has_links = bool(self._trabalhar_links)
+        if not _has_links:
             await self.fetch_inbox(detalhada=False)
-        if not self._trabalhar_links:
+        async with self._form_lock:
+            _links_snapshot = list(self._trabalhar_links)
+        if not _links_snapshot:
             return {"grupos": [], "total_itens": 0}
         opcoes: list[dict[str, str]] = []
-        for protocolo in self._trabalhar_links:
+        for protocolo in _links_snapshot:
             try:
                 form_info = await self.obter_form_acao(protocolo, "acompanhamento_gerenciar")
                 opcoes = form_info.get("selects", {}).get("selGrupoAcompanhamento", [])
@@ -3882,7 +3992,7 @@ class SEIWebClient:
                 urljoin(sei_base, m.group(1).replace("&amp;", "&")), headers={"Referer": url_arvore}
             )
             _check(r)
-            body = r.content.decode("iso-8859-1", "replace")
+            body = _decode_response(r.content, r.headers.get("content-type", ""))
             ids = re.findall(r"acaoExcluir\('(\d+)'", body)
             if not ids:
                 break
@@ -3906,7 +4016,9 @@ class SEIWebClient:
                 },
             )
             _check(rr)
-            erro = _extrair_erro_sei(rr.content.decode("iso-8859-1", "replace"))
+            erro = _extrair_erro_sei(
+                _decode_response(rr.content, rr.headers.get("content-type", ""))
+            )
             if erro:
                 raise SEIConnectionError(erro)
             removidos += 1
@@ -3939,7 +4051,9 @@ class SEIWebClient:
         r = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
         if not r.is_success:
             return {"grupos": [], "total_itens": 0}
-        soup = BeautifulSoup(r.content.decode("iso-8859-1", "replace"), "html.parser")
+        soup = BeautifulSoup(
+            _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
+        )
         grupos: list[dict[str, str]] = []
         for tbl in soup.find_all("table", class_=re.compile(r"infraTable", re.IGNORECASE)):
             for tr in tbl.find_all("tr")[1:]:
@@ -3977,7 +4091,9 @@ class SEIWebClient:
         r = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
         if not r.is_success:
             return {"modelos": [], "total_itens": 0}
-        soup = BeautifulSoup(r.content.decode("iso-8859-1", "replace"), "html.parser")
+        soup = BeautifulSoup(
+            _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
+        )
         modelos: list[dict[str, str]] = []
         for tbl in soup.find_all("table", class_=re.compile(r"infraTable", re.IGNORECASE)):
             for tr in tbl.find_all("tr")[1:]:
@@ -4017,7 +4133,7 @@ class SEIWebClient:
         acao_url = await self._obter_acao_bloco_url(id_bloco, "bloco_assinatura_alterar")
         r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         pat = re.compile(
             rf"controlador\.php\?[^\"'\s]*acao=bloco_assinatura_retirar_documento[^\"'\s]*id_documento={re.escape(id_documento)}[^\"'\s]*infra_hash=[a-fA-F0-9]+"
             rf"|controlador\.php\?[^\"'\s]*id_documento={re.escape(id_documento)}[^\"'\s]*acao=bloco_assinatura_retirar_documento[^\"'\s]*infra_hash=[a-fA-F0-9]+"
@@ -4031,7 +4147,7 @@ class SEIWebClient:
         r2 = await self._http.get(retirar_url, headers={"Referer": acao_url})
         if r2.status_code not in (200, 302):
             raise SEIConnectionError(f"bloco_assinatura_retirar_documento status={r2.status_code}")
-        body2 = r2.content.decode("iso-8859-1", "replace")
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body2)
         if erro:
             raise SEIConnectionError(erro)
@@ -4051,7 +4167,7 @@ class SEIWebClient:
         acao_url = await self._obter_acao_bloco_url(id_bloco, "bloco_assinatura_alterar")
         r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
-        body = r.content.decode("iso-8859-1", "replace")
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
         pat = re.compile(
             rf"controlador\.php\?[^\"'\s]*acao=bloco_assinatura_anotar_documento[^\"'\s]*id_documento={re.escape(id_documento)}[^\"'\s]*infra_hash=[a-fA-F0-9]+"
             rf"|controlador\.php\?[^\"'\s]*id_documento={re.escape(id_documento)}[^\"'\s]*acao=bloco_assinatura_anotar_documento[^\"'\s]*infra_hash=[a-fA-F0-9]+"
@@ -4064,7 +4180,7 @@ class SEIWebClient:
         anotar_url = urljoin(sei_base, m.group().replace("&amp;", "&"))
         r2 = await self._http.get(anotar_url, headers={"Referer": acao_url})
         _check(r2)
-        body2 = r2.content.decode("iso-8859-1", "replace")
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         soup = BeautifulSoup(body2, "html.parser")
         form = soup.find("form")
         if form is None:
@@ -4087,7 +4203,7 @@ class SEIWebClient:
         )
         if r3.status_code not in (200, 302):
             raise SEIConnectionError(f"POST anotação bloco status={r3.status_code}")
-        body3 = r3.content.decode("iso-8859-1", "replace")
+        body3 = _decode_response(r3.content, r3.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body3)
         if erro:
             raise SEIConnectionError(erro)
