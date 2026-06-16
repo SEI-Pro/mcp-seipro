@@ -154,6 +154,9 @@ def _prioridade_erro(exc: Exception) -> int:
     Um erro real de "este backend tentou e não conseguiu" (rede/404/HTML) deve
     prevalecer sobre um "este backend não serve esta op" (SEINotImplementedError),
     que por sua vez prevalece sobre o stub genérico (`NotImplementedError`).
+
+    Lista fechada: adicione novos subtipos de SEIError aqui para que recebam
+    a prioridade correta; subtipos não listados caem no bucket padrão (SEIError = 2).
     """
     if isinstance(exc, (SEINotFoundError, SEIParseError, SEIConnectionError)):
         return 3

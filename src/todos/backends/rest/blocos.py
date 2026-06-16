@@ -47,14 +47,26 @@ class BlocosRest(_RestMixin):
     async def anotar_processo_bloco_interno(
         self, id_bloco: str, processo: str, descricao: str
     ) -> dict:
-        """Anota um processo dentro de um bloco interno."""
+        """Anota um processo dentro de um bloco interno.
+
+        Note: calls ``_resolver_processo`` to translate the formatted protocol
+        number to an internal id.  If the caller needs to invoke both
+        ``anotar_processo_bloco_interno`` and ``alterar_anotacao_bloco_interno``
+        for the same process, two separate REST resolution calls will be made.
+        """
         id_proc = await self._resolver_processo(processo)
         return await self._rest.anotar_processo_bloco_interno(id_bloco, id_proc, descricao)
 
     async def alterar_anotacao_bloco_interno(
         self, id_bloco: str, processo: str, descricao: str
     ) -> dict:
-        """Altera a anotação de um processo em um bloco interno."""
+        """Altera a anotação de um processo em um bloco interno.
+
+        Note: calls ``_resolver_processo`` to translate the formatted protocol
+        number to an internal id.  If the caller needs to invoke both
+        ``anotar_processo_bloco_interno`` and ``alterar_anotacao_bloco_interno``
+        for the same process, two separate REST resolution calls will be made.
+        """
         id_proc = await self._resolver_processo(processo)
         return await self._rest.alterar_anotacao_bloco_interno(id_bloco, id_proc, descricao)
 

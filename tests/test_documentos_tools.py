@@ -34,17 +34,34 @@ class TestFormatarDocInterno:
     def test_markdown_with_disclaimer(self) -> None:
         out = d._formatar_doc_interno("<p>texto <strong>x</strong></p>", "markdown", _disclaimer())
         assert "**x**" in out
-        assert "ATENÇÃO" in out  # markdown disclaimer prefix
+        # Disclaimer must appear BEFORE the content
+        assert out.index("ATENÇÃO") < out.index("**x**")
+        # Check disclaimer contains access level and legal basis (not just the heading word)
+        assert "Restrito" in out
+        assert "LGPD" in out
+        assert "Art. 31 LAI" in out
 
     def test_texto_with_disclaimer(self) -> None:
         out = d._formatar_doc_interno("<p>corpo</p>", "texto", _disclaimer())
         assert "corpo" in out
-        assert "AVISO" in out
+        # Disclaimer must appear BEFORE the content
+        assert out.index("AVISO") < out.index("corpo")
+        # Check disclaimer contains access level and legal basis
+        assert "Restrito" in out
+        assert "LGPD" in out
+        assert "Art. 31 LAI" in out
 
     def test_html_with_disclaimer_envelopes(self) -> None:
         out = d._formatar_doc_interno("<p>corpo</p>", "html", _disclaimer())
+        # <aside> wraps the disclaimer; content follows outside it
         assert "<aside" in out
+        assert "</aside>" in out
         assert "<p>corpo</p>" in out
+        # Disclaimer must appear BEFORE the content
+        assert out.index("<aside") < out.index("<p>corpo</p>")
+        # Check disclaimer contains substantive content
+        assert "Restrito" in out
+        assert "LGPD" in out
 
     def test_html_without_disclaimer_is_passthrough(self) -> None:
         assert d._formatar_doc_interno("<p>x</p>", "html", None) == "<p>x</p>"
@@ -72,13 +89,21 @@ class TestFormatarDocExterno:
         monkeypatch.setattr(d, "pdf_to_markdown", lambda _c: "CORPO_PDF")
         out = d._formatar_doc_externo(b"%PDF-1.4", "markdown", _disclaimer())
         assert "CORPO_PDF" in out
-        assert "ATENÇÃO" in out
+        # Disclaimer must appear BEFORE the content
+        assert out.index("ATENÇÃO") < out.index("CORPO_PDF")
+        # Check disclaimer contains substantive content, not just the heading word
+        assert "Restrito" in out
+        assert "LGPD" in out
 
     def test_texto_with_disclaimer(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(d, "pdf_to_text", lambda _c: "TXT_PDF")
         out = d._formatar_doc_externo(b"%PDF-1.4", "texto", _disclaimer())
         assert "TXT_PDF" in out
-        assert "AVISO" in out
+        # Disclaimer must appear BEFORE the content
+        assert out.index("AVISO") < out.index("TXT_PDF")
+        # Check disclaimer contains substantive content
+        assert "Restrito" in out
+        assert "LGPD" in out
 
 
 # ---------------------------------------------------------------------------

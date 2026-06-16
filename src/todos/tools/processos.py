@@ -591,6 +591,35 @@ async def sei_executar_acao(
 # ---------------------------------------------------------------------------
 
 
+def _salvar_arquivo_temp(
+    protocolo: str,
+    conteudo: bytes,
+    extensao: str,
+    max_mb: float,
+) -> dict[str, object]:
+    """Verifica tamanho, salva em temp e retorna dict com path e metadados."""
+    tamanho_mb = len(conteudo) / 1024 / 1024
+    if tamanho_mb > max_mb:
+        msg = f"{extensao.upper()} muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI."
+        raise SEIValidationError(msg)
+
+    protocolo_safe = re.sub(r"[^\w\-]", "_", protocolo)
+    protocolo_safe = protocolo_safe.replace("..", "_")
+    caminho = Path(tempfile.gettempdir()) / f"SEI_{protocolo_safe}.{extensao}"
+    try:
+        caminho.write_bytes(conteudo)
+    except OSError as exc:
+        msg = f"Erro ao salvar {extensao.upper()} em disco: {exc}"
+        raise SEIValidationError(msg) from exc
+
+    return {
+        "arquivo": str(caminho),
+        "tamanho_mb": round(tamanho_mb, 2),
+        "tamanho_bytes": len(conteudo),
+        "base64": base64.b64encode(conteudo).decode(),
+    }
+
+
 @mcp.tool(annotations=_READ)
 async def sei_gerar_pdf_processo(
     processo: str,
@@ -619,24 +648,7 @@ async def sei_gerar_pdf_processo(
     if ctx:
         await ctx.report_progress(100, 100)
 
-    tamanho_mb = len(pdf_bytes) / 1024 / 1024
-    if tamanho_mb > _MAX_PDF_MB:
-        msg = f"PDF muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI."
-        raise SEIValidationError(msg)
-
-    protocolo_safe = re.sub(r"[^\w\-]", "_", processo)
-    protocolo_safe = protocolo_safe.replace("..", "_")
-    pdf_path = Path(tempfile.gettempdir()) / f"SEI_{protocolo_safe}.pdf"
-    pdf_path.write_bytes(pdf_bytes)
-
-    return _json(
-        {
-            "arquivo": str(pdf_path),
-            "tamanho_mb": round(tamanho_mb, 2),
-            "tamanho_bytes": len(pdf_bytes),
-            "base64": base64.b64encode(pdf_bytes).decode(),
-        }
-    )
+    return _json(_salvar_arquivo_temp(processo, pdf_bytes, "pdf", _MAX_PDF_MB))
 
 
 @mcp.tool(annotations=_READ)
@@ -664,21 +676,4 @@ async def sei_gerar_zip_processo(
     if ctx:
         await ctx.report_progress(100, 100)
 
-    tamanho_mb = len(zip_bytes) / 1024 / 1024
-    if tamanho_mb > _MAX_ZIP_MB:
-        msg = f"ZIP muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI."
-        raise SEIValidationError(msg)
-
-    protocolo_safe = re.sub(r"[^\w\-]", "_", processo)
-    protocolo_safe = protocolo_safe.replace("..", "_")
-    zip_path = Path(tempfile.gettempdir()) / f"SEI_{protocolo_safe}.zip"
-    zip_path.write_bytes(zip_bytes)
-
-    return _json(
-        {
-            "arquivo": str(zip_path),
-            "tamanho_mb": round(tamanho_mb, 2),
-            "tamanho_bytes": len(zip_bytes),
-            "base64": base64.b64encode(zip_bytes).decode(),
-        }
-    )
+    return _json(_salvar_arquivo_temp(processo, zip_bytes, "zip", _MAX_ZIP_MB))

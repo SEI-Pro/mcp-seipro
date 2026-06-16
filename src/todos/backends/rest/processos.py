@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import httpx
@@ -15,6 +16,9 @@ if TYPE_CHECKING:
         FiltrosPesquisaProcessos,
         NovoProcesso,
     )
+
+_RE_ID_NUMERICO = re.compile(r"^\d+$")
+_MAX_ERROS_LEN = 500
 
 
 class ProcessosRest(_RestMixin):
@@ -126,7 +130,7 @@ class ProcessosRest(_RestMixin):
             raise SEIValidationError(msg)
         ids_resolvidos: list[str] = []
         for destino in destinos:
-            if destino.isdigit():
+            if _RE_ID_NUMERICO.match(destino):
                 ids_resolvidos.append(destino)
                 continue
             result = await self._rest.pesquisar_unidades(filtro=destino, limit=10)
@@ -164,7 +168,7 @@ class ProcessosRest(_RestMixin):
 
     async def atribuir_processo(self, processo: str, usuario: str) -> dict:
         """Atribui um processo a um usuário (resolve nome→id via REST, tenta candidatos)."""
-        if usuario.isdigit():
+        if _RE_ID_NUMERICO.match(usuario):
             return await self._rest.atribuir_processo(processo, usuario)
         result = await self._rest.listar_usuarios(filtro=usuario)
         candidatos = result.get("usuarios", [])
@@ -177,10 +181,12 @@ class ProcessosRest(_RestMixin):
                 return await self._rest.atribuir_processo(processo, u.get("id_usuario", ""))
             except (SEIError, httpx.HTTPError) as e:
                 erros.append(f"{u.get('nome', '')} ({u.get('sigla', '')}): {e}")
-        tentativas = "; ".join(erros)
+        tentativas_str = "; ".join(erros)
+        if len(tentativas_str) > _MAX_ERROS_LEN:
+            tentativas_str = tentativas_str[:_MAX_ERROS_LEN] + " [truncado]"
         msg = (
-            f"Nenhum dos {len(candidatos)} usuários com '{usuario}' tem permissão na "
-            f"unidade atual. Verifique sei_trocar_unidade. Tentativas: {tentativas}"
+            f"Não foi possível atribuir o processo a nenhum dos {len(candidatos)} "
+            f"usuários com '{usuario}': {tentativas_str}"
         )
         raise SEIValidationError(msg)
 

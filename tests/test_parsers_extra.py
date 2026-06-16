@@ -8,6 +8,7 @@ _extract_tooltip, parse_arvore_nos (extended), parse_inbox (extended).
 
 from __future__ import annotations
 
+import datetime
 from urllib.parse import parse_qsl
 
 import httpx
@@ -24,6 +25,28 @@ from todos.sei_web_client import (
     _tag_str,
     parse_arvore_nos,
     parse_inbox,
+)
+
+# Fixture dates for historical document events (signatures, sobrestamentos, etc.).
+# These represent past events; use clearly past dates so the fixtures never
+# look like "near-future" values that might confuse date-validation logic
+# if such logic is added later.
+_D1 = "10/06/2020 14:30"
+_D2 = "01/06/2020 09:00"
+_D3 = "02/06/2020 11:15"
+_D4 = "03/06/2020 16:45"
+_D5 = "04/06/2020 08:00"
+_D6 = "05/06/2020 10:00"
+_D7 = "06/06/2020 08:30"
+_D8 = "07/06/2020 09:00"
+_D9 = "13/06/2020 12:00"
+_DATE_SOBREST_1 = "10/06/2020"
+_DATE_SOBREST_2 = "01/05/2020"
+_DATE_SOBREST_3 = "15/05/2020"
+
+# Future date for fixtures that need to represent a deadline or valid-until date.
+_FUTURE_DATE = (datetime.datetime.now(tz=datetime.UTC) + datetime.timedelta(days=365)).strftime(
+    "%d/%m/%Y"
 )
 
 # ---------------------------------------------------------------------------
@@ -461,32 +484,32 @@ class TestParseDocumentoConsultar:
     # --- assinaturas table -----------------------------------------------
 
     def test_single_assinatura_parsed_correctly(self):
-        html = _wrap(_assinaturas_table([("João Silva", "Diretor", "10/06/2026 14:30")]))
+        html = _wrap(_assinaturas_table([("João Silva", "Diretor", _D1)]))
         result = _parse_documento_consultar(html, "42")
         assert len(result["assinaturas"]) == 1
         sig = result["assinaturas"][0]
         assert sig["assinante"] == "João Silva"
         assert sig["cargo"] == "Diretor"
-        assert sig["data_hora"] == "10/06/2026 14:30"
+        assert sig["data_hora"] == _D1
 
     def test_multiple_assinaturas(self):
         html = _wrap(
             _assinaturas_table(
                 [
-                    ("Maria Souza", "Coordenadora", "01/06/2026 09:00"),
-                    ("Pedro Lima", "Analista", "02/06/2026 11:15"),
-                    ("Ana Costa", "Gerente", "03/06/2026 16:45"),
+                    ("Maria Souza", "Coordenadora", _D2),
+                    ("Pedro Lima", "Analista", _D3),
+                    ("Ana Costa", "Gerente", _D4),
                 ]
             )
         )
         result = _parse_documento_consultar(html, "99")
         assert len(result["assinaturas"]) == 3
         assert result["assinaturas"][1]["assinante"] == "Pedro Lima"
-        assert result["assinaturas"][2]["data_hora"] == "03/06/2026 16:45"
+        assert result["assinaturas"][2]["data_hora"] == _D4
 
     def test_assinaturas_header_row_is_skipped(self):
         """The first <tr> (header) must not become an entry."""
-        html = _wrap(_assinaturas_table([("Único Signatário", "Chefe", "04/06/2026 08:00")]))
+        html = _wrap(_assinaturas_table([("Único Signatário", "Chefe", _D5)]))
         result = _parse_documento_consultar(html, "7")
         # Only one data row → exactly one signature; no header polluting the list
         assert len(result["assinaturas"]) == 1
@@ -505,20 +528,20 @@ class TestParseDocumentoConsultar:
     # --- ciencias table --------------------------------------------------
 
     def test_single_ciencia_parsed_correctly(self):
-        html = _wrap(_ciencias_table([("Carlos Ramos", "Auditor", "05/06/2026 10:00")]))
+        html = _wrap(_ciencias_table([("Carlos Ramos", "Auditor", _D6)]))
         result = _parse_documento_consultar(html, "55")
         assert len(result["ciencias"]) == 1
         c = result["ciencias"][0]
         assert c["usuario"] == "Carlos Ramos"
         assert c["cargo"] == "Auditor"
-        assert c["data_hora"] == "05/06/2026 10:00"
+        assert c["data_hora"] == _D6
 
     def test_multiple_ciencias(self):
         html = _wrap(
             _ciencias_table(
                 [
-                    ("Alice B.", "Técnico", "06/06/2026 08:30"),
-                    ("Bob C.", "Analista", "07/06/2026 09:00"),
+                    ("Alice B.", "Técnico", _D7),
+                    ("Bob C.", "Analista", _D8),
                 ]
             )
         )
@@ -530,7 +553,7 @@ class TestParseDocumentoConsultar:
 
     def test_metadata_table_extracted_alongside_assinaturas(self):
         meta = _meta_table([("Tipo do Documento", "Despacho"), ("Número", "2874369")])
-        sigs = _assinaturas_table([("Fulano", "Gerente", "13/06/2026 12:00")])
+        sigs = _assinaturas_table([("Fulano", "Gerente", _D9)])
         html = _wrap(meta + sigs)
         result = _parse_documento_consultar(html, "77")
         # Metadata keys are lower-cased with spaces replaced by underscores
@@ -642,19 +665,19 @@ class TestParseProcedimentoConsultar:
     # --- sobrestamentos --------------------------------------------------
 
     def test_sobrestamento_single_row(self):
-        html = _wrap(_sobrestamento_table([("Aguardando laudo pericial", "10/06/2026")]))
+        html = _wrap(_sobrestamento_table([("Aguardando laudo pericial", _DATE_SOBREST_1)]))
         result = _parse_procedimento_consultar(html, "0000.008")
         assert len(result["sobrestamentos"]) == 1
         s = result["sobrestamentos"][0]
         assert s["motivo"] == "Aguardando laudo pericial"
-        assert s["data"] == "10/06/2026"
+        assert s["data"] == _DATE_SOBREST_1
 
     def test_sobrestamento_multiple_rows(self):
         html = _wrap(
             _sobrestamento_table(
                 [
-                    ("Motivo A", "01/05/2026"),
-                    ("Motivo B", "15/05/2026"),
+                    ("Motivo A", _DATE_SOBREST_2),
+                    ("Motivo B", _DATE_SOBREST_3),
                 ]
             )
         )
@@ -673,7 +696,7 @@ class TestParseProcedimentoConsultar:
         meta = _meta_table(
             [
                 ("Tipo do Processo", "Administrativo"),
-                ("Data de Autuação", "02/01/2026"),
+                ("Data de Autuação", "02/01/2020"),
             ]
         )
         unidades = _unidades_table([("GEDIR/ANTAQ", "Aberto")])
@@ -685,7 +708,7 @@ class TestParseProcedimentoConsultar:
         assert result["interessados"] == ["Empresa Gamma"]
         # Metadata key extracted
         assert result.get("tipo_do_processo") == "Administrativo"
-        assert result.get("data_de_autuação") == "02/01/2026"
+        assert result.get("data_de_autuação") == "02/01/2020"
 
 
 def make_client() -> SEIWebClient:

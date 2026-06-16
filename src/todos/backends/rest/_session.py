@@ -8,6 +8,7 @@ resolução de referência compartilhados por todos os mixins: `_resolver_proces
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 import httpx
@@ -19,7 +20,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_MIN_DOC_CONTENT_LENGTH = 10  # minimum bytes for a non-empty internal document
+# Limiar mínimo de bytes para considerar um documento interno como não-vazio.
+# Algumas respostas do SEI retornam um shell HTML mínimo como `<p></p>` (~7 bytes)
+# para documentos sem corpo. 10 bytes é deliberadamente baixo para evitar falsos
+# negativos em conteúdos finos mas válidos.
+_MIN_DOC_CONTENT_LENGTH = 10
+
+
+def _normalizar_protocolo(p: str) -> str:
+    """Remove zeros à esquerda de segmentos numéricos do protocolo formatado.
+
+    Aplica apenas após início da string ou separadores `.` `/` ` ` — não toca
+    no sufixo de verificação `-XX` (ex: `2024-01` permanece `2024-01`).
+    """
+    return re.sub(r"(^|[./ ])0+(\d)", r"\1\2", p)
 
 
 class _RestMixin:
@@ -80,7 +94,9 @@ class _RestBase(_RestMixin):
                     continue
                 for d in docs:
                     proto = d.get("atributos", {}).get("protocoloFormatado", "")
-                    if proto == referencia or proto.lstrip("0") == referencia.lstrip("0"):
+                    if proto == referencia or _normalizar_protocolo(proto) == _normalizar_protocolo(
+                        referencia
+                    ):
                         doc_id = str(d.get("id", ""))
                         if not doc_id:
                             continue
