@@ -23,6 +23,8 @@ from todos.mcp_app import (
     mcp,
 )
 
+_DEFAULT_LIMIT = 50
+
 
 @mcp.tool(annotations=_WRITE)
 async def sei_criar_marcador(
@@ -68,12 +70,16 @@ async def sei_marcar_processo(
 
     Parâmetros:
     - processo: protocolo formatado ou IdProcedimento
-    - marcador: ID do marcador OU "?" para listar os disponíveis
+    - marcador: ID do marcador.
+      Passe "?" (ponto de interrogação) para entrar no modo de descoberta:
+      em vez de marcar o processo, a tool lista os marcadores disponíveis
+      na unidade para que você possa escolher o ID correto e chamar novamente.
     - texto: texto/comentário associado ao marcador (opcional)
 
     """
     backend = await _backend(ctx)
     if marcador == "?":
+        # Modo de descoberta: "?" lista os marcadores disponíveis em vez de operar.
         disponiveis = await backend.pesquisar_marcadores()
         return _json({"marcadores_disponiveis": disponiveis})
     result = await backend.marcar_processo(processo, marcador, texto)
@@ -102,7 +108,7 @@ async def sei_desmarcar_processo(
 @mcp.tool(annotations=_READ)
 async def sei_pesquisar_marcadores(
     filtro: str = "",
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     ctx: Context | None = None,
 ) -> str:
     """Lista marcadores disponíveis na unidade atual.

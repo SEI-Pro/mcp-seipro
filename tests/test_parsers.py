@@ -39,7 +39,6 @@ class TestParseDocLabel:
 
     def test_empty_string(self) -> None:
         result = _parse_doc_label("")
-        assert isinstance(result, dict)
         assert result == {}, f"Label vazio deve retornar dict vazio, retornou: {result!r}"
 
     def test_no_number(self) -> None:
@@ -262,10 +261,17 @@ class TestParseArvoreNos:
         result = parse_arvore_nos("this is not JS")
         assert result == []
 
-    def test_returns_list_type(self) -> None:
-        result = parse_arvore_nos("")
-        assert isinstance(result, list)
-        assert result == [], f"String vazia deve retornar lista vazia, retornou: {result!r}"
+    def test_single_no_has_all_expected_fields(self) -> None:
+        # Strengthen: check field values, not just the type of the return.
+        js = r"""
+        Nos = [];
+        Nos[0] = new infraArvoreNo('proc', 'p777', null, '', '', 'SEI-001/2024', '', '');
+        """
+        result = parse_arvore_nos(js)
+        assert len(result) == 1
+        assert result[0]["tipo_no"] == "proc"
+        assert result[0]["id"] == "p777"
+        assert result[0]["label"] == "SEI-001/2024"
 
     def test_minimal_nos_structure(self) -> None:
         js = r"""
@@ -273,7 +279,6 @@ class TestParseArvoreNos:
         Nos[0] = new infraArvoreNo('proctipo', 'id123', null, '', '', 'Processo', '', '');
         """
         result = parse_arvore_nos(js)
-        assert isinstance(result, list)
         assert len(result) == 1, f"Esperado 1 nó, obtido {len(result)}: {result!r}"
         assert result[0]["tipo_no"] == "proctipo", f"tipo_no inesperado: {result[0]!r}"
         assert result[0]["id"] == "id123", f"id inesperado: {result[0]!r}"
@@ -285,7 +290,6 @@ class TestParseArvoreNos:
         Nos[1] = new infraArvoreNo('doc', 'doc456', 'proc0001', '', '_self', 'Despacho', '', '');
         """
         result = parse_arvore_nos(js)
-        assert isinstance(result, list)
         assert len(result) == 2, f"Esperados 2 nós, obtidos {len(result)}: {result!r}"
         assert result[0]["tipo_no"] == "proctipo", f"tipo_no do nó raiz inesperado: {result[0]!r}"
         assert result[0]["id"] == "proc0001", f"id do nó raiz inesperado: {result[0]!r}"

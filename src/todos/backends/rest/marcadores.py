@@ -34,7 +34,11 @@ class MarcadoresRest(_RestMixin):
         return await self._rest.pesquisar_marcadores(filtro=filtro, limit=limit)
 
     async def consultar_marcador_processo(self, processo: str) -> list[dict]:
-        """Consulta os marcadores ativos de um processo."""
+        """Consulta os marcadores ativos de um processo.
+
+        Narrows the base-class return type ``dict | list[dict]`` to ``list[dict]``
+        because the REST backend always returns a list for this endpoint.
+        """
         id_proc = await self._resolver_processo(processo)
         return await self._rest.consultar_marcador_processo(id_proc)
 

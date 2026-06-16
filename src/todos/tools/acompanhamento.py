@@ -21,6 +21,8 @@ from todos.mcp_app import (
     mcp,
 )
 
+_DEFAULT_LIMIT = 50
+
 
 @mcp.tool(annotations=_IDEM)
 async def sei_acompanhar_processo(
@@ -33,12 +35,16 @@ async def sei_acompanhar_processo(
 
     Parâmetros:
     - processo: protocolo formatado ou IdProcedimento
-    - grupo: ID do grupo de acompanhamento (ou "?" para listar disponíveis)
+    - grupo: ID do grupo de acompanhamento.
+      Passe "?" (ponto de interrogação) para entrar no modo de descoberta:
+      em vez de criar o acompanhamento, a tool lista os grupos disponíveis
+      para que você possa escolher o ID correto e chamar novamente.
     - observacao: observação/anotação do acompanhamento
 
     """
     backend = await _backend(ctx)
     if grupo == "?":
+        # Modo de descoberta: "?" lista os grupos disponíveis em vez de operar.
         result = await backend.listar_grupos_acompanhamento(filtro="")
         return _json({"grupos_disponiveis": result})
     result = await backend.acompanhar_processo(processo, grupo, observacao)
@@ -95,7 +101,7 @@ async def sei_listar_grupos_acompanhamento(
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_meus_acompanhamentos(
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:
@@ -112,7 +118,7 @@ async def sei_listar_meus_acompanhamentos(
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_acompanhamentos_unidade(
-    limit: int = 50,
+    limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     ctx: Context | None = None,
 ) -> str:

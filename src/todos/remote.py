@@ -84,11 +84,13 @@ def run_remote(mcp: FastMCP, *, port: int) -> None:
         raise RuntimeError(msg)
     base_url = os.environ.get("BASE_URL", f"http://localhost:{port}").rstrip("/")
     app = build_remote_app(mcp, base_url=base_url)
-    host = os.environ.get("MCP_HOST", "0.0.0.0")
+    # §34.1 — Default to 127.0.0.1 (loopback only). Cloud/Railway deployments that
+    # need to bind to all interfaces should set SEI_HOST=0.0.0.0 explicitly.
+    host = os.environ.get("SEI_HOST", "127.0.0.1")
     if host == "0.0.0.0":
         logger.warning(
             "Servidor MCP vinculado a 0.0.0.0 (todas as interfaces). "
-            "Defina MCP_HOST=127.0.0.1 para restringir o acesso em ambientes locais."
+            "Defina SEI_HOST=127.0.0.1 para restringir o acesso em ambientes locais."
         )
     config = uvicorn.Config(app, host=host, port=port, log_level="info")
     anyio.run(uvicorn.Server(config).serve)

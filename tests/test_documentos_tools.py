@@ -138,6 +138,10 @@ class _SecoesBackend:
     def __init__(self) -> None:
         self.sent: tuple[list[dict], str] | None = None
 
+    def __getattr__(self, op: str) -> object:
+        msg = f"_SecoesBackend.{op} not implemented"
+        raise NotImplementedError(msg)
+
     async def listar_secoes(self, id_documento: str) -> dict:
         del id_documento
         return {
@@ -220,6 +224,10 @@ def test_ler_documento_web_only_requires_processo(monkeypatch: pytest.MonkeyPatc
 class _GateErroBackend:
     name = "fake"
 
+    def __getattr__(self, op: str) -> object:
+        msg = f"_GateErroBackend.{op} not implemented"
+        raise NotImplementedError(msg)
+
     async def consultar_documento_interno(
         self, id_documento: str, processo: str | None = None
     ) -> dict:
@@ -241,6 +249,10 @@ def test_ler_documento_propagates_consult_error(monkeypatch: pytest.MonkeyPatch)
 
 class _AnexoBackend:
     name = "fake"
+
+    def __getattr__(self, op: str) -> object:
+        msg = f"_AnexoBackend.{op} not implemented"
+        raise NotImplementedError(msg)
 
     async def consultar_documento_externo(
         self, id_documento: str, processo: str | None = None
@@ -264,6 +276,10 @@ def test_baixar_anexo_too_large_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 class _RestritoBackend:
     name = "fake"
 
+    def __getattr__(self, op: str) -> object:
+        msg = f"_RestritoBackend.{op} not implemented"
+        raise NotImplementedError(msg)
+
     async def consultar_documento_externo(
         self, id_documento: str, processo: str | None = None
     ) -> dict:
@@ -281,6 +297,10 @@ def test_consultar_documento_externo_attaches_aviso_for_restricted(
 
 class _ConsultaErroBackend:
     name = "fake"
+
+    def __getattr__(self, op: str) -> object:
+        msg = f"_ConsultaErroBackend.{op} not implemented"
+        raise NotImplementedError(msg)
 
     async def consultar_documento_externo(
         self, id_documento: str, processo: str | None = None
@@ -310,6 +330,10 @@ class _CancelarBackend:
 
     def __init__(self, *, locked: bool) -> None:
         self._locked = locked
+
+    def __getattr__(self, op: str) -> object:
+        msg = f"_CancelarBackend.{op} not implemented"
+        raise NotImplementedError(msg)
 
     async def listar_secoes(self, id_documento: str) -> dict:
         del id_documento

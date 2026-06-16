@@ -328,6 +328,18 @@ STYLE_SHORTCUTS = {
     "legenda_tabela_pequena": "Tabela_Fonte_9_Centralizado",
 }
 
+# §36.1 — Guard against drift between STYLE_SHORTCUTS and SEI_STYLES.
+# Every shortcut value must reference a CSS class name that exists in SEI_STYLES.
+# This check fires at import time if a style is added to STYLE_SHORTCUTS
+# without a corresponding entry in SEI_STYLES (or vice-versa after a rename).
+_undefined_shortcuts = set(STYLE_SHORTCUTS.values()) - set(SEI_STYLES)
+if _undefined_shortcuts:
+    _drift_err = (
+        f"STYLE_SHORTCUTS references styles not defined in SEI_STYLES: {_undefined_shortcuts}. "
+        "Add the missing style(s) to SEI_STYLES or update STYLE_SHORTCUTS."
+    )
+    raise RuntimeError(_drift_err)
+
 
 def html_referencia_sei(id_documento: str, numero_sei: str) -> str:
     """Gera o HTML de referência (hiperlink dinâmico) para um documento SEI.

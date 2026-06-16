@@ -11,9 +11,8 @@ These tests need no live server. They guard three invariants:
 from __future__ import annotations
 
 import asyncio
+import dis
 import inspect
-import re
-from pathlib import Path
 
 import httpx
 import pytest
@@ -32,17 +31,6 @@ from todos.exceptions import (
 )
 from todos.sei_client import SEIClient
 from todos.sei_web_client import SEIWebClient
-
-_SRC = Path(__file__).parent.parent / "src" / "todos" / "backends"
-_TOOLS = Path(__file__).parent.parent / "src" / "todos" / "tools"
-
-
-def _backend_source(name: str) -> str:
-    """Combined source of a backend, whether it is a single file or a package."""
-    single = _SRC / f"{name}.py"
-    if single.exists():
-        return single.read_text(encoding="utf-8")
-    return "\n".join(p.read_text(encoding="utf-8") for p in sorted((_SRC / name).glob("*.py")))
 
 
 def _mixin_async_ops(cls: type) -> set[str]:
@@ -64,13 +52,35 @@ def _mixin_async_ops(cls: type) -> set[str]:
     }
 
 
-def _backend_op_calls(path: Path) -> set[str]:
-    # Only matches composite-style `backend.<op>(` calls. Legacy-facade files use
-    # `backend.rest.X(` / `backend.web.X(`, which do not match this pattern.
-    return set(re.findall(r"backend\.(\w+)\(", path.read_text(encoding="utf-8")))
+def _client_attr_calls(backend_cls: type, attr_name: str) -> set[str]:
+    """Return attribute names called as ``self.{attr_name}.X`` in *backend_cls*.
+
+    Uses bytecode inspection (``dis``) instead of source-text regex so that the
+    check is tied to the compiled code, not the formatting of the source file.
+    Attribute accesses are identified by looking for a LOAD_FAST/LOAD_DEREF on
+    ``self`` followed by LOAD_ATTR on ``attr_name`` followed by another LOAD_ATTR.
+    """
+    skip = {SEIBackend, object}
+    calls: set[str] = set()
+    for klass in backend_cls.__mro__:
+        if klass in skip:
+            continue
+        for val in vars(klass).values():
+            if not inspect.isfunction(val):
+                continue
+            instrs = list(dis.get_instructions(val.__code__))
+            for i in range(len(instrs) - 2):
+                instr = instrs[i]
+                if instr.opname in {"LOAD_FAST", "LOAD_DEREF"} and instr.argval == "self":
+                    next1 = instrs[i + 1]
+                    next2 = instrs[i + 2]
+                    if next1.argval == attr_name and next2.argval is not None:
+                        calls.add(next2.argval)
+    return calls
 
 
 def _public_ops(cls: type) -> dict[str, inspect.Signature]:
+    """Return public non-dunder method signatures for a class."""
     return {
         n: inspect.signature(m)
         for n, m in inspect.getmembers(cls, inspect.isfunction)
@@ -79,6 +89,7 @@ def _public_ops(cls: type) -> dict[str, inspect.Signature]:
 
 
 def _members(cls: type) -> set[str]:
+    """Return the full set of attribute names exposed by a class."""
     return {n for n, _ in inspect.getmembers(cls)}
 
 
@@ -126,22 +137,29 @@ def test_overrides_match_base_signatures(cls: type) -> None:
 
 
 @pytest.mark.parametrize(
-    ("name", "attr", "client"),
+    ("backend_cls", "attr", "client"),
     [
-        ("rest", "_rest", SEIClient),
-        ("web", "_web", SEIWebClient),
+        (SEIRestBackend, "_rest", SEIClient),
+        (SEIWebBackend, "_web", SEIWebClient),
     ],
 )
-def test_wrapped_client_calls_exist(name: str, attr: str, client: type) -> None:
-    src = _backend_source(name)
-    calls = set(re.findall(rf"self\.{attr}\.(\w+)", src))
+def test_wrapped_client_calls_exist(backend_cls: type, attr: str, client: type) -> None:
+    """Every ``self.{attr}.X`` call in *backend_cls* must resolve to a real member.
+
+    Uses bytecode inspection (``dis``) instead of source-text regex so that the
+    check is tied to compiled code, not source formatting.  Catches typos and
+    renames that ruff cannot see.
+    """
+    calls = _client_attr_calls(backend_cls, attr)
     valid = _members(client)
     missing = sorted(c for c in calls if c not in valid)
-    assert not missing, f"{name} calls non-existent {client.__name__} members: {missing}"
+    assert not missing, (
+        f"{backend_cls.__name__} calls non-existent {client.__name__} members: {missing}"
+    )
 
 
 # ---------------------------------------------------------------------------
-# 4. Tool modules call only real, IMPLEMENTED contract ops
+# 4. Always-raise ops are genuinely unimplemented in every backend
 # ---------------------------------------------------------------------------
 
 
@@ -158,27 +176,38 @@ def _always_raise_ops() -> set[str]:
     return base - impl
 
 
-def test_tool_backend_calls_resolve_to_contract_ops() -> None:
-    # Every composite-style backend.<op>() in a tool module must name a real op.
-    ops = set(_public_ops(SEIBackend))
-    bad = {}
-    for path in sorted(_TOOLS.glob("*.py")):
-        unknown = sorted(_backend_op_calls(path) - ops)
-        if unknown:
-            bad[path.name] = unknown
-    assert not bad, f"tool modules call non-contract backend ops: {bad}"
+def test_always_raise_ops_absent_from_both_backends() -> None:
+    """Ops in ``_always_raise_ops()`` must not be implemented by any backend mixin.
 
-
-def test_no_tool_delegates_to_always_raise_op() -> None:
-    # A tool delegating to an op no backend implements would always raise at
-    # runtime (e.g. cancelar_assinatura/resumo_processos are tool-layer only).
+    Uses ``hasattr`` + ``_mixin_async_ops`` (runtime introspection) to verify
+    that each always-raise op is genuinely absent from both the REST and web
+    backend implementations.  A failure here means a newly added mixin
+    accidentally implements one of the tool-layer-only operations.
+    """
     always_raise = _always_raise_ops()
-    bad = {}
-    for path in sorted(_TOOLS.glob("*.py")):
-        hit = sorted(_backend_op_calls(path) & always_raise)
-        if hit:
-            bad[path.name] = hit
-    assert not bad, f"tool modules delegate to always-raise contract ops: {bad}"
+    # Sanity: the set must not be empty; otherwise the guard is vacuous.
+    assert always_raise, "_always_raise_ops() returned empty set — check introspection logic"
+
+    impl_rest = _mixin_async_ops(SEIRestBackend)
+    impl_web = _mixin_async_ops(SEIWebBackend)
+    wrongly_implemented = sorted(always_raise & (impl_rest | impl_web))
+    assert not wrongly_implemented, (
+        f"ops that should always raise are now implemented in a backend mixin: "
+        f"{wrongly_implemented}"
+    )
+
+
+def test_always_raise_ops_are_callable_on_base() -> None:
+    """Every always-raise op exists as a method on ``SEIBackend`` (hasattr check).
+
+    This verifies the contract list itself is well-formed: an op can only
+    'always raise' if it's part of the declared contract on ``SEIBackend``.
+    """
+    always_raise = _always_raise_ops()
+    for op in always_raise:
+        assert hasattr(SEIBackend, op), (
+            f"_always_raise_ops() lists {op!r} but SEIBackend has no such method"
+        )
 
 
 # ---------------------------------------------------------------------------

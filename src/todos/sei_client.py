@@ -5,8 +5,9 @@ import base64
 import json
 import logging
 import os
+from datetime import datetime
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 import httpx
 
@@ -50,34 +51,35 @@ class SEIClient:
         self.base_url = (sei_url or os.environ.get("SEI_URL", "")).rstrip("/")
         self._usuario = sei_usuario or os.environ.get("SEI_USUARIO", "")
 
-        # Resolve o sei_root de forma consistente com SEIWebClient para namespace do keyring
+        # Resolve o sei_root de forma consistente com SEIWebClient para namespace do keyring.
+        # §1.1: usa urlparse para extrair scheme://host sem assumir componentes do path.
         _sei_web_url = sei_web_url or os.environ.get("SEI_WEB_URL", "")
         if _sei_web_url:
             self.sei_root = _sei_web_url.rstrip("/")
         elif self.base_url:
-            parsed = urlparse(self.base_url)
-            path = parsed.path
-            for marker in ("/modulos/", "/sei/", "/api/"):
-                if marker in path:
-                    path = path[: path.index(marker)]
-                    break
-            self.sei_root = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+            _parsed = urlparse(self.base_url)
+            if _parsed.scheme and _parsed.netloc:
+                self.sei_root = f"{_parsed.scheme}://{_parsed.netloc}"
+            else:
+                # URL sem scheme/netloc reconhecível — avisa e usa heurística de fallback
+                logger.warning(
+                    "SEI_URL não possui scheme/netloc reconhecível (%r); "
+                    "sei_root pode ser calculado incorretamente.",
+                    self.base_url,
+                )
+                self.sei_root = self.base_url.rstrip("/")
         else:
             self.sei_root = self.base_url.rstrip("/")
 
         self._senha = sei_senha or os.environ.get("SEI_SENHA", "")
-        # Pre-compute keyring key so autenticar() can do the actual lookup in a thread
+        # Pre-compute keyring key so autenticar() can do the actual lookup in a thread.
+        # §1.5: usa apenas netloc (host+port) para chave estável, nunca a URL completa.
         self._keyring_user: str | None = None
         if not self._senha and self._usuario:
-            instance_url = (
-                self.sei_root.replace("https://", "")
-                .replace("http://", "")
-                .strip()
-                .rstrip("/")
-                .lower()
-            )
+            _root_parsed = urlparse(self.sei_root)
+            instance_host = (_root_parsed.netloc or "").strip().rstrip("/").lower()
             self._keyring_user = (
-                f"{self._usuario}@{instance_url}" if instance_url else self._usuario
+                f"{self._usuario}@{instance_host}" if instance_host else self._usuario
             )
 
         self._orgao = sei_orgao or os.environ.get("SEI_ORGAO", "0")
@@ -434,8 +436,6 @@ class SEIClient:
             payload["idHipoteseLegal"] = id_hipotese_legal
 
         if arquivo_path:
-            import os
-
             headers = await self._get_headers()
             with open(arquivo_path, "rb") as f:
                 resp = await self._client.post(
@@ -1692,6 +1692,39 @@ class SEIClient:
     # Documento externo (upload)
     # ------------------------------------------------------------------
 
+    async def _post_with_file_reopen(
+        self,
+        url: str,
+        arquivo_path: str,
+        nome_arquivo: str,
+        data: dict[str, str],
+    ) -> httpx.Response:
+        """POST multipart com arquivo; reabre o arquivo e repete em caso de 401/403.
+
+        Extrai o padrão open→POST→reauth→open→POST comum em uploads, evitando
+        duplicação e garantindo que o arquivo seja lido do início nas duas tentativas.
+        """
+        headers = await self._get_headers()
+        with open(arquivo_path, "rb") as f:
+            resp = await self._client.post(
+                url,
+                headers=headers,
+                data=data,
+                files={"anexo": (nome_arquivo, f)},
+            )
+        if resp.status_code in (401, 403):
+            logger.info("Token expirado durante upload, re-autenticando...")
+            await self.autenticar()
+            headers = {"token": self._token or ""}
+            with open(arquivo_path, "rb") as f:
+                resp = await self._client.post(
+                    url,
+                    headers=headers,
+                    data=data,
+                    files={"anexo": (nome_arquivo, f)},
+                )
+        return resp
+
     async def criar_documento_externo(
         self,
         id_procedimento: str,
@@ -1705,68 +1738,35 @@ class SEIClient:
         arquivo_path: caminho local do arquivo (PDF, imagem, etc.)
         Retorna: {idDocumento, protocoloDocumentoFormatado}
         """
-        import os
-        from datetime import datetime
-
         if not os.path.exists(arquivo_path):
             raise SEIError(f"Arquivo não encontrado: {arquivo_path}")
 
         nome_arquivo = os.path.basename(arquivo_path)
         data_hoje = datetime.now().strftime("%d/%m/%Y")
-        headers = await self._get_headers()
 
-        with open(arquivo_path, "rb") as f:
-            resp = await self._client.post(
-                f"{self.base_url}/documento/{id_procedimento}/externo/criar",
-                headers=headers,
-                data={
-                    "idSerie": id_serie,
-                    "numero": "",
-                    "descricao": descricao,
-                    "dataElaboracao": data_hoje,
-                    "nivelAcesso": nivel_acesso,
-                    "idHipoteseLegal": "",
-                    "grauSigilo": "",
-                    "idUnidadeGeradoraProtocolo": id_unidade,
-                    "assuntos": "",
-                    "interessados": "",
-                    "remetente": "",
-                    "destinatarios": "",
-                    "observacao": "",
-                    "idTextoPadraoInterno": "",
-                    "idTipoConferencia": "",
-                    "protocoloDocumentoModelo": "",
-                },
-                files={"anexo": (nome_arquivo, f)},
-            )
-
-        if resp.status_code in (401, 403):
-            await self.autenticar()
-            headers = {"token": self._token or ""}
-            with open(arquivo_path, "rb") as f:
-                resp = await self._client.post(
-                    f"{self.base_url}/documento/{id_procedimento}/externo/criar",
-                    headers=headers,
-                    data={
-                        "idSerie": id_serie,
-                        "numero": "",
-                        "descricao": descricao,
-                        "dataElaboracao": data_hoje,
-                        "nivelAcesso": nivel_acesso,
-                        "idHipoteseLegal": "",
-                        "grauSigilo": "",
-                        "idUnidadeGeradoraProtocolo": id_unidade,
-                        "assuntos": "",
-                        "interessados": "",
-                        "remetente": "",
-                        "destinatarios": "",
-                        "observacao": "",
-                        "idTextoPadraoInterno": "",
-                        "idTipoConferencia": "",
-                        "protocoloDocumentoModelo": "",
-                    },
-                    files={"anexo": (nome_arquivo, f)},
-                )
+        resp = await self._post_with_file_reopen(
+            url=f"{self.base_url}/documento/{id_procedimento}/externo/criar",
+            arquivo_path=arquivo_path,
+            nome_arquivo=nome_arquivo,
+            data={
+                "idSerie": id_serie,
+                "numero": "",
+                "descricao": descricao,
+                "dataElaboracao": data_hoje,
+                "nivelAcesso": nivel_acesso,
+                "idHipoteseLegal": "",
+                "grauSigilo": "",
+                "idUnidadeGeradoraProtocolo": id_unidade,
+                "assuntos": "",
+                "interessados": "",
+                "remetente": "",
+                "destinatarios": "",
+                "observacao": "",
+                "idTextoPadraoInterno": "",
+                "idTipoConferencia": "",
+                "protocoloDocumentoModelo": "",
+            },
+        )
 
         resp.raise_for_status()
         data = resp.json()

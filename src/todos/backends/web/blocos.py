@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-
-import httpx
 
 from todos.backends.web._session import _WebMixin
 from todos.exceptions import SEIError
@@ -38,68 +37,84 @@ class BlocosWeb(_WebMixin):
         """Lista os documentos de um bloco de assinatura."""
         return await self._web.listar_documentos_bloco_assinatura_web(id_bloco)
 
-    async def retirar_documentos_bloco_assinatura(self, id_bloco: str, documentos: str) -> dict:
-        """Retira documentos de um bloco de assinatura."""
+    async def retirar_documentos_bloco_assinatura(
+        self, id_bloco: str, documentos: str
+    ) -> list[dict]:
+        """Retira documentos de um bloco de assinatura.
+
+        Executa os documentos em paralelo via asyncio.gather; falhas individuais
+        são registradas como aviso e excluídas do resultado. Se todos falharem,
+        levanta SEIError.
+        """
         ids = [d.strip() for d in documentos.split(",") if d.strip()]
+        coros = [
+            self._web.retirar_documento_bloco_assinatura_web(id_bloco, id_doc) for id_doc in ids
+        ]
+        raw = await asyncio.gather(*coros, return_exceptions=True)
         erros: list[str] = []
         resultados: list[dict] = []
-        for id_doc in ids:
-            try:
-                r = await self._web.retirar_documento_bloco_assinatura_web(id_bloco, id_doc)
-                resultados.append(r)
-            except (SEIError, httpx.HTTPError) as _e:
+        for id_doc, outcome in zip(ids, raw, strict=True):
+            if isinstance(outcome, BaseException):
                 logger.warning(
-                    "Falha ao retirar documento %s do bloco %s: %s", id_doc, id_bloco, _e
+                    "Falha ao retirar documento %s do bloco %s: %s", id_doc, id_bloco, outcome
                 )
-                erros.append(f"{id_doc}: {_e}")
+                erros.append(f"{id_doc}: {outcome}")
+            else:
+                resultados.append(outcome)
         if erros and not resultados:
             msg = f"Falha ao retirar todos os documentos: {'; '.join(erros)}"
             raise SEIError(msg)
-        if len(resultados) == 1 and not erros:
-            return resultados[0]
-        return {"ok": True, "resultados": resultados, "erros": erros}
+        return resultados
 
     async def alterar_bloco_assinatura(self, id_bloco: str, descricao: str) -> dict:
         """Altera a descrição de um bloco de assinatura."""
         return await self._web.alterar_bloco_assinatura_web(id_bloco, descricao)
 
-    async def excluir_blocos_assinatura(self, ids_blocos: str) -> dict:
-        """Exclui blocos de assinatura."""
+    async def excluir_blocos_assinatura(self, ids_blocos: str) -> list[dict]:
+        """Exclui blocos de assinatura.
+
+        Executa os blocos em paralelo via asyncio.gather; falhas individuais
+        são registradas como aviso e excluídas do resultado. Se todos falharem,
+        levanta SEIError.
+        """
         ids = [b.strip() for b in ids_blocos.split(",") if b.strip()]
+        coros = [self._web.excluir_bloco_assinatura_web(id_bloco) for id_bloco in ids]
+        raw = await asyncio.gather(*coros, return_exceptions=True)
         erros: list[str] = []
         resultados: list[dict] = []
-        for id_bloco in ids:
-            try:
-                r = await self._web.excluir_bloco_assinatura_web(id_bloco)
-                resultados.append(r)
-            except (SEIError, httpx.HTTPError) as _e:
-                logger.warning("Falha ao excluir bloco %s: %s", id_bloco, _e)
-                erros.append(f"{id_bloco}: {_e}")
+        for id_bloco, outcome in zip(ids, raw, strict=True):
+            if isinstance(outcome, BaseException):
+                logger.warning("Falha ao excluir bloco %s: %s", id_bloco, outcome)
+                erros.append(f"{id_bloco}: {outcome}")
+            else:
+                resultados.append(outcome)
         if erros and not resultados:
             msg = f"Falha ao excluir todos os blocos: {'; '.join(erros)}"
             raise SEIError(msg)
-        if len(resultados) == 1 and not erros:
-            return resultados[0]
-        return {"ok": True, "resultados": resultados, "erros": erros}
+        return resultados
 
-    async def concluir_blocos_assinatura(self, ids_blocos: str) -> dict:
-        """Conclui blocos de assinatura."""
+    async def concluir_blocos_assinatura(self, ids_blocos: str) -> list[dict]:
+        """Conclui blocos de assinatura.
+
+        Executa os blocos em paralelo via asyncio.gather; falhas individuais
+        são registradas como aviso e excluídas do resultado. Se todos falharem,
+        levanta SEIError.
+        """
         ids = [b.strip() for b in ids_blocos.split(",") if b.strip()]
+        coros = [self._web.concluir_bloco_assinatura_web(id_bloco) for id_bloco in ids]
+        raw = await asyncio.gather(*coros, return_exceptions=True)
         erros: list[str] = []
         resultados: list[dict] = []
-        for id_bloco in ids:
-            try:
-                r = await self._web.concluir_bloco_assinatura_web(id_bloco)
-                resultados.append(r)
-            except (SEIError, httpx.HTTPError) as _e:
-                logger.warning("Falha ao concluir bloco %s: %s", id_bloco, _e)
-                erros.append(f"{id_bloco}: {_e}")
+        for id_bloco, outcome in zip(ids, raw, strict=True):
+            if isinstance(outcome, BaseException):
+                logger.warning("Falha ao concluir bloco %s: %s", id_bloco, outcome)
+                erros.append(f"{id_bloco}: {outcome}")
+            else:
+                resultados.append(outcome)
         if erros and not resultados:
             msg = f"Falha ao concluir todos os blocos: {'; '.join(erros)}"
             raise SEIError(msg)
-        if len(resultados) == 1 and not erros:
-            return resultados[0]
-        return {"ok": True, "resultados": resultados, "erros": erros}
+        return resultados
 
     async def reabrir_bloco_assinatura(self, id_bloco: str) -> dict:
         """Reabre um bloco de assinatura concluído."""

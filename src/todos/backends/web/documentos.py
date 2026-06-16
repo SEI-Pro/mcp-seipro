@@ -64,6 +64,9 @@ class DocumentosWeb(_WebMixin):
             encontrado = await self._encontrar_em_processo(proto_proc, _match)
             if encontrado:
                 return encontrado
+        # processos_pesquisados: metadado de diagnóstico — quantos processos candidatos
+        # foram inspecionados. Não é uma chave do schema SEI; existe apenas no
+        # response de erro desta tool, para orientar o usuário a refinar a busca.
         return {
             "encontrado": False,
             "processos_pesquisados": len(candidatos),
