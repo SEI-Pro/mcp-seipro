@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import httpx
+
 from todos.backends.web._session import _WebMixin
+from todos.exceptions import SEIError
 
 
 class BlocosWeb(_WebMixin):
@@ -33,14 +36,19 @@ class BlocosWeb(_WebMixin):
 
     async def retirar_documentos_bloco_assinatura(self, id_bloco: str, documentos: str) -> dict:
         """Retira documentos de um bloco de assinatura."""
-        resultados = [
-            await self._web.retirar_documento_bloco_assinatura_web(id_bloco, id_doc)
-            for id_doc in (d.strip() for d in documentos.split(","))
-            if id_doc
-        ]
-        if len(resultados) == 1:
-            return resultados[0]
-        return {"ok": True, "resultados": resultados}
+        ids = [d.strip() for d in documentos.split(",") if d.strip()]
+        erros: list[str] = []
+        resultados: list[dict] = []
+        for id_doc in ids:
+            try:
+                r = await self._web.retirar_documento_bloco_assinatura_web(id_bloco, id_doc)
+                resultados.append(r)
+            except (SEIError, httpx.HTTPError) as exc:
+                erros.append(f"{id_doc}: {exc}")
+        if erros:
+            msg = f"Falha ao retirar {len(erros)} documento(s): {'; '.join(erros)}"
+            raise SEIError(msg)
+        return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
 
     async def alterar_bloco_assinatura(self, id_bloco: str, descricao: str) -> dict:
         """Altera a descrição de um bloco de assinatura."""
@@ -48,25 +56,35 @@ class BlocosWeb(_WebMixin):
 
     async def excluir_blocos_assinatura(self, ids_blocos: str) -> dict:
         """Exclui blocos de assinatura."""
-        resultados = [
-            await self._web.excluir_bloco_assinatura_web(id_bloco)
-            for id_bloco in (b.strip() for b in ids_blocos.split(","))
-            if id_bloco
-        ]
-        if len(resultados) == 1:
-            return resultados[0]
-        return {"ok": True, "resultados": resultados}
+        ids = [b.strip() for b in ids_blocos.split(",") if b.strip()]
+        erros: list[str] = []
+        resultados: list[dict] = []
+        for id_bloco in ids:
+            try:
+                r = await self._web.excluir_bloco_assinatura_web(id_bloco)
+                resultados.append(r)
+            except (SEIError, httpx.HTTPError) as exc:
+                erros.append(f"{id_bloco}: {exc}")
+        if erros:
+            msg = f"Falha ao excluir {len(erros)} bloco(s): {'; '.join(erros)}"
+            raise SEIError(msg)
+        return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
 
     async def concluir_blocos_assinatura(self, ids_blocos: str) -> dict:
         """Conclui blocos de assinatura."""
-        resultados = [
-            await self._web.concluir_bloco_assinatura_web(id_bloco)
-            for id_bloco in (b.strip() for b in ids_blocos.split(","))
-            if id_bloco
-        ]
-        if len(resultados) == 1:
-            return resultados[0]
-        return {"ok": True, "resultados": resultados}
+        ids = [b.strip() for b in ids_blocos.split(",") if b.strip()]
+        erros: list[str] = []
+        resultados: list[dict] = []
+        for id_bloco in ids:
+            try:
+                r = await self._web.concluir_bloco_assinatura_web(id_bloco)
+                resultados.append(r)
+            except (SEIError, httpx.HTTPError) as exc:
+                erros.append(f"{id_bloco}: {exc}")
+        if erros:
+            msg = f"Falha ao concluir {len(erros)} bloco(s): {'; '.join(erros)}"
+            raise SEIError(msg)
+        return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
 
     async def reabrir_bloco_assinatura(self, id_bloco: str) -> dict:
         """Reabre um bloco de assinatura concluído."""
