@@ -39,16 +39,14 @@ def html_to_text(raw: str) -> str:
         # Limpar linhas vazias e espaços excessivos
         lines = [line.strip() for line in text.split("\n") if line.strip()]
         return "\n".join(lines)
-    except (AttributeError, TypeError, ValueError, UnicodeDecodeError) as e:
-        logger.warning(
-            "html_to_text: parser falhou (%s: %s) — usando fallback regex; saída truncada a 10000 chars",
-            type(e).__name__,
-            e,
-        )
+    except (TypeError, ValueError, UnicodeDecodeError) as _html_err:
+        logger.warning("Falha ao converter HTML (fallback regex): %s", _html_err)
         # Fallback: regex brutal
         text = html_module.unescape(raw)
         text = re.sub(r"<[^>]+>", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > 10000:
+            logger.warning("Texto truncado de %d para 10000 caracteres após fallback", len(text))
         return text[:10000]
 
 
@@ -123,7 +121,12 @@ def html_to_markdown(raw: str) -> str:
         return html_to_text(raw)
 
 
-MAX_OCR_PAGES = 20  # Limite de páginas para OCR (evitar timeout)
+_raw_max_ocr = os.environ.get("MAX_OCR_PAGES", "")
+try:
+    MAX_OCR_PAGES: int = int(_raw_max_ocr) if _raw_max_ocr else 20
+except ValueError as exc:
+    _err = f"MAX_OCR_PAGES deve ser um inteiro; recebido: {_raw_max_ocr!r}"
+    raise RuntimeError(_err) from exc
 OCR_LANG = os.environ.get("SEI_OCR_LANG", "por")
 
 
@@ -192,11 +195,12 @@ def _extract_pdf_pages(content: bytes) -> list[tuple[int, str]]:
     # Fallback: OCR para PDFs de imagem
     try:
         return _ocr_pdf(content)
-    except (ImportError, OSError, RuntimeError, ValueError) as e:
+    except (ImportError, OSError, RuntimeError, ValueError) as _ocr_err:
         logger.warning(
             "OCR falhou (%s: %s) — PDF retornado como sem texto",
-            type(e).__name__,
-            e,
+            type(_ocr_err).__name__,
+            _ocr_err,
+            exc_info=True,
         )
         return []
 
