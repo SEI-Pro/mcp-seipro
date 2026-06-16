@@ -117,43 +117,43 @@ _Extrator: TypeAlias = Callable[[dict, dict], str]
 _CAMPOS_AGRUPAMENTO: dict[str, dict[str, str | _Extrator]] = {
     "tipo": {
         "desc": "Tipo processual",
-        "extract": lambda a, s: a.get("tipoProcesso", "Sem tipo"),
+        "extract": lambda a, _s: a.get("tipoProcesso", "Sem tipo"),
     },
     "atribuido": {
         "desc": "Usuário atribuído",
-        "extract": lambda a, s: a.get("usuarioAtribuido") or "Sem atribuição",
+        "extract": lambda a, _s: a.get("usuarioAtribuido") or "Sem atribuição",
     },
     "acesso": {
         "desc": "Nível de acesso",
-        "extract": lambda a, s: {"0": "Público", "1": "Restrito", "2": "Sigiloso"}.get(
+        "extract": lambda _a, s: {"0": "Público", "1": "Restrito", "2": "Sigiloso"}.get(
             s.get("nivelAcessoGlobal", "0"), "Desconhecido"
         ),
     },
     "tramitacao": {
         "desc": "Em tramitação",
-        "extract": lambda a, s: (
+        "extract": lambda _a, s: (
             "Em tramitação" if s.get("processoEmTramitacao") == "S" else "Fora de tramitação"
         ),
     },
     "sobrestado": {
         "desc": "Sobrestamento",
-        "extract": lambda a, s: "Sobrestado" if s.get("processoSobrestado") == "S" else "Ativo",
+        "extract": lambda _a, s: "Sobrestado" if s.get("processoSobrestado") == "S" else "Ativo",
     },
     "bloqueado": {
         "desc": "Bloqueio",
-        "extract": lambda a, s: (
+        "extract": lambda _a, s: (
             "Bloqueado" if s.get("processoBloqueado") == "S" else "Desbloqueado"
         ),
     },
     "novo": {
         "desc": "Documento novo",
-        "extract": lambda a, s: (
+        "extract": lambda _a, s: (
             "Com documentos novos" if s.get("documentoNovo") == "S" else "Sem documentos novos"
         ),
     },
     "anotacao": {
         "desc": "Anotação",
-        "extract": lambda a, s: (
+        "extract": lambda _a, s: (
             "Anotação prioritária"
             if s.get("anotacaoPrioridade") == "S"
             else "Com anotação"
@@ -163,7 +163,7 @@ _CAMPOS_AGRUPAMENTO: dict[str, dict[str, str | _Extrator]] = {
     },
     "retorno": {
         "desc": "Retorno programado",
-        "extract": lambda a, s: (
+        "extract": lambda _a, s: (
             f"Atrasado ({s.get('retornoData', '')})"
             if s.get("retornoAtrasado") == "S"
             else f"Programado ({s.get('retornoData', '')})"
@@ -173,38 +173,38 @@ _CAMPOS_AGRUPAMENTO: dict[str, dict[str, str | _Extrator]] = {
     },
     "lido_usuario": {
         "desc": "Acessado pelo usuário",
-        "extract": lambda a, s: "Lido" if s.get("processoAcessadoUsuario") == "S" else "Não lido",
+        "extract": lambda _a, s: "Lido" if s.get("processoAcessadoUsuario") == "S" else "Não lido",
     },
     "lido_unidade": {
         "desc": "Acessado pela unidade",
-        "extract": lambda a, s: "Lido" if s.get("processoAcessadoUnidade") == "S" else "Não lido",
+        "extract": lambda _a, s: "Lido" if s.get("processoAcessadoUnidade") == "S" else "Não lido",
     },
     "origem": {
         "desc": "Gerado/Recebido",
-        "extract": lambda a, s: (
+        "extract": lambda _a, s: (
             "Gerado na unidade" if s.get("processoGeradoRecebido") == "G" else "Recebido"
         ),
     },
     "anexado": {
         "desc": "Anexado",
-        "extract": lambda a, s: "Anexado" if s.get("processoAnexado") == "S" else "Independente",
+        "extract": lambda _a, s: "Anexado" if s.get("processoAnexado") == "S" else "Independente",
     },
     "unidades": {
         "desc": "Unidades de abertura",
-        "extract": lambda a, s: (
+        "extract": lambda a, _s: (
             ", ".join(u.get("sigla", "") for u in a.get("dadosAbertura", {}).get("lista", []))
             or "N/A"
         ),
     },
     "marcador": {
         "desc": "Marcador",
-        "extract": lambda a, s: (
+        "extract": lambda a, _s: (
             ", ".join(m.get("nome", "") for m in a.get("marcador", [])) or "Sem marcador"
         ),
     },
     "ciencia": {
         "desc": "Ciência",
-        "extract": lambda a, s: "Com ciência" if s.get("ciencia") == "S" else "Sem ciência",
+        "extract": lambda _a, s: "Com ciência" if s.get("ciencia") == "S" else "Sem ciência",
     },
 }
 

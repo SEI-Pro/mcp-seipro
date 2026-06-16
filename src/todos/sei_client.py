@@ -5,8 +5,9 @@ import base64
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,6 +23,12 @@ from todos.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+_keyring: ModuleType | None = None
+try:
+    import keyring as _keyring
+except ImportError:
+    logger.debug("keyring not available; password will be read from SEI_SENHA env var")
 
 
 def _safe_int(val: str | int | None, default: int = 0) -> int:
@@ -214,24 +221,23 @@ class SEIClient:
         if not self._senha and self._keyring_user:
             keyring_user = self._keyring_user
             self._keyring_user = None  # prevent concurrent / empty-string repeated lookups
-            try:
-                import keyring
-
-                senha = await asyncio.wait_for(
-                    asyncio.to_thread(keyring.get_password, "todos-mcp", keyring_user),
-                    timeout=5.0,
-                )
-                if senha:
-                    self._senha = senha
-                # _keyring_user stays None: keyring answered definitively (found or not found)
-            except TimeoutError:
-                self._keyring_user = keyring_user  # restore: transient timeout, allow retry
-                logger.warning(
-                    "Timeout ao buscar senha do keyring (>5s); use SEI_SENHA como fallback"
-                )
-            except (ImportError, OSError, RuntimeError, ValueError) as e:
-                self._keyring_user = keyring_user  # restore: transient error, allow retry
-                logger.warning("Não foi possível obter a senha do keyring: %s", e)
+            if _keyring is not None:
+                try:
+                    senha = await asyncio.wait_for(
+                        asyncio.to_thread(_keyring.get_password, "todos-mcp", keyring_user),
+                        timeout=5.0,
+                    )
+                    if senha:
+                        self._senha = senha
+                    # _keyring_user stays None: keyring answered definitively (found or not found)
+                except TimeoutError:
+                    self._keyring_user = keyring_user  # restore: transient timeout, allow retry
+                    logger.warning(
+                        "Timeout ao buscar senha do keyring (>5s); use SEI_SENHA como fallback"
+                    )
+                except (OSError, RuntimeError, ValueError) as e:
+                    self._keyring_user = keyring_user  # restore: transient error, allow retry
+                    logger.warning("Não foi possível obter a senha do keyring: %s", e)
 
         resp = await self._client.post(
             f"{self.base_url}/autenticar",
@@ -455,13 +461,13 @@ class SEIClient:
 
         if arquivo_path:
             headers = await self._get_headers()
-            with Path(arquivo_path).open("rb") as f:
-                resp = await self._client.post(
-                    f"{self.base_url}/documento/externo/{id_documento}/alterar",
-                    headers=headers,
-                    data=payload,
-                    files={"anexo": (Path(arquivo_path).name, f)},
-                )
+            _file_bytes = await asyncio.to_thread(Path(arquivo_path).read_bytes)
+            resp = await self._client.post(
+                f"{self.base_url}/documento/externo/{id_documento}/alterar",
+                headers=headers,
+                data=payload,
+                files={"anexo": (Path(arquivo_path).name, _file_bytes)},
+            )
         else:
             resp = await self._request(
                 "POST", f"/documento/externo/{id_documento}/alterar", data=payload
@@ -1835,24 +1841,24 @@ class SEIClient:
         duplicação e garantindo que o arquivo seja lido do início nas duas tentativas.
         """
         headers = await self._get_headers()
-        with Path(arquivo_path).open("rb") as f:
-            resp = await self._client.post(
-                url,
-                headers=headers,
-                data=data,
-                files={"anexo": (nome_arquivo, f)},
-            )
+        file_bytes = await asyncio.to_thread(Path(arquivo_path).read_bytes)
+        resp = await self._client.post(
+            url,
+            headers=headers,
+            data=data,
+            files={"anexo": (nome_arquivo, file_bytes)},
+        )
         if resp.status_code in (401, 403):
             logger.info("Token expirado durante upload, re-autenticando...")
             await self.autenticar()
             headers = {"token": self._token or ""}
-            with Path(arquivo_path).open("rb") as f:
-                resp = await self._client.post(
-                    url,
-                    headers=headers,
-                    data=data,
-                    files={"anexo": (nome_arquivo, f)},
-                )
+            file_bytes = await asyncio.to_thread(Path(arquivo_path).read_bytes)
+            resp = await self._client.post(
+                url,
+                headers=headers,
+                data=data,
+                files={"anexo": (nome_arquivo, file_bytes)},
+            )
         return resp
 
     async def criar_documento_externo(
@@ -1869,12 +1875,12 @@ class SEIClient:
         arquivo_path: caminho local do arquivo (PDF, imagem, etc.)
         Retorna: {idDocumento, protocoloDocumentoFormatado}
         """
-        if not Path(arquivo_path).exists():
+        if not await asyncio.to_thread(Path(arquivo_path).exists):
             msg = f"Arquivo não encontrado: {arquivo_path}"
             raise SEIError(msg)
 
         nome_arquivo = Path(arquivo_path).name
-        data_hoje = datetime.now().strftime("%d/%m/%Y")
+        data_hoje = datetime.now(tz=UTC).astimezone().strftime("%d/%m/%Y")
 
         resp = await self._post_with_file_reopen(
             url=f"{self.base_url}/documento/{id_procedimento}/externo/criar",

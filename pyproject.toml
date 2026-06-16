@@ -75,10 +75,6 @@ ignore = [
 "bootstrap.py" = ["S603", "S606"]  # subprocess with controlled inputs (sys.executable, Path objects)
 "setup_claude.py" = ["S603"]  # legitimate subprocess calls with trusted input
 "scripts/smoke_web.py" = ["BLE001"]  # smoke test catch-all is intentional — any failure must be logged
-"src/todos/html_utils.py" = [
-    # pytesseract/pdf2image/pdfplumber/io must be deferred — heavy optional deps
-    "PLC0415",
-]
 "src/todos/catalog_cache.py" = [
     # Cache stores arbitrary JSON-deserializable values; Any is the correct type
     "ANN401",
@@ -92,26 +88,12 @@ ignore = [
     "PLR0913",
     # Complexity inherent in HTTP client retry/auth/cache logic
     "C901",
-    # keyring import inside autenticar() is deferred — optional dep; moving to top-level
-    # would break environments without keyring installed
-    "PLC0415",
     # Cache stores arbitrary API-returned values; Any is the correct type here
     "ANN401",
-    # Sync file I/O inside async — architectural constraint; aiofiles refactor tracked separately
-    "ASYNC230", "ASYNC240",
-    # datetime.now() without tz — local time intentional for BR gov document dates
-    "DTZ005",
 ]
 "src/todos/sei_web_client.py" = [
-    "ARG002",  # listar_usuarios_web.apenas_unidade: interface parity with SEIClient; web form ignores it by design
     # Scraper methods are inherently complex (multi-step web flows, branching HTML layouts)
     "C901", "PLR0912", "PLR0913", "PLR0915",
-    # Optional heavy deps (keyring, mimetypes, os, datetime) must be deferred at import time
-    "PLC0415",
-    # Sync path ops inside async — architectural constraint; aiofiles refactor tracked separately
-    "ASYNC230", "ASYNC240",
-    # date.today() without tz — local date intentional for Brazilian government form fields
-    "DTZ011",
     # Web scraper response dicts contain heterogeneous API values; Any is the correct element type
     "ANN401",
 ]
@@ -121,14 +103,9 @@ ignore = [
     "PLR0912", "C901",  # 121 tools + scraper helpers — complexity is architectural
     "PLR0911",  # multiple return paths in tools inherent to the dual web/REST dispatch model
     "PLR0913",  # tools need ctx + ≥4 business params; grouping into dataclasses hides the MCP schema
-    "ANN201", "D103",  # lifespan() is a FastMCP protocol function; signature is framework-dictated
-    "ARG005",  # lambda extractors in _CAMPOS_AGRUPAMENTO share (a, s) interface; some only use one arg
     # Deferred/conditional imports: fastmcp auth, tempfile, html, setup_wizard, remote are
     # all runtime-optional — moving to top-level would fail on envs where they're absent
     "PLC0415",
-    # TRY201/TRY301: raise primeira re-raises a captured *outer* exception (not the current handler)
-    # so bare `raise` would re-raise the wrong exception; explicit `raise primeira` is correct
-    "TRY201", "TRY301",
     # ASYNC230: sync write to tempfile for MCP output artifacts — acceptable here
     "ASYNC230",
 ]  # boundary file: 121 tools, complexity is inherent

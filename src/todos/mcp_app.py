@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 
 import httpx
@@ -42,7 +43,8 @@ _http_port = int(os.environ.get("PORT", "8000"))
 
 
 @asynccontextmanager
-async def lifespan(_server: FastMCP):
+async def lifespan(_server: FastMCP) -> AsyncGenerator[dict[str, object], None]:
+    """Set up and tear down SEI client sessions for the MCP server lifespan."""
     try:
         if _http_mode:
             clients: dict[str, SEIClient] = {}

@@ -1,12 +1,45 @@
 """Utilitários para manipulação de HTML do SEI."""
 
 import html as html_module
+import io
 import logging
 import os
 import re
+from types import ModuleType
+from typing import Any
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from markdownify import MarkdownConverter
+
+# Optional OCR deps — pre-declared so that except-block None/fallback assignments
+# are always valid (ty checks that assigned types match the declared annotation).
+_pytesseract: ModuleType | None = None
+_convert_from_bytes: Any = None  # pdf2image.convert_from_bytes callable
+PDFInfoNotInstalledError: type[BaseException] = OSError
+PDFPageCountError: type[BaseException] = OSError
+_HAS_OCR = False
+
+try:
+    import pytesseract as _pytesseract
+    from pdf2image import convert_from_bytes as _convert_from_bytes
+    from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError
+
+    _HAS_OCR = True
+except ImportError:
+    pass
+
+# Optional PDF text-extraction dep
+_pdfplumber: ModuleType | None = None
+PdfminerException: type[BaseException] = ValueError
+_HAS_PDFPLUMBER = False
+
+try:
+    import pdfplumber as _pdfplumber
+    from pdfplumber.utils.exceptions import PdfminerException
+
+    _HAS_PDFPLUMBER = True
+except ImportError:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -148,8 +181,6 @@ class _SEIMarkdownConverter(MarkdownConverter):
 
     def convert_tr(self, el: object, text: str, _parent_tags: object) -> str:
         """Convert a table row, honouring per-cell HTML align attributes."""
-        from bs4 import Tag
-
         cells = el.find_all(["td", "th"]) if isinstance(el, Tag) else []
         is_first_row = isinstance(el, Tag) and el.find_previous_sibling() is None
         parent = el.parent if isinstance(el, Tag) else None
@@ -243,26 +274,26 @@ def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
     Processing is limited to MAX_OCR_PAGES pages to avoid timeouts.
     When OCR fails on an individual page, logs a WARNING and skips the page.
     """
-    import pytesseract
-    from pdf2image import convert_from_bytes
-    from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError
-
+    if not _HAS_OCR or _convert_from_bytes is None or _pytesseract is None:
+        _msg = "OCR requer pytesseract e pdf2image instalados"
+        raise ImportError(_msg)
     lang = lang or OCR_LANG
     try:
-        images = convert_from_bytes(content, dpi=_OCR_DPI)
+        images = _convert_from_bytes(content, dpi=_OCR_DPI)
     except (PDFInfoNotInstalledError, PDFPageCountError) as e:
         msg = f"poppler não instalado ou PDF inválido: {e}"
         raise OSError(msg) from e
     pages = []
     limit = min(len(images), MAX_OCR_PAGES)
+    _tesseract_errors = (
+        _pytesseract.TesseractError,
+        _pytesseract.TesseractNotFoundError,
+        OSError,
+    )
     for i, img in enumerate(images[:limit], 1):
         try:
-            text = pytesseract.image_to_string(img, lang=lang)
-        except (
-            pytesseract.TesseractError,
-            pytesseract.TesseractNotFoundError,
-            OSError,
-        ) as _ocr_page_err:
+            text = _pytesseract.image_to_string(img, lang=lang)
+        except _tesseract_errors as _ocr_page_err:
             logger.warning(
                 "OCR falhou na página %d: %s",
                 i,
@@ -289,24 +320,20 @@ def _extract_pdf_pages(content: bytes) -> list[tuple[int, str]]:
     Returns list of (page_number, text) tuples.
     Returns an empty list if the content is not a valid PDF or is empty.
     """
-    import io
-
-    import pdfplumber
-    from pdfplumber.utils.exceptions import PdfminerException
-
     pages = []
-    try:
-        with pdfplumber.open(io.BytesIO(content)) as pdf:
-            for i, page in enumerate(pdf.pages, 1):
-                text = page.extract_text()
-                if text and text.strip():
-                    pages.append((i, text.strip()))
-    except (PdfminerException, ValueError, OSError) as e:
-        logger.warning(
-            "pdfplumber falhou (%s: %s) — tentando OCR",
-            type(e).__name__,
-            e,
-        )
+    if _HAS_PDFPLUMBER and _pdfplumber is not None:
+        try:
+            with _pdfplumber.open(io.BytesIO(content)) as pdf:
+                for i, page in enumerate(pdf.pages, 1):
+                    text = page.extract_text()
+                    if text and text.strip():
+                        pages.append((i, text.strip()))
+        except (PdfminerException, ValueError, OSError) as e:
+            logger.warning(
+                "pdfplumber falhou (%s: %s) — tentando OCR",
+                type(e).__name__,
+                e,
+            )
 
     if pages:
         return pages
