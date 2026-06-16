@@ -379,11 +379,15 @@ def _mcp_add_via_cli(
     cmd = [claude_cli, "mcp", "add", "-s", scope, *env_args, "todos", todos_cmd]
     cwd_str = str(cwd or Path.cwd())
     try:
+        # S603: claude_cli is an absolute path from shutil.which("claude") — not user input.
+        # cmd elements are string literals, MCP env key=value pairs, and todos_cmd (which comes
+        # from shutil.which("todos") or a hard-coded fallback "todos") — all controlled values.
         _sp.run(cmd, check=True, capture_output=True, text=True, cwd=cwd_str)
     except _sp.CalledProcessError as e:
         if "already exists" not in (e.stderr or "") and "already exists" not in (e.stdout or ""):
             return False
         with contextlib.suppress(_sp.CalledProcessError):
+            # S603: same rationale as above — claude_cli is an absolute path from shutil.which.
             _sp.run(
                 [claude_cli, "mcp", "remove", "-s", scope, "todos"],
                 check=True,
@@ -517,10 +521,14 @@ def _update_codex_via_cli(codex_cli: str, todos_cmd: str, mcp_env: dict[str, str
     env_args = [item for k, v in mcp_env.items() for item in ("--env", f"{k}={v}")]
     cmd_codex = [codex_cli, "mcp", "add", "todos", *env_args, "--", todos_cmd]
     try:
+        # S603: codex_cli is an absolute path from shutil.which("codex") — not user input.
+        # cmd_codex elements are string literals, MCP env key=value pairs, and todos_cmd
+        # (shutil.which("todos") or "todos" fallback) — all controlled values.
         _sp.run(cmd_codex, check=True, capture_output=True, text=True)
     except _sp.CalledProcessError as e:
         if "already" in (e.stderr or "") or "already" in (e.stdout or ""):
             with contextlib.suppress(_sp.CalledProcessError):
+                # S603: same rationale — codex_cli is an absolute path from shutil.which.
                 _sp.run(
                     [codex_cli, "mcp", "remove", "todos"],
                     check=True,
