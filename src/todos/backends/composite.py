@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -133,8 +133,8 @@ class CompositeBackend(SEIBackend):
         result = await _dispatch_in_order("criar_documento_externo", ordered, (processo, dados), {})
         if not isinstance(result, dict):
             msg = f"criar_documento_externo: esperado dict, backend retornou {type(result).__name__!r}"
-            raise TypeError(msg)
-        return cast("dict", result)
+            raise SEIError(msg)
+        return result
 
 
 # Exceções que significam "este backend não atendeu" → tenta o próximo. Erros
