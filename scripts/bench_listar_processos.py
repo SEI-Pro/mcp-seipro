@@ -42,10 +42,11 @@ from urllib.parse import parse_qsl, urljoin
 import httpx
 from bs4 import BeautifulSoup, Tag
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from todos.sei_client import SEIClient
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # Named constants
@@ -250,32 +251,38 @@ class WebSEIScraper:
         self.login_get_ms = (time.perf_counter() - t0) * 1000
 
         if resp.status_code != HTTP_OK:
-            raise RuntimeError(f"GET login.php retornou {resp.status_code}")
+            msg = f"GET login.php retornou {resp.status_code}"
+            raise RuntimeError(msg)
 
         html = resp.text
 
         # detect CAPTCHA / 2FA
         if "g-recaptcha" in html or "h-captcha" in html or "hcaptcha" in html:
-            raise RuntimeError("CAPTCHA presente no login — abortando.")
+            msg = "CAPTCHA presente no login — abortando."
+            raise RuntimeError(msg)
         if 'name="txtCodigo2FA"' in html or 'id="txtCodigo2FA"' in html:
-            raise RuntimeError("2FA solicitado no login — fora de escopo do PoC.")
+            msg = "2FA solicitado no login — fora de escopo do PoC."
+            raise RuntimeError(msg)
 
         soup = BeautifulSoup(html, "html.parser")
 
         # localiza o form do login (o que contém txtUsuario)
         usuario_input = soup.find("input", attrs={"name": "txtUsuario"})
         if usuario_input is None:
-            raise RuntimeError("Campo txtUsuario não encontrado no login.")
+            msg = "Campo txtUsuario não encontrado no login."
+            raise RuntimeError(msg)
         login_form = usuario_input.find_parent("form")
         if login_form is None:
-            raise RuntimeError("<form> do login não encontrado.")
+            msg = "<form> do login não encontrado."
+            raise RuntimeError(msg)
 
         # selOrgao — escolhe option ANTAQ ou o já selecionado
         sel = login_form.find("select", attrs={"name": "selOrgao"})
         if sel is None:
             sel = soup.find("select", attrs={"name": "selOrgao"})
         if sel is None:
-            raise RuntimeError("<select name='selOrgao'> não encontrado no login.")
+            msg = "<select name='selOrgao'> não encontrado no login."
+            raise RuntimeError(msg)
         sel_orgao = _select_orgao(sel)
 
         form = _build_login_form(login_form, sel_orgao, self.usuario, self.senha)
@@ -333,7 +340,8 @@ class WebSEIScraper:
           `hdnInfraPaginaAtual=N` + `hdnInfraHashCriterios=<cache>`.
         """
         if self.inbox_url is None:
-            raise RuntimeError("login() não foi chamado antes de fetch_inbox().")
+            msg = "login() não foi chamado antes de fetch_inbox()."
+            raise RuntimeError(msg)
 
         # Caso 1: GET simples (modo legado/padrão, página 0, sem detalhada)
         if not detalhada and pagina == 0 and self.form_action is None:
@@ -342,7 +350,8 @@ class WebSEIScraper:
                 headers={"Referer": str(self.inbox_url)},
             )
             if resp.status_code != HTTP_OK:
-                raise RuntimeError(f"fetch_inbox status={resp.status_code}")
+                msg = f"fetch_inbox status={resp.status_code}"
+                raise RuntimeError(msg)
             # cacheia o form para futuras navegações
             self._extract_main_form(resp.text)
             return len(resp.content), resp.text
@@ -354,10 +363,12 @@ class WebSEIScraper:
                 headers={"Referer": str(self.inbox_url)},
             )
             if seed.status_code != HTTP_OK:
-                raise RuntimeError(f"fetch_inbox seed status={seed.status_code}")
+                msg = f"fetch_inbox seed status={seed.status_code}"
+                raise RuntimeError(msg)
             self._extract_main_form(seed.text)
             if self.form_action is None:
-                raise RuntimeError("Form principal de procedimento_controlar não encontrado")
+                msg = "Form principal de procedimento_controlar não encontrado"
+                raise RuntimeError(msg)
 
         # Caso 3: POST para alternar visualização e/ou navegar páginas
         post_data = dict(self._form_hidden)
@@ -374,7 +385,8 @@ class WebSEIScraper:
             headers={"Referer": str(self.inbox_url)},
         )
         if resp.status_code != HTTP_OK:
-            raise RuntimeError(f"fetch_inbox POST status={resp.status_code}")
+            msg = f"fetch_inbox POST status={resp.status_code}"
+            raise RuntimeError(msg)
 
         # atualiza cache do form (action e hashCriterios podem ter mudado)
         self._extract_main_form(resp.text)
@@ -407,7 +419,8 @@ def _select_orgao(sel: Tag) -> str:
                 sel_orgao = v
                 break
     if sel_orgao is None:
-        raise RuntimeError("Nenhum <option> válido em selOrgao.")
+        msg = "Nenhum <option> válido em selOrgao."
+        raise RuntimeError(msg)
     return sel_orgao
 
 
@@ -450,7 +463,8 @@ def _build_login_form(
 def _parse_login_response(post_resp: httpx.Response) -> httpx.URL:
     """Validate the POST login response and return the inbox URL."""
     if post_resp.status_code != HTTP_OK:
-        raise RuntimeError(f"POST login retornou status inesperado {post_resp.status_code}")
+        msg = f"POST login retornou status inesperado {post_resp.status_code}"
+        raise RuntimeError(msg)
 
     final_url = post_resp.url
     qs = dict(
@@ -466,14 +480,14 @@ def _parse_login_response(post_resp: httpx.Response) -> httpx.URL:
     # 2FA, captcha, etc.).
     body = post_resp.text
     if 'name="txtUsuario"' in body or 'id="txtUsuario"' in body:
-        raise RuntimeError(
+        msg = (
             "Login falhou: servidor retornou a página de login novamente. "
             "Verifique credenciais ou se há captcha/2FA configurados."
         )
+        raise RuntimeError(msg)
 
-    raise RuntimeError(
-        f"Não localizei URL de procedimento_controlar após o login. Última URL: {final_url}"
-    )
+    msg = f"Não localizei URL de procedimento_controlar após o login. Última URL: {final_url}"
+    raise RuntimeError(msg)
 
 
 def _col_names_from_headers(headers: list[str]) -> list[str]:

@@ -74,63 +74,42 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "bootstrap.py" = ["S603", "S606"]  # subprocess with controlled inputs (sys.executable, Path objects)
 "setup_claude.py" = ["S603"]  # legitimate subprocess calls with trusted input
-"scripts/smoke_web.py" = ["D103", "PLR0915", "T201"]
-# TRY002/TRY003/EM101/EM102: raise RuntimeError/SEIError with inline messages is idiomatic
-# in these files; scoped here (not global) so new files are still checked
-"scripts/bench_consultar_processo.py" = ["S603", "S606", "TRY002", "TRY003", "EM101", "EM102"]
-"scripts/bench_listar_processos.py" = ["S603", "S606", "E402", "TRY002", "TRY003", "EM101", "EM102"]
+"scripts/smoke_web.py" = ["BLE001"]  # smoke test catch-all is intentional — any failure must be logged
 "src/todos/html_utils.py" = [
     # pytesseract/pdf2image/pdfplumber/io must be deferred — heavy optional deps
     "PLC0415",
-    # Layout parsing thresholds (table column count, uppercase header length heuristic)
-    "PLR2004",
 ]
 "src/todos/catalog_cache.py" = [
     # Cache stores arbitrary JSON-deserializable values; Any is the correct type
     "ANN401",
-    # random.random() used for probabilistic sweep (not crypto); S311 doesn't apply here
-    "S311",
 ]
 "src/todos/setup_wizard.py" = [
     # subprocess calls use sys.executable or controlled Path objects — not shell injection
     "S603",
 ]
-"src/todos/auth.py" = [
-    # base64/TokenError are conditional imports loaded only when the auth flow is exercised
-    "PLC0415",
-    # token_type="Bearer" is the RFC 6750 standard string, not a credential
-    "S106",
-    # len(parts) != 2 checks JWT structure (header.signature); constant would add no clarity
-    "PLR2004",
-]
 "src/todos/sei_client.py" = [
-    "TRY002", "TRY003", "EM101", "EM102",
-    # Docstring style — Portuguese multi-line summaries don't fit D205/D400/D415 rules
-    "D205", "D209", "D400", "D415",
     # REST API methods inherently have many parameters (one per API field)
-    "PLR0913", "C901",
-    # Optional heavy deps (keyring, os, datetime) must be deferred; moving to top-level would
-    # break environments without them and change import-time behaviour
+    "PLR0913",
+    # Complexity inherent in HTTP client retry/auth/cache logic
+    "C901",
+    # keyring import inside autenticar() is deferred — optional dep; moving to top-level
+    # would break environments without keyring installed
     "PLC0415",
     # Cache stores arbitrary API-returned values; Any is the correct type here
     "ANN401",
-    # Sync open()/os.path.* inside async — architectural constraint shared with sei_web_client;
-    # refactor to asyncio.to_thread / aiofiles is tracked separately (ASYNC230/240, PTH)
-    "ASYNC230", "ASYNC240", "PTH110", "PTH119", "PTH123",
+    # Sync file I/O inside async — architectural constraint; aiofiles refactor tracked separately
+    "ASYNC230", "ASYNC240",
     # datetime.now() without tz — local time intentional for BR gov document dates
     "DTZ005",
 ]
 "src/todos/sei_web_client.py" = [
-    "TRY002", "TRY003", "EM101", "EM102",
     "ARG002",  # listar_usuarios_web.apenas_unidade: interface parity with SEIClient; web form ignores it by design
-    # Magic values: HTTP status codes and HTML column counts for SEI layout invariants
-    "PLR2004",
     # Scraper methods are inherently complex (multi-step web flows, branching HTML layouts)
     "C901", "PLR0912", "PLR0913", "PLR0915",
     # Optional heavy deps (keyring, mimetypes, os, datetime) must be deferred at import time
     "PLC0415",
     # Sync path ops inside async — architectural constraint; aiofiles refactor tracked separately
-    "ASYNC230", "ASYNC240", "PTH113", "PTH119", "PTH123", "PTH202",
+    "ASYNC230", "ASYNC240",
     # date.today() without tz — local date intentional for Brazilian government form fields
     "DTZ011",
     # Web scraper response dicts contain heterogeneous API values; Any is the correct element type
@@ -139,7 +118,7 @@ ignore = [
 # server.py (tool registrations) + mcp_app.py (shared core extracted from it):
 # same code, same framework-dictated/boundary-file justifications below.
 "src/todos/{server,mcp_app}.py" = [
-    "TRY002", "TRY003", "EM101", "EM102", "PLR0912", "C901",
+    "PLR0912", "C901",  # 121 tools + scraper helpers — complexity is architectural
     "PLR0911",  # multiple return paths in tools inherent to the dual web/REST dispatch model
     "PLR0913",  # tools need ctx + ≥4 business params; grouping into dataclasses hides the MCP schema
     "ANN201", "D103",  # lifespan() is a FastMCP protocol function; signature is framework-dictated
@@ -147,18 +126,29 @@ ignore = [
     # Deferred/conditional imports: fastmcp auth, tempfile, html, setup_wizard, remote are
     # all runtime-optional — moving to top-level would fail on envs where they're absent
     "PLC0415",
-    # cast() with Callable type expressions — moving cast args to string literals degrades readability
-    "TC006",
     # TRY201/TRY301: raise primeira re-raises a captured *outer* exception (not the current handler)
     # so bare `raise` would re-raise the wrong exception; explicit `raise primeira` is correct
     "TRY201", "TRY301",
-    # ASYNC230/PTH123/PTH118: sync write to tempfile for MCP output artifacts — acceptable here
-    "ASYNC230", "PTH123", "PTH118",
+    # ASYNC230: sync write to tempfile for MCP output artifacts — acceptable here
+    "ASYNC230",
 ]  # boundary file: 121 tools, complexity is inherent
 # per-domain tool modules split out of server.py: same framework-dictated MCP
 # signature constraint — tools need ctx + ≥4 business params, and grouping into
 # dataclasses hides the MCP schema.
-"src/todos/tools/*.py" = ["PLR0913"]
+# Only catalogos / documentos / processos actually trigger PLR0913; the other
+# modules (acompanhamento, assinatura, blocos_*, credenciamento, marcadores,
+# unidades) are clean and no longer need the suppression.
+"src/todos/tools/catalogos.py" = [
+    "PLR0913",  # sei_pesquisar_tipos_documento: 5 independent search/pagination params + ctx
+]
+"src/todos/tools/documentos.py" = [
+    "PLR0913",  # sei_criar_documento/sei_ler_documento/sei_alterar_documento_externo/
+                # sei_criar_documento_externo/sei_incluir_documento_externo: MCP API needs all
+                # fields individually; _ler_documento_via_backend mirrors the public tool signature
+]
+"src/todos/tools/processos.py" = [
+    "PLR0913",  # sei_criar_processo (7 business fields) + sei_alterar_processo: MCP API surface
+]
 "tests/**" = ["S101", "ANN", "D", "PLR2004", "SLF001", "FBT003"]  # assert/no-annot/no-docstring/magic-vals/bool-args ok in tests
 
 [tool.pytest.ini_options]

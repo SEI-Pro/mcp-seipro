@@ -102,10 +102,11 @@ _RE_FILTRO_VALIDO = re.compile(r"^[\w\s./\-]*$")
 def _validar_filtro(filtro: str) -> None:
     """Validate the `filtro` search parameter; raise SEIValidationError on invalid chars."""
     if filtro and not _RE_FILTRO_VALIDO.match(filtro):
-        raise SEIValidationError(
+        msg = (
             f"Parâmetro 'filtro' contém caracteres inválidos: {filtro!r}. "
             "Permitidos: letras (incluindo acentuadas), dígitos, sublinhado, espaços e separadores de protocolo (. / -)."
         )
+        raise SEIValidationError(msg)
 
 
 # Extratores em _CAMPOS_AGRUPAMENTO: todos aceitam (atributos, status) mesmo que
@@ -213,7 +214,8 @@ def _validar_campo(nome: str) -> dict[str, str | _Extrator]:
     campo = _CAMPOS_AGRUPAMENTO.get(nome)
     if not campo:
         campos = ", ".join(sorted(_CAMPOS_AGRUPAMENTO.keys()))
-        raise SEIValidationError(f"Campo '{nome}' inválido. Disponíveis: {campos}")
+        msg = f"Campo '{nome}' inválido. Disponíveis: {campos}"
+        raise SEIValidationError(msg)
     return campo
 
 
@@ -408,7 +410,8 @@ async def sei_pesquisar_processos(
         if exc.response.status_code in (404, 501):
             _rest_unavailable = True  # mod-wssei ausente ou endpoint não encontrado
         else:
-            raise SEIError(str(exc)) from exc
+            msg = str(exc)
+            raise SEIError(msg) from exc
     except httpx.RequestError as e:
         msg = f"SEI inacessível: {e}"
         raise SEIConnectionError(msg) from e
@@ -467,7 +470,8 @@ async def sei_pesquisar_processos(
             paged["aviso"] = "; ".join(avisos).capitalize()
         return _json(paged)
     except (SEIError, httpx.HTTPError) as e2:
-        raise SEIError(f"Web: {e2}") from e2
+        msg = f"Web: {e2}"
+        raise SEIError(msg) from e2
 
 
 @mcp.tool(annotations=_WRITE)
@@ -562,7 +566,8 @@ async def sei_sobrestar_processo(
     return _json(result)
 
 
-def main():
+def main() -> None:
+    """Entry point: run setup wizard, set-password, or start the MCP server."""
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "setup":
         if not sys.stdin.isatty():

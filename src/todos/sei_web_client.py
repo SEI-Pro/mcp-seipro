@@ -23,6 +23,7 @@ import os
 import re
 import time
 import warnings
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
@@ -63,6 +64,29 @@ _FIELD_DESCRICAO = "txtDescricao"  # especificação do processo (máx. 100 char
 _FIELD_INTERESSADOS = "hdnInteressadosProcedimento"  # mesmo formato de hdnAssuntos
 _FIELD_FILTRO_TIPO_PROC = "hdnFiltroTipoProcedimento"  # 'T'=todos, 'F'=favoritos
 _FIELD_ID_TIPO_PROC = "hdnIdTipoProcedimento"  # id do tipo selecionado no fluxo escolher_tipo
+
+# ---------------------------------------------------------------------------
+# HTML layout invariants — column counts for specific SEI tables.
+# These reflect fixed server-rendered layouts; update if the SEI template changes.
+# ---------------------------------------------------------------------------
+_UNIT_TABLE_MIN_CELLS = 2  # troca-de-unidade row: id_col + sigla_col
+_EXPECTED_SIBLING_COUNT = 2  # link-pair detection in tree navigation
+_HISTORY_TABLE_COLS = 4  # histórico de atribuições: data/hora/usuario/ação
+_BLOCK_TABLE_MIN_COLS = 2  # bloco table: at least descrição + estado
+_INBOX_PAGE_CAP = 500  # server-side cap on hdnDetalhadoNroItens
+_ONE_KB = 1024  # bytes per kilobyte (file size formatting)
+_UPLOAD_RESP_MIN_PARTS = 2  # upload response must have nome_upload + at least one field
+_UPLOAD_RESP_IDX_TAM = 3  # upload response field index: tamanho
+_UPLOAD_RESP_IDX_DH = 4  # upload response field index: data_hora
+_DOC_LINK_ARGS_MIN = 7  # minimum JS args in objTabelaAnexos.adicionar([...])
+_INBOX_TABLE_MIN_COLS = 2  # inbox row: protocolo + icones columns
+_INBOX_ATRIB_COL = 4  # inbox row column index for atribuição text
+_META_TABLE_PAIR = 2  # metadata table: exactly key + value cells
+_META_KEY_MAX_LEN = 60  # maximum length for a valid metadata key string
+_SIG_TABLE_COLS = 3  # assinaturas/ciências table: signatário + cargo + data
+_STATUS_TABLE_MIN_COLS = 2  # unidades/sobrestamentos status table minimum cols
+_ENTRY_TABLE_MIN_COLS = 2  # histórico entry table: at least tipo col
+_ENTRY_TABLE_OBS_COL = 3  # histórico entry table index for observação col
 
 
 def _decode_response(content: bytes, content_type: str) -> str:
@@ -423,10 +447,11 @@ class SEIWebClient:
                 logger.warning("Não foi possível obter a senha do keyring: %s", e)
 
         if not self.sei_root:
-            raise RuntimeError(
+            msg = (
                 "Nenhuma URL do SEI configurada. Defina SEI_URL (API REST "
                 "mod-wssei) ou SEI_WEB_URL (raiz web, ex: https://sei.orgao.gov.br)."
             )
+            raise RuntimeError(msg)
         resp = await self._http.get(self.login_url)
         _check(resp)
 
@@ -440,23 +465,27 @@ class SEIWebClient:
             or 'name="txtInfraCaptcha"' in html
             or 'id="txtInfraCaptcha"' in html
         ):
-            raise SEICaptchaError(
+            msg = (
                 "CAPTCHA presente no login — o scraper não resolve CAPTCHA. "
                 "Acesse o SEI pelo navegador uma vez para liberar a sessão."
             )
+            raise SEICaptchaError(msg)
         if 'name="txtCodigo2FA"' in html or 'id="txtCodigo2FA"' in html:
-            raise SEICaptchaError(
+            msg = (
                 "2FA solicitado no login — não suportado pelo scraper. "
                 "Conclua o 2FA pelo navegador e tente novamente."
             )
+            raise SEICaptchaError(msg)
 
         soup = BeautifulSoup(html, "html.parser")
         usuario_input = soup.find("input", attrs={"name": "txtUsuario"})
         if usuario_input is None:
-            raise SEIParseError("Campo txtUsuario não encontrado na página de login.")
+            msg = "Campo txtUsuario não encontrado na página de login."
+            raise SEIParseError(msg)
         login_form = usuario_input.find_parent("form")
         if login_form is None:
-            raise SEIParseError("<form> do login não encontrado.")
+            msg = "<form> do login não encontrado."
+            raise SEIParseError(msg)
 
         sel_orgao = self._descobrir_sel_orgao(login_form, soup)
 
@@ -559,12 +588,14 @@ class SEIWebClient:
                         else "Verifique e atualize a senha nas configurações."
                     )
                     dica = f"A senha em {_senha_source} foi recusada pelo SEI. {acao}"
-                raise SEICredenciaisError(
+                msg = (
                     f"Credenciais rejeitadas pelo SEI "
                     f"(usuário: {self._usuario!r}, órgão selOrgao={form.get('selOrgao', '?')!r}). "
                     f"{dica}"
                 )
-            raise SEIParseError(f"URL inesperada após login: {final_url}")
+                raise SEICredenciaisError(msg)
+            msg = f"URL inesperada após login: {final_url}"
+            raise SEIParseError(msg)
 
         _soup = BeautifulSoup(post_resp.text, "html.parser")
         async with self._cache_lock:
@@ -588,7 +619,8 @@ class SEIWebClient:
         if sel is None:
             sel = soup.find("select", attrs={"name": "selOrgao"})
         if sel is None:
-            raise SEIParseError("<select name='selOrgao'> não encontrado")
+            msg = "<select name='selOrgao'> não encontrado"
+            raise SEIParseError(msg)
 
         # 1) option já selecionado
         for opt in sel.find_all("option"):
@@ -608,7 +640,8 @@ class SEIWebClient:
             v = opt.get("value")
             if v and v != "null":
                 return str(v)
-        raise SEIParseError("Nenhum <option> válido em selOrgao.")
+        msg = "Nenhum <option> válido em selOrgao."
+        raise SEIParseError(msg)
 
     def _extract_pesquisa_rapida(self, html: str, soup: BeautifulSoup | None = None) -> None:
         """Captura a action do form de pesquisa rápida (protocolo_pesquisa_rapida)."""
@@ -711,7 +744,8 @@ class SEIWebClient:
         soup = BeautifulSoup(html, "html.parser")
         unit_link = soup.find("a", id="lnkInfraUnidade")
         if unit_link is None:
-            raise SEIParseError("Link de troca de unidade não encontrado")
+            msg = "Link de troca de unidade não encontrado"
+            raise SEIParseError(msg)
 
         onclick = _tag_str(unit_link, "onclick")
         match = re.search(r"window\.location\.href='([^']+)'", onclick)
@@ -726,7 +760,8 @@ class SEIWebClient:
         switch_soup = BeautifulSoup(response.text, "html.parser")
         form = switch_soup.find("form", id="frmInfraSelecaoUnidade")
         if form is None:
-            raise SEIParseError("Formulário de troca de unidade não encontrado")
+            msg = "Formulário de troca de unidade não encontrado"
+            raise SEIParseError(msg)
         return str(response.url), form
 
     @staticmethod
@@ -740,7 +775,7 @@ class SEIWebClient:
                 continue
             cells = [" ".join(td.get_text(" ", strip=True).split()) for td in row.find_all("td")]
             values = [cell for cell in cells if cell]
-            if len(values) < 2:
+            if len(values) < _UNIT_TABLE_MIN_CELLS:
                 continue
             units.append({"id_unidade": id_unidade, "sigla": values[0], "nome": values[1]})
         return units
@@ -866,7 +901,8 @@ class SEIWebClient:
                 self._extract_main_form(seed.text)
                 _form_action_snapshot = self._form_action
             if _form_action_snapshot is None:
-                raise SEIParseError("Form principal de procedimento_controlar não encontrado")
+                msg = "Form principal de procedimento_controlar não encontrado"
+                raise SEIParseError(msg)
 
         # POST para alternar visualização / aplicar filtros / navegar páginas
         async with self._form_lock:
@@ -926,7 +962,8 @@ class SEIWebClient:
         if self._pesquisa_rapida_action is None:
             await self.fetch_inbox(detalhada=False)
             if self._pesquisa_rapida_action is None:
-                raise SEIParseError("Form de pesquisa rápida não encontrado no HTML da inbox")
+                msg = "Form de pesquisa rápida não encontrado no HTML da inbox"
+                raise SEIParseError(msg)
 
         post_url = urljoin(str(self._inbox_url), self._pesquisa_rapida_action)
         r = await self._http.post(
@@ -964,10 +1001,11 @@ class SEIWebClient:
                 self._trabalhar_links[protocolo] = href
             return
 
-        raise SEINotFoundError(
+        msg = (
             f"Processo {protocolo!r} não encontrado na pesquisa. "
             "Verifique se o número está correto e se você tem acesso."
         )
+        raise SEINotFoundError(msg)
 
     async def pesquisar_processos_web(
         self,
@@ -998,7 +1036,8 @@ class SEIWebClient:
         if self._pesquisa_rapida_action is None:
             await self.fetch_inbox(detalhada=False)
             if self._pesquisa_rapida_action is None:
-                raise SEIParseError("Form de pesquisa rápida não encontrado")
+                msg = "Form de pesquisa rápida não encontrado"
+                raise SEIParseError(msg)
 
         # Passo 1: POST vazio para obter hidden fields com infra_hash válido.
         # Tenta até 2 vezes em caso de sessão expirada.
@@ -1028,7 +1067,8 @@ class SEIWebClient:
                 await self.fetch_inbox(detalhada=False)
 
         if search_form is None or r0 is None:
-            raise SEIParseError("Formulário de pesquisa avançada não encontrado")
+            msg = "Formulário de pesquisa avançada não encontrado"
+            raise SEIParseError(msg)
 
         action = urljoin(
             str(r0.url),
@@ -1078,7 +1118,7 @@ class SEIWebClient:
                 if sib.find("a", href=re.compile(r"procedimento_trabalhar")):
                     break
                 siblings.append(sib)
-                if len(siblings) == 2:
+                if len(siblings) == _EXPECTED_SIBLING_COUNT:
                     break
 
             tipo_cell = row0.find("td")
@@ -1183,7 +1223,8 @@ class SEIWebClient:
         soup_fs = BeautifulSoup(r1.text, "html.parser")
         ifr = soup_fs.find("iframe", id="ifrArvore")
         if ifr is None:
-            raise SEIParseError("ifrArvore não encontrado no frameset")
+            msg = "ifrArvore não encontrado no frameset"
+            raise SEIParseError(msg)
         arvore_src = _tag_str(ifr, "src").replace("&amp;", "&")
         arvore_url = urljoin(str(r1.url), arvore_src)
 
@@ -1353,7 +1394,8 @@ class SEIWebClient:
         async with self._form_lock:
             href = self._trabalhar_links.get(protocolo)
         if not href:
-            raise SEINotFoundError(f"Processo {protocolo!r} não encontrado")
+            msg = f"Processo {protocolo!r} não encontrado"
+            raise SEINotFoundError(msg)
         return href
 
     async def _arvore_do_processo(self, protocolo: str) -> tuple[str, str]:
@@ -1390,7 +1432,8 @@ class SEIWebClient:
         soup_fs = BeautifulSoup(r1.text, "html.parser")
         ifr = soup_fs.find("iframe", id="ifrArvore")
         if ifr is None:
-            raise SEIParseError("ifrArvore não encontrado no frameset")
+            msg = "ifrArvore não encontrado no frameset"
+            raise SEIParseError(msg)
         arvore_url = urljoin(str(r1.url), _tag_str(ifr, "src").replace("&amp;", "&"))
 
         r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
@@ -1431,11 +1474,12 @@ class SEIWebClient:
             html_arvore,
         )
         if not m:
-            raise SEINotFoundError(
+            msg = (
                 f"Ação '{nome_acao}' não encontrada no menu do processo. "
                 "Verifique se você tem permissão para esta ação e se o "
                 "processo está no estado correto."
             )
+            raise SEINotFoundError(msg)
 
         acao_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
         r = await self._http.get(acao_url, headers={"Referer": url_arvore})
@@ -1481,7 +1525,8 @@ class SEIWebClient:
             # Sem form: pode ser ação que executa direto via GET (ex: redirect imediato).
             # Valida que não há erro oculto e loga para facilitar debug.
             if _extrair_erro_sei(body):  # já checado acima mas re-verifica body completo
-                raise SEINotFoundError(f"Ação '{nome_acao}' falhou sem form de confirmação.")
+                msg = f"Ação '{nome_acao}' falhou sem form de confirmação."
+                raise SEINotFoundError(msg)
             logger.debug(
                 "executar_acao_processo: ação '%s' concluída via GET (sem form)", nome_acao
             )
@@ -1518,7 +1563,8 @@ class SEIWebClient:
             html_arvore,
         )
         if not m:
-            raise SEINotFoundError(f"Ação '{nome_acao}' não encontrada no menu do processo.")
+            msg = f"Ação '{nome_acao}' não encontrada no menu do processo."
+            raise SEINotFoundError(msg)
 
         acao_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
         r = await self._http.get(acao_url, headers={"Referer": url_arvore})
@@ -1577,22 +1623,21 @@ class SEIWebClient:
             body,
         )
         if not m_row:
-            raise SEINotFoundError(
-                f"Processo {protocolo} não está na lista de sobrestados da unidade atual."
-            )
+            msg = f"Processo {protocolo} não está na lista de sobrestados da unidade atual."
+            raise SEINotFoundError(msg)
         id_proc = m_row.group(1)
         soup = BeautifulSoup(body, "html.parser")
         form = soup.find("form", id="frmProcedimentoSobrestar") or soup.find("form")
         if form is None:
-            raise SEIParseError("Form frmProcedimentoSobrestar não encontrado.")
+            msg = "Form frmProcedimentoSobrestar não encontrado."
+            raise SEIParseError(msg)
         m_url = re.search(
             r"controlador\.php\?acao=procedimento_remover_sobrestamento[^\"'\s)]*infra_hash=[a-f0-9]+",
             body,
         )
         if not m_url:
-            raise SEIParseError(
-                "URL assinada de procedimento_remover_sobrestamento não encontrada."
-            )
+            msg = "URL assinada de procedimento_remover_sobrestamento não encontrada."
+            raise SEIParseError(msg)
         post_url = urljoin(f"{self.sei_root}/sei/", m_url.group(0).replace("&amp;", "&"))
         dados = _coletar_estado_form(form)
         dados["hdnInfraItemId"] = id_proc
@@ -1623,7 +1668,8 @@ class SEIWebClient:
             html_arvore,
         )
         if not m:
-            raise SEIParseError("Link do nó raiz do processo não encontrado na árvore.")
+            msg = "Link do nó raiz do processo não encontrado na árvore."
+            raise SEIParseError(msg)
         url = urljoin(url_arvore, m.group(1).replace("&amp;", "&"))
         r = await self._http.get(url, headers={"Referer": url_arvore})
         _check(r)
@@ -1652,10 +1698,11 @@ class SEIWebClient:
         await self.ensure_authenticated()
         url = await self._link_acao_visualizacao(protocolo, "linkReabrirProcesso")
         if url is None:
-            raise SEINotFoundError(
+            msg = (
                 f"Reabertura indisponível para {protocolo}: o processo não está "
                 "concluído na unidade atual (ou sem permissão para reabrir)."
             )
+            raise SEINotFoundError(msg)
         r = await self._http.get(url, headers={"Referer": str(self._inbox_url)})
         _check(r)
         erro = _extrair_erro_sei(_decode_response(r.content, r.headers.get("content-type", "")))
@@ -1677,7 +1724,8 @@ class SEIWebClient:
             html_arvore,
         )
         if not m:
-            raise SEINotFoundError("Ação de marcador não disponível para este processo.")
+            msg = "Ação de marcador não disponível para este processo."
+            raise SEINotFoundError(msg)
         url = urljoin(f"{self.sei_root}/sei/", m.group(1).replace("&amp;", "&"))
         r = await self._http.get(url, headers={"Referer": url_arvore})
         _check(r)
@@ -1741,7 +1789,8 @@ class SEIWebClient:
                 body,
             )
             if form is None or m_url is None:
-                raise SEIParseError("Mecanismo de remoção de marcador não encontrado.")
+                msg = "Mecanismo de remoção de marcador não encontrado."
+                raise SEIParseError(msg)
             post_url = urljoin(f"{self.sei_root}/sei/", m_url.group(0).replace("&amp;", "&"))
             dados = _coletar_estado_form(form)
             dados["hdnInfraItemId"] = mid
@@ -1764,13 +1813,15 @@ class SEIWebClient:
                 max_iter_marcador,
                 protocolo,
             )
-            raise SEIConnectionError(
+            msg = (
                 f"Remoção de marcador interrompida após {max_iter_marcador} iterações "
                 f"para {protocolo}."
             )
+            raise SEIConnectionError(msg)
         if not tentados:
             qual = f'"{marcador}" ' if marcador else ""
-            raise SEINotFoundError(f"Marcador {qual}não está aplicado em {protocolo}.")
+            msg = f"Marcador {qual}não está aplicado em {protocolo}."
+            raise SEINotFoundError(msg)
         # Verifica de fato: relê e confere quais ids sumiram (POST pode ser no-op
         # silencioso). Conta como removido só o que realmente saiu.
         body_final, _, _ = await self._pagina_marcador(protocolo)
@@ -1778,9 +1829,8 @@ class SEIWebClient:
         removidos = [nome for mid, nome in tentados.items() if mid not in ainda]
         falhas = [nome for mid, nome in tentados.items() if mid in ainda]
         if falhas:
-            raise SEIConnectionError(
-                f"Marcador(es) ainda aplicado(s) após a remoção: {', '.join(falhas)}."
-            )
+            msg = f"Marcador(es) ainda aplicado(s) após a remoção: {', '.join(falhas)}."
+            raise SEIConnectionError(msg)
         return {"ok": True, "removidos": removidos, "protocolo": protocolo}
 
     async def remover_anotacao_web(self, protocolo: str) -> dict:
@@ -1846,10 +1896,11 @@ class SEIWebClient:
             )
             m = re.search(pattern2, html_arvore)
         if not m:
-            raise SEIParseError(
+            msg = (
                 f"Ação '{acao}' não encontrada para o documento {id_documento} "
                 f"na árvore do processo {protocolo}."
             )
+            raise SEIParseError(msg)
         return urljoin(sei_base, m.group(1).replace("&amp;", "&")), url_arvore
 
     async def consultar_documento_web(self, protocolo: str, id_documento: str) -> dict:
@@ -1864,7 +1915,8 @@ class SEIWebClient:
         erro = _extrair_erro_sei(html)
         if erro:
             # SEI retorna 200 com página de erro (sessão expirada, sem permissão)
-            raise SEIConnectionError(f"documento_consultar: {erro}")
+            msg = f"documento_consultar: {erro}"
+            raise SEIConnectionError(msg)
         return _parse_documento_consultar(html, id_documento)
 
     async def listar_assinaturas_web(self, protocolo: str, id_documento: str) -> list[dict]:
@@ -1891,7 +1943,8 @@ class SEIWebClient:
             # SEI retorna 200 com página de erro; sem este check o erro seria
             # devolvido como se fosse o conteúdo do documento (e quebraria a
             # auto-detecção interno→externo de sei_ler_documento)
-            raise SEIConnectionError(f"documento_visualizar: {erro}")
+            msg = f"documento_visualizar: {erro}"
+            raise SEIConnectionError(msg)
         return html
 
     async def baixar_documento_externo_web(self, protocolo: str, id_documento: str) -> bytes:
@@ -1905,9 +1958,8 @@ class SEIWebClient:
         if "text/html" in r.headers.get("content-type", "").lower():
             # Anexo não chega como text/html: é página de erro com status 200
             erro = _extrair_erro_sei(_decode_response(r.content, r.headers.get("content-type", "")))
-            raise SEIConnectionError(
-                f"documento_download_anexo: {erro or 'resposta HTML inesperada'}"
-            )
+            msg = f"documento_download_anexo: {erro or 'resposta HTML inesperada'}"
+            raise SEIConnectionError(msg)
         return r.content
 
     async def consultar_processo_detalhe(self, protocolo: str) -> dict:
@@ -1925,9 +1977,8 @@ class SEIWebClient:
             html_arvore,
         )
         if not m:
-            raise SEIParseError(
-                f"Link procedimento_consultar não encontrado na árvore de {protocolo}."
-            )
+            msg = f"Link procedimento_consultar não encontrado na árvore de {protocolo}."
+            raise SEIParseError(msg)
         consultar_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
 
         r = await self._http.get(consultar_url, headers={"Referer": url_arvore})
@@ -1936,7 +1987,8 @@ class SEIWebClient:
         html = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(html)
         if erro:
-            raise SEIConnectionError(f"procedimento_consultar: {erro}")
+            msg = f"procedimento_consultar: {erro}"
+            raise SEIConnectionError(msg)
         return _parse_procedimento_consultar(html, protocolo)
 
     async def _gerar_arquivo_processo(self, protocolo_formatado: str, acao: str) -> bytes:
@@ -1983,7 +2035,8 @@ class SEIWebClient:
         soup_fs = BeautifulSoup(r1.text, "html.parser")
         ifr = soup_fs.find("iframe", id="ifrArvore")
         if not ifr:
-            raise SEIParseError("ifrArvore não encontrado no frameset")
+            msg = "ifrArvore não encontrado no frameset"
+            raise SEIParseError(msg)
         arvore_url = urljoin(str(r1.url), _tag_str(ifr, "src").replace("&amp;", "&"))
 
         r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
@@ -1994,7 +2047,8 @@ class SEIWebClient:
             r2.text,
         )
         if not m_link:
-            raise SEIParseError(f"Link {acao} não encontrado na árvore")
+            msg = f"Link {acao} não encontrado na árvore"
+            raise SEIParseError(msg)
 
         sei_base = f"{self.sei_root}/sei/"
         form_url = urljoin(sei_base, m_link.group(1).replace("&amp;", "&"))
@@ -2007,7 +2061,8 @@ class SEIWebClient:
         )
         form = soup3.find("form", id=re.compile(r"(?i)frmProcedimento(Pdf|Zip)"))
         if not form:
-            raise SEIParseError("Formulário frmProcedimento(Pdf|Zip) não encontrado")
+            msg = "Formulário frmProcedimento(Pdf|Zip) não encontrado"
+            raise SEIParseError(msg)
         form_action = _tag_str(form, "action").replace("&amp;", "&")
         post_url = urljoin(str(r3.url), form_action)
 
@@ -2033,10 +2088,11 @@ class SEIWebClient:
             body4,
         )
         if not m_dl:
-            raise SEIParseError(
+            msg = (
                 f"URL de download (ifrDownload.src) não encontrada após {acao}. "
                 "O processo pode não ter documentos disponíveis."
             )
+            raise SEIParseError(msg)
 
         download_url = urljoin(sei_base, m_dl.group(1).replace("&amp;", "&"))
 
@@ -2057,7 +2113,8 @@ class SEIWebClient:
             pass  # conteúdo válido independente do accept
         if not content.startswith(b"%PDF") and b"pdf" not in content[:32].lower():
             ct = "(desconhecido)"
-            raise SEIParseError(f"Esperado PDF mas recebeu Content-Type: {ct}")
+            msg = f"Esperado PDF mas recebeu Content-Type: {ct}"
+            raise SEIParseError(msg)
         return content
 
     async def gerar_zip_processo(self, protocolo_formatado: str) -> bytes:
@@ -2114,7 +2171,8 @@ class SEIWebClient:
         soup_fs = BeautifulSoup(r1.text, "html.parser")
         ifr = soup_fs.find("iframe", id="ifrArvore")
         if not ifr:
-            raise SEIParseError("ifrArvore não encontrado")
+            msg = "ifrArvore não encontrado"
+            raise SEIParseError(msg)
         arvore_url = urljoin(str(r1.url), _tag_str(ifr, "src").replace("&amp;", "&"))
         m_id = re.search(r"id_procedimento=(\d+)", str(r1.url))
         id_proc = m_id.group(1) if m_id else ""
@@ -2125,7 +2183,8 @@ class SEIWebClient:
             r2.text,
         )
         if not m_hist:
-            raise SEINotFoundError("Link procedimento_consultar_historico não encontrado na árvore")
+            msg = "Link procedimento_consultar_historico não encontrado na árvore"
+            raise SEINotFoundError(msg)
         hist_url = urljoin(str(r2.url), m_hist.group(1).replace("&amp;", "&"))
         return hist_url, id_proc, str(r2.url)
 
@@ -2137,7 +2196,7 @@ class SEIWebClient:
         if tbl:
             for tr in tbl.find_all("tr")[1:]:  # pula header
                 tds = tr.find_all("td")
-                if len(tds) >= 4:
+                if len(tds) >= _HISTORY_TABLE_COLS:
                     linhas.append(
                         {
                             "data_hora": tds[0].get_text(" ", strip=True),
@@ -2164,7 +2223,8 @@ class SEIWebClient:
         _check(r)
         form = BeautifulSoup(r.text, "html.parser").find("form")
         if form is None:
-            raise SEIParseError("Form do histórico não encontrado.")
+            msg = "Form do histórico não encontrado."
+            raise SEIParseError(msg)
         dados = _coletar_estado_form(form)
         dados["hdnTipoHistorico"] = "P"
         action = urljoin(hist_url, _tag_str(form, "action").replace("&amp;", "&"))
@@ -2276,10 +2336,11 @@ class SEIWebClient:
             html_arvore,
         )
         if not m:
-            raise SEINotFoundError(
+            msg = (
                 f"Ação 'procedimento_tramitar' não encontrada na árvore de {protocolo}. "
                 "Verifique permissão de tramitação neste processo."
             )
+            raise SEINotFoundError(msg)
 
         tramitar_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
         r = await self._http.get(tramitar_url, headers={"Referer": url_arvore})
@@ -2293,7 +2354,8 @@ class SEIWebClient:
         soup = BeautifulSoup(body, "html.parser")
         form = soup.find("form")
         if form is None:
-            raise SEIParseError("Form procedimento_tramitar não encontrado.")
+            msg = "Form procedimento_tramitar não encontrado."
+            raise SEIParseError(msg)
 
         action = _tag_str(form, "action").replace("&amp;", "&")
         post_url = urljoin(sei_base, action) if action else tramitar_url
@@ -2331,9 +2393,8 @@ class SEIWebClient:
             headers={"Referer": tramitar_url, "Content-Type": "application/x-www-form-urlencoded"},
         )
         if r2.status_code not in (200, 302):
-            raise SEIConnectionError(
-                f"POST procedimento_tramitar falhou com status={r2.status_code}"
-            )
+            msg = f"POST procedimento_tramitar falhou com status={r2.status_code}"
+            raise SEIConnectionError(msg)
         body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro2 = _extrair_erro_sei(body2)
         if erro2:
@@ -2365,7 +2426,8 @@ class SEIWebClient:
             html,
         )
         if not m:
-            raise SEINotFoundError(f"Ação '{acao}' não encontrada no toolbar da inbox.")
+            msg = f"Ação '{acao}' não encontrada no toolbar da inbox."
+            raise SEINotFoundError(msg)
         sei_base = f"{self.sei_root}/sei/"
         return urljoin(sei_base, m.group(1).replace("&amp;", "&"))
 
@@ -2458,7 +2520,7 @@ class SEIWebClient:
         if tbl is not None:
             for tr in tbl.find_all("tr")[1:]:
                 tds = tr.find_all("td")
-                if len(tds) < 2:
+                if len(tds) < _BLOCK_TABLE_MIN_COLS:
                     continue
                 descricao = tds[1].get_text(" ", strip=True)
                 if filtro and filtro.lower() not in descricao.lower():
@@ -2469,7 +2531,9 @@ class SEIWebClient:
                     if mb:
                         id_bloco = mb.group(1)
                         break
-                estado = tds[2].get_text(" ", strip=True) if len(tds) > 2 else ""
+                estado = (
+                    tds[2].get_text(" ", strip=True) if len(tds) > _BLOCK_TABLE_MIN_COLS else ""
+                )
                 blocos.append({"idBloco": id_bloco, "descricao": descricao, "estado": estado})
                 if len(blocos) >= limit:
                     break
@@ -2487,10 +2551,11 @@ class SEIWebClient:
         Requer filtro não-vazio — o endpoint AJAX não retorna resultados sem termo.
         """
         if not filtro:
-            raise SEIValidationError(
+            msg = (
                 "Em modo web (sem mod-wssei), filtro é obrigatório para pesquisar unidades. "
                 "Informe pelo menos 1 caractere (sigla ou nome da unidade)."
             )
+            raise SEIValidationError(msg)
         resultados = await self.autocomplete_unidades(filtro)
         resultados = resultados[:limit]
         return {"unidades": resultados, "total_itens": len(resultados)}
@@ -2509,10 +2574,11 @@ class SEIWebClient:
         )
         m = pat.search(body)
         if not m:
-            raise SEINotFoundError(
+            msg = (
                 f"Ação '{nome_acao}' não encontrada para bloco {id_bloco}. "
                 "Verifique se o bloco existe e está no estado correto."
             )
+            raise SEINotFoundError(msg)
         return urljoin(sei_base, m.group(1).replace("&amp;", "&"))
 
     async def criar_bloco_assinatura_web(self, descricao: str) -> dict:
@@ -2532,7 +2598,8 @@ class SEIWebClient:
         soup = BeautifulSoup(body, "html.parser")
         form = soup.find("form")
         if form is None:
-            raise SEIParseError("Form de criação de bloco não encontrado.")
+            msg = "Form de criação de bloco não encontrado."
+            raise SEIParseError(msg)
         action = _tag_str(form, "action").replace("&amp;", "&")
         post_url = urljoin(sei_base, action) if action else incluir_url
         post_data: list[tuple[str, str]] = []
@@ -2553,7 +2620,8 @@ class SEIWebClient:
             },
         )
         if r2.status_code not in (200, 302):
-            raise SEIConnectionError(f"POST bloco_assinatura_incluir status={r2.status_code}")
+            msg = f"POST bloco_assinatura_incluir status={r2.status_code}"
+            raise SEIConnectionError(msg)
         body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro2 = _extrair_erro_sei(body2)
         if erro2:
@@ -2573,7 +2641,8 @@ class SEIWebClient:
         acao_url = await self._obter_acao_bloco_url(id_bloco, "bloco_assinatura_disponibilizar")
         r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
         if r.status_code not in (200, 302):
-            raise SEIConnectionError(f"bloco_assinatura_disponibilizar status={r.status_code}")
+            msg = f"bloco_assinatura_disponibilizar status={r.status_code}"
+            raise SEIConnectionError(msg)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
@@ -2590,7 +2659,8 @@ class SEIWebClient:
             acao_url = await self._obter_acao_bloco_url(id_bloco, "bloco_assinatura_cancelar")
         r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
         if r.status_code not in (200, 302):
-            raise SEIConnectionError(f"bloco_assinatura_cancelar status={r.status_code}")
+            msg = f"bloco_assinatura_cancelar status={r.status_code}"
+            raise SEIConnectionError(msg)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
@@ -2606,7 +2676,8 @@ class SEIWebClient:
         acao_url = await self._obter_acao_bloco_url(id_bloco, nome_acao)
         r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
         if r.status_code not in (200, 302):
-            raise SEIConnectionError(f"{nome_acao} status={r.status_code}")
+            msg = f"{nome_acao} status={r.status_code}"
+            raise SEIConnectionError(msg)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
@@ -2664,7 +2735,7 @@ class SEIWebClient:
         if tbl is not None:
             for tr in tbl.find_all("tr")[1:]:
                 tds = tr.find_all("td")
-                if len(tds) < 2:
+                if len(tds) < _BLOCK_TABLE_MIN_COLS:
                     continue
                 tipo = tds[0].get_text(" ", strip=True)
                 num = tds[1].get_text(" ", strip=True)
@@ -2691,7 +2762,8 @@ class SEIWebClient:
         )
         m = pat.search(body_list)
         if not m:
-            raise SEIParseError(f"Link de edição não encontrado para bloco {id_bloco}.")
+            msg = f"Link de edição não encontrado para bloco {id_bloco}."
+            raise SEIParseError(msg)
         edit_url = urljoin(sei_base, m.group().replace("&amp;", "&"))
         r = await self._http.get(edit_url, headers={"Referer": lista_url})
         _check(r)
@@ -2699,7 +2771,8 @@ class SEIWebClient:
         soup = BeautifulSoup(body, "html.parser")
         form = soup.find("form")
         if form is None:
-            raise SEIParseError("Form de edição de bloco não encontrado.")
+            msg = "Form de edição de bloco não encontrado."
+            raise SEIParseError(msg)
         action = _tag_str(form, "action").replace("&amp;", "&")
         post_url = urljoin(sei_base, action) if action else edit_url
         post_data: list[tuple[str, str]] = []
@@ -2717,7 +2790,8 @@ class SEIWebClient:
             headers={"Referer": edit_url, "Content-Type": "application/x-www-form-urlencoded"},
         )
         if r2.status_code not in (200, 302):
-            raise SEIConnectionError(f"POST bloco_assinatura_alterar status={r2.status_code}")
+            msg = f"POST bloco_assinatura_alterar status={r2.status_code}"
+            raise SEIConnectionError(msg)
         body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body2)
         if erro:
@@ -2746,10 +2820,11 @@ class SEIWebClient:
     async def pesquisar_assuntos_web(self, filtro: str = "", limit: int = 50) -> dict:
         """Pesquisa assuntos via AJAX assunto_auto_completar."""
         if not filtro:
-            raise SEIValidationError(
+            msg = (
                 "Em modo web (sem mod-wssei), filtro é obrigatório para pesquisar assuntos. "
                 "Informe pelo menos 1 caractere (nome ou código do assunto)."
             )
+            raise SEIValidationError(msg)
         raw = await self._autocomplete_ajax("assunto_auto_completar", filtro)
         assuntos: list[dict[str, str]] = []
         for item in raw[:limit]:
@@ -2767,10 +2842,11 @@ class SEIWebClient:
     async def pesquisar_contatos_web(self, filtro: str = "", limit: int = 50) -> dict:
         """Pesquisa contatos via AJAX contato_auto_completar."""
         if not filtro:
-            raise SEIValidationError(
+            msg = (
                 "Em modo web (sem mod-wssei), filtro é obrigatório para pesquisar contatos. "
                 "Informe pelo menos 1 caractere (nome ou CPF/CNPJ)."
             )
+            raise SEIValidationError(msg)
         raw = await self._autocomplete_ajax("contato_auto_completar", filtro)
         contatos: list[dict[str, str]] = []
         for item in raw[:limit]:
@@ -2914,9 +2990,8 @@ class SEIWebClient:
             incluir_href = _tag_str(a, "href").replace("&amp;", "&")
             break
         if not incluir_href:
-            raise SEIParseError(
-                "Link documento_escolher_tipo não encontrado nas ações do processo."
-            )
+            msg = "Link documento_escolher_tipo não encontrado nas ações do processo."
+            raise SEIParseError(msg)
 
         escolher_url = urljoin(sei_base, incluir_href)
         r3 = await self._http.get(escolher_url, headers={"Referer": url_arvore})
@@ -2925,7 +3000,8 @@ class SEIWebClient:
         soup3 = BeautifulSoup(body3, "html.parser")
         form3 = soup3.find("form", id="frmDocumentoEscolherTipo")
         if form3 is None:
-            raise SEIParseError("frmDocumentoEscolherTipo não encontrado")
+            msg = "frmDocumentoEscolherTipo não encontrado"
+            raise SEIParseError(msg)
         form3_action = _tag_str(form3, "action").replace("&amp;", "&")
         post3_url = urljoin(str(r3.url), form3_action)
         post3_data: dict[str, str] = {}
@@ -3047,7 +3123,8 @@ class SEIWebClient:
             )
             form = soup.find("form", id="frmProcedimentoEscolherTipo")
             if form is None:
-                raise SEIParseError("Form procedimento_escolher_tipo não encontrado.")
+                msg = "Form procedimento_escolher_tipo não encontrado."
+                raise SEIParseError(msg)
             # Mostra todos os tipos (não só os favoritos da unidade).
             r = await self._post_form_preservando(
                 form,
@@ -3060,7 +3137,8 @@ class SEIWebClient:
             )
             form = soup.find("form", id="frmProcedimentoEscolherTipo")
             if form is None:
-                raise SEIParseError("Form de escolha de tipo não recarregou.")
+                msg = "Form de escolha de tipo não recarregou."
+                raise SEIParseError(msg)
             # Seleciona o tipo desejado → recebe o form de cadastro.
             r = await self._post_form_preservando(
                 form, str(r.url), {_FIELD_ID_TIPO_PROC: tipo_processo}, str(r.url)
@@ -3087,7 +3165,8 @@ class SEIWebClient:
             raise SEIConnectionError(erro)
         form = BeautifulSoup(body, "html.parser").find("form")
         if form is None:
-            raise SEIParseError("Form procedimento_cadastrar não encontrado.")
+            msg = "Form procedimento_cadastrar não encontrado."
+            raise SEIParseError(msg)
         return form, str(r.url)
 
     @staticmethod
@@ -3110,11 +3189,12 @@ class SEIWebClient:
                 texto = opcoes.get(aid)
                 if texto is None:
                     disponiveis = ", ".join(f"{v} ({t})" for v, t in opcoes.items()) or "nenhum"
-                    raise SEIValidationError(
+                    msg = (
                         f"Assunto '{aid}' não está entre as sugestões do tipo de processo. "
                         f"Sugeridos: {disponiveis}. A criação web só aceita os assuntos "
                         "sugeridos para o tipo."
                     )
+                    raise SEIValidationError(msg)
                 itens.append((aid, texto))
         else:
             itens = list(opcoes.items())
@@ -3178,7 +3258,8 @@ class SEIWebClient:
 
         r = await self._post_form_preservando(form, url_atual, overrides, url_atual)
         if r.status_code not in (200, 302):
-            raise SEIConnectionError(f"POST de cadastro falhou com status={r.status_code}")
+            msg = f"POST de cadastro falhou com status={r.status_code}"
+            raise SEIConnectionError(msg)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
@@ -3188,10 +3269,11 @@ class SEIWebClient:
         # Sucesso: o servidor redireciona para procedimento_trabalhar (a árvore do
         # novo processo). Se ainda estamos no form de cadastro, o save foi rejeitado.
         if soup.find("form", id="frmProcedimentoCadastro") is not None:
-            raise SEIParseError(
+            msg = (
                 "Cadastro rejeitado pelo SEI (form re-exibido). Verifique tipo de "
                 "processo, assuntos e nível de acesso."
             )
+            raise SEIParseError(msg)
 
         protocolo = ""
         m_proto = re.search(r"(\d{4,5}\.\s?\d{6}/\d{4}-\d{2})", body)
@@ -3203,10 +3285,11 @@ class SEIWebClient:
             id_proc = m_url.group(1)
 
         if not id_proc and not protocolo:
-            raise SEIParseError(
+            msg = (
                 "Processo aparentemente criado mas idProcedimento/protocolo não "
                 "puderam ser extraídos da resposta."
             )
+            raise SEIParseError(msg)
 
         return {
             "ok": True,
@@ -3238,10 +3321,11 @@ class SEIWebClient:
             html_arvore,
         )
         if not m:
-            raise SEINotFoundError(
+            msg = (
                 "Ação 'procedimento_alterar' não encontrada no menu do processo. "
                 "Verifique permissão e se o processo está aberto na unidade atual."
             )
+            raise SEINotFoundError(msg)
         form_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
         r = await self._http.get(form_url, headers={"Referer": url_arvore})
         _check(r)
@@ -3252,7 +3336,8 @@ class SEIWebClient:
         soup = BeautifulSoup(body, "html.parser")
         form = soup.find("form")
         if form is None:
-            raise SEIParseError("Form procedimento_alterar não encontrado.")
+            msg = "Form procedimento_alterar não encontrado."
+            raise SEIParseError(msg)
 
         # Sobrescreve apenas os campos informados; o resto é preservado por
         # _post_form_preservando (que coleta o estado atual do form).
@@ -3281,7 +3366,8 @@ class SEIWebClient:
 
         r2 = await self._post_form_preservando(form, str(r.url), overrides, str(r.url))
         if r2.status_code not in {200, 302}:
-            raise SEIConnectionError(f"POST procedimento_alterar status={r2.status_code}")
+            msg = f"POST procedimento_alterar status={r2.status_code}"
+            raise SEIConnectionError(msg)
         body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro2 = _extrair_erro_sei(body2)
         if erro2:
@@ -3290,10 +3376,11 @@ class SEIWebClient:
             BeautifulSoup(body2, "html.parser").find("form", id="frmProcedimentoCadastro")
             is not None
         ):
-            raise SEIParseError(
+            msg = (
                 "Alteração rejeitada pelo SEI (form re-exibido). Verifique nível de "
                 "acesso, hipótese legal e assuntos do processo."
             )
+            raise SEIParseError(msg)
         self._invalidar_arvore(protocolo)
         return {"ok": True, "mensagem": "Processo alterado com sucesso.", "protocolo": protocolo}
 
@@ -3339,7 +3426,8 @@ class SEIWebClient:
                         break
 
         if not incluir_href:
-            raise SEIParseError("Link 'Incluir Documento' não encontrado nas ações do processo.")
+            msg = "Link 'Incluir Documento' não encontrado nas ações do processo."
+            raise SEIParseError(msg)
 
         escolher_url = urljoin(sei_base, incluir_href)
 
@@ -3375,10 +3463,11 @@ class SEIWebClient:
                 body3,
             )
         if not m_editor:
-            raise SEINotFoundError(
+            msg = (
                 f"Link editor_montar para id_serie={id_serie} não encontrado. "
                 "Use id_serie='' para listar os tipos disponíveis."
             )
+            raise SEINotFoundError(msg)
 
         editor_url = urljoin(sei_base, m_editor.group(1).replace("&amp;", "&"))
 
@@ -3394,7 +3483,8 @@ class SEIWebClient:
         soup4 = BeautifulSoup(body4, "html.parser")
         form4 = soup4.find("form")
         if form4 is None:
-            raise SEINotFoundError("Form editor_montar não encontrado.")
+            msg = "Form editor_montar não encontrado."
+            raise SEINotFoundError(msg)
 
         action4 = _tag_str(form4, "action").replace("&amp;", "&")
         post_url4 = urljoin(sei_base, action4) if action4 else editor_url
@@ -3423,7 +3513,8 @@ class SEIWebClient:
             headers={"Referer": editor_url, "Content-Type": "application/x-www-form-urlencoded"},
         )
         if r5.status_code not in (200, 302):
-            raise SEIConnectionError(f"POST documento_gerar falhou com status={r5.status_code}")
+            msg = f"POST documento_gerar falhou com status={r5.status_code}"
+            raise SEIConnectionError(msg)
         body5 = _decode_response(r5.content, r5.headers.get("content-type", ""))
         erro5 = _extrair_erro_sei(body5)
         if erro5:
@@ -3440,9 +3531,10 @@ class SEIWebClient:
                 id_doc = m_doc2.group(1)
 
         if not id_doc:
-            raise SEIParseError(
+            msg = (
                 "Documento aparentemente criado mas idDocumento não pôde ser extraído da resposta."
             )
+            raise SEIParseError(msg)
 
         return {
             "ok": True,
@@ -3482,7 +3574,6 @@ class SEIWebClient:
             ou {"tipos_disponiveis": [{id, nome}, ...]} se id_serie=None
         """
         import mimetypes
-        import os as _os
         from datetime import date as _date
 
         await self.ensure_authenticated()
@@ -3520,7 +3611,8 @@ class SEIWebClient:
         soup_fs = BeautifulSoup(r1.text, "html.parser")
         ifr = soup_fs.find("iframe", id="ifrArvore")
         if not ifr:
-            raise SEIParseError("ifrArvore não encontrado no frameset")
+            msg = "ifrArvore não encontrado no frameset"
+            raise SEIParseError(msg)
         arvore_url = urljoin(str(r1.url), _tag_str(ifr, "src").replace("&amp;", "&"))
 
         # --- Step 2: arvore_montar → Nos[0].acoes ---
@@ -3540,10 +3632,11 @@ class SEIWebClient:
                 break
 
         if not acoes_html:
-            raise SEIParseError(
+            msg = (
                 "Nos[0].acoes não encontrado — o processo pode estar concluído "
                 "ou você não tem permissão para incluir documentos nele."
             )
+            raise SEIParseError(msg)
 
         sei_base = f"{self.sei_root}/sei/"
         soup_acoes = BeautifulSoup(acoes_html, "html.parser")
@@ -3562,11 +3655,12 @@ class SEIWebClient:
                         break
 
         if not incluir_href:
-            raise SEIParseError(
+            msg = (
                 "Link 'Incluir Documento' não encontrado nas ações do processo. "
                 "O processo pode estar concluído, sem tramitação para esta unidade, "
                 "ou você não tem permissão. Tente reabrir o processo primeiro."
             )
+            raise SEIParseError(msg)
 
         # --- Step 3: GET documento_escolher_tipo ---
         escolher_url = urljoin(sei_base, incluir_href)
@@ -3577,7 +3671,8 @@ class SEIWebClient:
         soup3 = BeautifulSoup(body3, "html.parser")
         form3 = soup3.find("form", id="frmDocumentoEscolherTipo")
         if not form3:
-            raise SEIParseError("frmDocumentoEscolherTipo não encontrado")
+            msg = "frmDocumentoEscolherTipo não encontrado"
+            raise SEIParseError(msg)
         form3_action = _tag_str(form3, "action").replace("&amp;", "&")
         post3_url = urljoin(str(r3.url), form3_action)
 
@@ -3597,15 +3692,15 @@ class SEIWebClient:
         # --- Step 5: Parse documento_receber ---
         # Validação de página: infraUpload deve estar presente no JS
         if "infraUpload" not in body4 and "frmDocumentoCadastro" not in body4:
-            raise SEIParseError(
-                "documento_receber não encontrado — verifique o processo e as permissões"
-            )
+            msg = "documento_receber não encontrado — verifique o processo e as permissões"
+            raise SEIParseError(msg)
 
         # parse frmDocumentoCadastro
         soup4 = BeautifulSoup(body4, "html.parser")
         form4 = soup4.find("form", id="frmDocumentoCadastro")
         if not form4:
-            raise SEIParseError("frmDocumentoCadastro não encontrado em documento_receber")
+            msg = "frmDocumentoCadastro não encontrado em documento_receber"
+            raise SEIParseError(msg)
         form4_action = _tag_str(form4, "action").replace("&amp;", "&")
         post4_url = urljoin(str(r4.url), form4_action)
 
@@ -3632,31 +3727,32 @@ class SEIWebClient:
         # --- Step 6: Upload do arquivo ---
         if conteudo is not None:
             if not nome_arquivo:
-                raise ValueError("nome_arquivo é obrigatório quando conteudo é passado")
+                msg = "nome_arquivo é obrigatório quando conteudo é passado"
+                raise ValueError(msg)
             nome = nome_arquivo
             file_bytes = conteudo
         else:
             if not arquivo_path:
-                raise ValueError("Informe arquivo_path ou conteudo")
-            if not _os.path.isfile(arquivo_path):
-                raise ValueError(f"Arquivo não encontrado ou não é regular: {arquivo_path}")
-            if _os.path.getsize(arquivo_path) > self.MAX_UPLOAD_BYTES:
-                raise ValueError(
-                    f"Arquivo excede o limite de {self.MAX_UPLOAD_BYTES // 1024 // 1024} MB"
-                )
-            nome = nome_arquivo or _os.path.basename(arquivo_path)
-            with open(arquivo_path, "rb") as f:
+                msg = "Informe arquivo_path ou conteudo"
+                raise ValueError(msg)
+            if not Path(arquivo_path).is_file():
+                msg = f"Arquivo não encontrado ou não é regular: {arquivo_path}"
+                raise ValueError(msg)
+            if Path(arquivo_path).stat().st_size > self.MAX_UPLOAD_BYTES:
+                msg = f"Arquivo excede o limite de {self.MAX_UPLOAD_BYTES // 1024 // 1024} MB"
+                raise ValueError(msg)
+            nome = nome_arquivo or Path(arquivo_path).name
+            with Path(arquivo_path).open("rb") as f:
                 file_bytes = f.read(self.MAX_UPLOAD_BYTES + 1)
         if len(file_bytes) > self.MAX_UPLOAD_BYTES:
-            raise ValueError(
-                f"Conteúdo excede o limite de {self.MAX_UPLOAD_BYTES // 1024 // 1024} MB"
-            )
+            msg = f"Conteúdo excede o limite de {self.MAX_UPLOAD_BYTES // 1024 // 1024} MB"
+            raise ValueError(msg)
         mime = mimetypes.guess_type(nome)[0] or "application/octet-stream"
 
         tam_int = len(file_bytes)
-        if tam_int < 1024:
+        if tam_int < _ONE_KB:
             tamanho_fmt = f"{tam_int} B"
-        elif tam_int < 1024 * 1024:
+        elif tam_int < _ONE_KB * _ONE_KB:
             tamanho_fmt = f"{tam_int / 1024:.1f} KB"
         else:
             tamanho_fmt = f"{tam_int / 1024 / 1024:.1f} MB"
@@ -3667,7 +3763,8 @@ class SEIWebClient:
             body4,
         )
         if not m_up:
-            raise SEIParseError("URL de upload (infraUpload) não encontrada em documento_receber")
+            msg = "URL de upload (infraUpload) não encontrada em documento_receber"
+            raise SEIParseError(msg)
         upload_url = urljoin(str(r4.url), m_up.group(1).replace("&amp;", "&"))
 
         r5 = await self._http.post(
@@ -3679,11 +3776,14 @@ class SEIWebClient:
 
         # Upload response: pipe-separated fields — nome_upload, nome, mime, tamanho, data_hora
         up_parts = r5.text.strip().rstrip("#").split("#")
-        if len(up_parts) < 2:
-            raise SEIParseError(f"Resposta de upload inesperada: {r5.text!r}")
+        if len(up_parts) < _UPLOAD_RESP_MIN_PARTS:
+            msg = f"Resposta de upload inesperada: {r5.text!r}"
+            raise SEIParseError(msg)
         nome_upload = up_parts[0]
-        upload_dh = up_parts[4] if len(up_parts) > 4 else ""
-        upload_tam = up_parts[3] if len(up_parts) > 3 else str(tam_int)
+        upload_dh = up_parts[_UPLOAD_RESP_IDX_DH] if len(up_parts) > _UPLOAD_RESP_IDX_DH else ""
+        upload_tam = (
+            up_parts[_UPLOAD_RESP_IDX_TAM] if len(up_parts) > _UPLOAD_RESP_IDX_TAM else str(tam_int)
+        )
 
         # Extrai usuario e unidade da linha JS objTabelaAnexos.adicionar([..., 'CPF', 'SIGLA'])
         m_add = re.search(
@@ -3765,7 +3865,8 @@ class SEIWebClient:
                     if m_alert:
                         erros.append(m_alert.group(1))
             msg = "; ".join(erros) if erros else f"URL final inesperada: {final_url}"
-            raise SEIParseError(f"Falha ao incluir documento: {msg}")
+            msg = f"Falha ao incluir documento: {msg}"
+            raise SEIParseError(msg)
 
         m_id = re.search(r"id_documento=(\d+)", final_url)
         id_doc = m_id.group(1) if m_id else ""
@@ -3849,7 +3950,7 @@ class SEIWebClient:
             "pagina_atual": pagina,
             # hdnDetalhadoNroItens/hdnRecebidosNroItens refletem o cap da página (500),
             # não o total real. Página cheia = provavelmente tem mais.
-            "tem_proxima": len(rows) >= 500,
+            "tem_proxima": len(rows) >= _INBOX_PAGE_CAP,
             "layout": layout,
         }
 
@@ -3924,9 +4025,9 @@ class SEIWebClient:
                 txt = tds[0].get_text(" ", strip=True)
                 if txt:
                     entrada["protocoloFormatado"] = txt
-            if len(tds) >= 2:
+            if len(tds) >= _ENTRY_TABLE_MIN_COLS:
                 entrada["tipo"] = tds[1].get_text(" ", strip=True)
-            if len(tds) >= 3:
+            if len(tds) >= _ENTRY_TABLE_OBS_COL:
                 entrada["observacao"] = tds[2].get_text(" ", strip=True)
             if entrada:
                 processos.append(entrada)
@@ -4012,7 +4113,8 @@ class SEIWebClient:
                 html_arvore,
             )
             if not m:
-                raise SEINotFoundError("Ação de acompanhamento não disponível para este processo.")
+                msg = "Ação de acompanhamento não disponível para este processo."
+                raise SEINotFoundError(msg)
             r = await self._http.get(
                 urljoin(sei_base, m.group(1).replace("&amp;", "&")), headers={"Referer": url_arvore}
             )
@@ -4028,7 +4130,8 @@ class SEIWebClient:
                 body,
             )
             if form is None or m_url is None:
-                raise SEIParseError("Mecanismo de remoção de acompanhamento não encontrado.")
+                msg = "Mecanismo de remoção de acompanhamento não encontrado."
+                raise SEIParseError(msg)
             post_url = urljoin(sei_base, m_url.group(0).replace("&amp;", "&"))
             dados = _coletar_estado_form(form)
             dados["hdnInfraItemId"] = ids[0]
@@ -4049,12 +4152,14 @@ class SEIWebClient:
             removidos += 1
             self._invalidar_arvore(protocolo)
         else:
-            raise SEIConnectionError(
+            msg = (
                 f"Remoção de acompanhamento interrompida após {max_iter_acompanhamento} iterações "
                 f"para {protocolo}. {removidos} removido(s); verifique se há mais."
             )
+            raise SEIConnectionError(msg)
         if removidos == 0:
-            raise SEINotFoundError(f"Nenhum acompanhamento especial aplicado em {protocolo}.")
+            msg = f"Nenhum acompanhamento especial aplicado em {protocolo}."
+            raise SEINotFoundError(msg)
         return {"ok": True, "removidos": removidos, "protocolo": protocolo}
 
     async def listar_grupos_modelos_web(self, filtro: str = "") -> dict:
@@ -4165,13 +4270,13 @@ class SEIWebClient:
         )
         m = pat.search(body)
         if not m:
-            raise SEIParseError(
-                f"Link retirar documento {id_documento} não encontrado no bloco {id_bloco}."
-            )
+            msg = f"Link retirar documento {id_documento} não encontrado no bloco {id_bloco}."
+            raise SEIParseError(msg)
         retirar_url = urljoin(sei_base, m.group().replace("&amp;", "&"))
         r2 = await self._http.get(retirar_url, headers={"Referer": acao_url})
         if r2.status_code not in (200, 302):
-            raise SEIConnectionError(f"bloco_assinatura_retirar_documento status={r2.status_code}")
+            msg = f"bloco_assinatura_retirar_documento status={r2.status_code}"
+            raise SEIConnectionError(msg)
         body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body2)
         if erro:
@@ -4199,9 +4304,8 @@ class SEIWebClient:
         )
         m = pat.search(body)
         if not m:
-            raise SEIParseError(
-                f"Link anotação documento {id_documento} não encontrado no bloco {id_bloco}."
-            )
+            msg = f"Link anotação documento {id_documento} não encontrado no bloco {id_bloco}."
+            raise SEIParseError(msg)
         anotar_url = urljoin(sei_base, m.group().replace("&amp;", "&"))
         r2 = await self._http.get(anotar_url, headers={"Referer": acao_url})
         _check(r2)
@@ -4209,7 +4313,8 @@ class SEIWebClient:
         soup = BeautifulSoup(body2, "html.parser")
         form = soup.find("form")
         if form is None:
-            raise SEIParseError("Form de anotação não encontrado.")
+            msg = "Form de anotação não encontrado."
+            raise SEIParseError(msg)
         action = _tag_str(form, "action").replace("&amp;", "&")
         post_url = urljoin(sei_base, action) if action else anotar_url
         post_data: list[tuple[str, str]] = []
@@ -4227,7 +4332,8 @@ class SEIWebClient:
             headers={"Referer": anotar_url, "Content-Type": "application/x-www-form-urlencoded"},
         )
         if r3.status_code not in (200, 302):
-            raise SEIConnectionError(f"POST anotação bloco status={r3.status_code}")
+            msg = f"POST anotação bloco status={r3.status_code}"
+            raise SEIConnectionError(msg)
         body3 = _decode_response(r3.content, r3.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body3)
         if erro:
@@ -4289,7 +4395,7 @@ def parse_arvore_nos(html: str) -> list[dict]:
                 return s[1:-1]
             return s
 
-        if len(args) >= 7:
+        if len(args) >= _DOC_LINK_ARGS_MIN:
             out.append(
                 {
                     "tipo_no": unquote(args[0]),
@@ -4299,7 +4405,9 @@ def parse_arvore_nos(html: str) -> list[dict]:
                     "target": unquote(args[4]),
                     "label": unquote(args[5]),
                     "tooltip": unquote(args[6]),
-                    "icone": unquote(args[7]) if len(args) > 7 else "",
+                    "icone": unquote(args[_DOC_LINK_ARGS_MIN])
+                    if len(args) > _DOC_LINK_ARGS_MIN
+                    else "",
                 }
             )
     return out
@@ -4435,7 +4543,7 @@ def parse_inbox(html: str) -> tuple[str, list[dict]]:
                 # Tooltip do link: onmouseover com infraTooltipMostrar(Especificação, Tipo).
                 # Disponível INDEPENDENTE de a coluna estar habilitada no painel.
                 _extract_tooltip(link, row)
-            if len(tds) >= 2:
+            if len(tds) >= _INBOX_TABLE_MIN_COLS:
                 icones = []
                 for img in tds[1].find_all("img"):
                     title = _tag_str(img, "title") or _tag_str(img, "alt")
@@ -4475,7 +4583,7 @@ def parse_inbox(html: str) -> tuple[str, list[dict]]:
             if link is not None:
                 row["protocolo"] = link.get_text(" ", strip=True)
                 _extract_tooltip(link, row)
-            if len(tds) >= 2:
+            if len(tds) >= _INBOX_TABLE_MIN_COLS:
                 icones = []
                 for img in tds[1].find_all("img"):
                     title = _tag_str(img, "title") or _tag_str(img, "alt")
@@ -4483,7 +4591,7 @@ def parse_inbox(html: str) -> tuple[str, list[dict]]:
                         icones.append(title.strip())
                 if icones:
                     row["icones"] = icones
-            if len(tds) >= 4:
+            if len(tds) >= _INBOX_ATRIB_COL:
                 atrib_text = _RE_PARENS.sub("", tds[-1].get_text(" ", strip=True)).strip()
                 if atrib_text:
                     row["atribuicao"] = atrib_text
@@ -4524,13 +4632,13 @@ def _extrair_metadados_tabelas(soup: BeautifulSoup, result: dict[str, object]) -
             continue
         for tr in tbl.find_all("tr"):
             cels = tr.find_all(["th", "td"])
-            if len(cels) != 2:
+            if len(cels) != _META_TABLE_PAIR:
                 continue
             if cels[0].name == "th" and cels[1].name == "th":
                 continue  # linha de cabeçalho, não par label/valor
             k = cels[0].get_text(" ", strip=True).rstrip(":").lower()
             v = cels[1].get_text(" ", strip=True)
-            if k and v and len(k) < 60:
+            if k and v and len(k) < _META_KEY_MAX_LEN:
                 result[k.replace(" ", "_").replace("/", "_")] = v
 
 
@@ -4547,7 +4655,7 @@ def _parse_documento_consultar(html: str, id_documento: str) -> dict:
     if tbl_ass is not None:
         for tr in tbl_ass.find_all("tr")[1:]:
             tds = tr.find_all("td")
-            if len(tds) >= 3:
+            if len(tds) >= _SIG_TABLE_COLS:
                 assinaturas.append(
                     {
                         "assinante": tds[0].get_text(" ", strip=True),
@@ -4563,7 +4671,7 @@ def _parse_documento_consultar(html: str, id_documento: str) -> dict:
     if tbl_cien is not None:
         for tr in tbl_cien.find_all("tr")[1:]:
             tds = tr.find_all("td")
-            if len(tds) >= 3:
+            if len(tds) >= _SIG_TABLE_COLS:
                 ciencias.append(
                     {
                         "usuario": tds[0].get_text(" ", strip=True),
@@ -4593,7 +4701,7 @@ def _parse_procedimento_consultar(html: str, protocolo: str) -> dict:
             tds = tr.find_all("td")
             if tds:
                 entry: dict[str, str] = {"unidade": tds[0].get_text(" ", strip=True)}
-                if len(tds) >= 2:
+                if len(tds) >= _STATUS_TABLE_MIN_COLS:
                     entry["situacao"] = tds[1].get_text(" ", strip=True)
                 unidades.append(entry)
     # Fallback: procura qualquer link de unidade
@@ -4624,7 +4732,7 @@ def _parse_procedimento_consultar(html: str, protocolo: str) -> dict:
     if tbl_sob is not None:
         for tr in tbl_sob.find_all("tr")[1:]:
             tds = tr.find_all("td")
-            if len(tds) >= 2:
+            if len(tds) >= _STATUS_TABLE_MIN_COLS:
                 sobrestamentos.append(
                     {
                         "motivo": tds[0].get_text(" ", strip=True),

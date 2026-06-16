@@ -22,8 +22,6 @@ Convenções de assinatura:
 
 from __future__ import annotations
 
-from typing import overload
-
 from todos.backends.models import (
     EnvioProcesso,
     FiltrosPesquisaProcessos,
@@ -129,12 +127,6 @@ class SEIBackend:
         """Retorna a árvore de documentos de um processo."""
         raise NotImplementedError
 
-    @overload
-    async def listar_documentos(self, processo: str) -> list[dict]: ...
-
-    @overload
-    async def listar_documentos(self, processo: str) -> dict: ...
-
     async def listar_documentos(self, processo: str) -> dict | list[dict]:
         """Lista os documentos de um processo.
 
@@ -181,12 +173,6 @@ class SEIBackend:
     async def verificar_acesso(self, processo: str) -> dict:
         """Verifica se o usuário tem acesso a um processo."""
         raise NotImplementedError
-
-    @overload
-    async def listar_relacionamentos(self, processo: str) -> list[dict]: ...
-
-    @overload
-    async def listar_relacionamentos(self, processo: str) -> dict: ...
 
     async def listar_relacionamentos(self, processo: str) -> dict | list[dict]:
         """Lista os processos relacionados a um processo.
@@ -495,12 +481,6 @@ class SEIBackend:
     async def pesquisar_marcadores(self, filtro: str = "", limit: int = 50) -> dict:
         """Lista marcadores disponíveis na unidade."""
         raise NotImplementedError
-
-    @overload
-    async def consultar_marcador_processo(self, processo: str) -> list[dict]: ...
-
-    @overload
-    async def consultar_marcador_processo(self, processo: str) -> dict: ...
 
     async def consultar_marcador_processo(self, processo: str) -> dict | list[dict]:
         """Consulta os marcadores ativos de um processo.

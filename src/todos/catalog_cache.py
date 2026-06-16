@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import os
-import random
+import secrets
 import sqlite3
 import time
 from functools import lru_cache
@@ -35,8 +35,9 @@ except ValueError as exc:
     raise RuntimeError(_ttl_err) from exc
 if CATALOG_CACHE_TTL <= 0:
     _ttl_zero_err = f"SEI_CACHE_TTL_SECONDS / CATALOG_CACHE_TTL deve ser positivo; recebido: {CATALOG_CACHE_TTL}"
-    raise ValueError(_ttl_zero_err)
+    raise RuntimeError(_ttl_zero_err)
 _SWEEP_PROBABILITY = 0.05  # probabilistic expired-row sweep: run on ~5% of writes
+_rng = secrets.SystemRandom()  # non-crypto RNG for probabilistic sweep
 
 
 class CatalogCache:
@@ -120,7 +121,7 @@ class CatalogCache:
                 (db_key, val_str, expires_at),
             )
             # Probabilistic sweep (5%) — full cleanup available via cleanup()
-            if random.random() < _SWEEP_PROBABILITY:
+            if _rng.random() < _SWEEP_PROBABILITY:
                 conn.execute("DELETE FROM catalogs WHERE expires_at < ?", (now,))
 
     async def delete(self, namespace: dict[str, str], key: str) -> None:

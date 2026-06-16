@@ -86,7 +86,8 @@ def run_remote(mcp: FastMCP, *, port: int) -> None:
     app = build_remote_app(mcp, base_url=base_url)
     # §34.1 — Default to 127.0.0.1 (loopback only). Cloud/Railway deployments that
     # need to bind to all interfaces should set SEI_HOST=0.0.0.0 explicitly.
-    host = os.environ.get("SEI_HOST", "127.0.0.1")
+    # MCP_HOST is accepted as a backwards-compatible alias (deprecated; use SEI_HOST).
+    host = os.environ.get("SEI_HOST") or os.environ.get("MCP_HOST", "127.0.0.1")
     if host == "0.0.0.0":
         logger.warning(
             "Servidor MCP vinculado a 0.0.0.0 (todas as interfaces). "

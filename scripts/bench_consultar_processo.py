@@ -40,10 +40,11 @@ from bs4 import BeautifulSoup
 if TYPE_CHECKING:
     from bs4.element import Tag
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from todos.sei_client import SEIClient  # noqa: E402
+from todos.sei_client import SEIClient
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -162,7 +163,8 @@ async def _consultar_completo(client: SEIClient, protocolo: str) -> tuple[dict, 
     bytes_1 = len(resp1.content)
     j1 = resp1.json()
     if not j1.get("sucesso"):
-        raise RuntimeError(f"call 1: {j1.get('mensagem')}")
+        msg = f"call 1: {j1.get('mensagem')}"
+        raise RuntimeError(msg)
     d1 = j1["data"]
     id_proc = d1.get("IdProcedimento")
 
@@ -284,17 +286,21 @@ class WebSEIScraper:
         resp = await self._http.get(self.login_url)
         self.login_get_ms = (time.perf_counter() - t0) * 1000
         if resp.status_code != HTTP_OK:
-            raise RuntimeError(f"GET login retornou {resp.status_code}")
+            msg = f"GET login retornou {resp.status_code}"
+            raise RuntimeError(msg)
         html = resp.text
         if "g-recaptcha" in html or "h-captcha" in html:
-            raise RuntimeError("CAPTCHA presente -- abortando.")
+            msg = "CAPTCHA presente -- abortando."
+            raise RuntimeError(msg)
         if 'name="txtCodigo2FA"' in html:
-            raise RuntimeError("2FA solicitado -- fora de escopo.")
+            msg = "2FA solicitado -- fora de escopo."
+            raise RuntimeError(msg)
 
         soup = BeautifulSoup(html, "html.parser")
         usuario_input = soup.find("input", attrs={"name": "txtUsuario"})
         if usuario_input is None:
-            raise RuntimeError("txtUsuario nao encontrado")
+            msg = "txtUsuario nao encontrado"
+            raise RuntimeError(msg)
         login_form = usuario_input.find_parent("form")
 
         sel_orgao = self._find_sel_orgao(
@@ -316,7 +322,8 @@ class WebSEIScraper:
         self.login_post_ms = (time.perf_counter() - t0) * 1000
 
         if post_resp.status_code != HTTP_OK:
-            raise RuntimeError(f"POST login status={post_resp.status_code}")
+            msg = f"POST login status={post_resp.status_code}"
+            raise RuntimeError(msg)
         final_url = post_resp.url
         qs = dict(
             parse_qsl(
@@ -326,8 +333,10 @@ class WebSEIScraper:
         if qs.get("acao") != "procedimento_controlar" or "infra_hash" not in qs:
             body = post_resp.text
             if 'name="txtUsuario"' in body:
-                raise RuntimeError("Login falhou -- credenciais invalidas?")
-            raise RuntimeError(f"URL inesperada apos login: {final_url}")
+                msg = "Login falhou -- credenciais invalidas?"
+                raise RuntimeError(msg)
+            msg = f"URL inesperada apos login: {final_url}"
+            raise RuntimeError(msg)
         self._inbox_url = final_url
         # popula cache de links de processo a partir da propria inbox
         self._populate_trabalhar_links(post_resp.text)
@@ -386,12 +395,14 @@ class WebSEIScraper:
         Retorna dict com timing por fase + dados extraidos.
         """
         if self._inbox_url is None:
-            raise RuntimeError("login() nao foi chamado")
+            msg = "login() nao foi chamado"
+            raise RuntimeError(msg)
         if protocolo not in self.trabalhar_links:
-            raise RuntimeError(
+            msg = (
                 f"Protocolo {protocolo!r} nao encontrado nos links da inbox. "
                 f"Disponiveis: {list(self.trabalhar_links.keys())[:5]}..."
             )
+            raise RuntimeError(msg)
 
         timings: dict[str, float] = {}
         sizes: dict[str, int] = {}
@@ -403,7 +414,8 @@ class WebSEIScraper:
         timings["trabalhar"] = (time.perf_counter() - t0) * 1000
         sizes["trabalhar"] = len(r1.content)
         if r1.status_code != HTTP_OK:
-            raise RuntimeError(f"trabalhar status={r1.status_code}")
+            msg = f"trabalhar status={r1.status_code}"
+            raise RuntimeError(msg)
         result_data, arvore_url = self._parse_frameset(r1, protocolo)
 
         # Step 2 — procedimento_visualizar (arvore_montar)
@@ -412,7 +424,8 @@ class WebSEIScraper:
         timings["arvore"] = (time.perf_counter() - t0) * 1000
         sizes["arvore"] = len(r2.content)
         if r2.status_code != HTTP_OK:
-            raise RuntimeError(f"arvore status={r2.status_code}")
+            msg = f"arvore status={r2.status_code}"
+            raise RuntimeError(msg)
         hist_link = self._parse_arvore_html(r2.text, result_data)
 
         # Step 3 (opcional) — procedimento_consultar_historico
@@ -440,7 +453,8 @@ class WebSEIScraper:
             result_data["id_procedimento"] = m_id.group(1)
         ifr_arvore = soup.find("iframe", id="ifrArvore")
         if not ifr_arvore:
-            raise RuntimeError("ifrArvore nao encontrado no frameset")
+            msg = "ifrArvore nao encontrado no frameset"
+            raise RuntimeError(msg)
         arvore_src = ifr_arvore.get("src", "").replace("&amp;", "&")
         return result_data, urljoin(str(r1.url), arvore_src)
 

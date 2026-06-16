@@ -101,23 +101,25 @@ class BlocosRest(_RestMixin):
     async def retirar_documentos_bloco_assinatura(
         self, id_bloco: str, documentos: str
     ) -> list[dict]:
-        """Retira documentos de um bloco de assinatura."""
-        result = await self._rest.retirar_documento_bloco_assinatura(id_bloco, documentos)
-        return [result]
+        """Retira documentos de um bloco de assinatura, um por chamada REST."""
+        ids = [d.strip() for d in documentos.split(",") if d.strip()]
+        return [
+            await self._rest.retirar_documento_bloco_assinatura(id_bloco, id_doc) for id_doc in ids
+        ]
 
     async def alterar_bloco_assinatura(self, id_bloco: str, descricao: str) -> dict:
         """Altera a descrição de um bloco de assinatura."""
         return await self._rest.alterar_bloco_assinatura(id_bloco, descricao)
 
     async def excluir_blocos_assinatura(self, ids_blocos: str) -> list[dict]:
-        """Exclui blocos de assinatura."""
-        result = await self._rest.excluir_blocos_assinatura(ids_blocos)
-        return [result]
+        """Exclui blocos de assinatura, um por chamada REST."""
+        ids = [b.strip() for b in ids_blocos.split(",") if b.strip()]
+        return [await self._rest.excluir_blocos_assinatura(b) for b in ids]
 
     async def concluir_blocos_assinatura(self, ids_blocos: str) -> list[dict]:
-        """Conclui blocos de assinatura."""
-        result = await self._rest.concluir_blocos_assinatura(ids_blocos)
-        return [result]
+        """Conclui blocos de assinatura, um por chamada REST."""
+        ids = [b.strip() for b in ids_blocos.split(",") if b.strip()]
+        return [await self._rest.concluir_blocos_assinatura(b) for b in ids]
 
     async def reabrir_bloco_assinatura(self, id_bloco: str) -> dict:
         """Reabre um bloco de assinatura concluído."""

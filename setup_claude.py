@@ -263,11 +263,15 @@ def create_venv(uv_path: str | None) -> None:
     VENV_HOME.mkdir(parents=True, exist_ok=True)
 
     if uv_path:
+        # S603: uv_path comes from shutil.which("uv") — an absolute path resolved by the OS,
+        # not user input. Remaining args are string literals and a Path constant (VENV_DIR).
         subprocess.run(
             [uv_path, "venv", str(VENV_DIR), "--python", f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}"],
             check=True,
         )
     else:
+        # S603: sys.executable is the absolute path of the running interpreter — not user input.
+        # VENV_DIR is a Path constant derived from Path.home() — no external influence.
         subprocess.run(
             [sys.executable, "-m", "venv", str(VENV_DIR)],
             check=True,
@@ -302,12 +306,16 @@ def install_package(repo_root: Path | None, uv_path: str | None) -> None:
 
     if repo_root:
         info(f"Instalando todos do repositorio local ({repo_root}) ...")
+        # S603: pip_cmd uses shutil.which("uv") or str(venv_python()) — both are absolute paths.
+        # repo_root is a Path resolved from __file__, not from user-supplied input.
         subprocess.run(
             [*pip_cmd, "-e", str(repo_root)],
             check=True,
         )
     else:
         info("Instalando todos do GitHub ...")
+        # S603: pip_cmd uses shutil.which("uv") or str(venv_python()) — both are absolute paths.
+        # The git URL is a hard-coded string literal, not user input.
         subprocess.run(
             [*pip_cmd, "git+https://github.com/franklinbaldo/todos.git"],
             check=True,
@@ -504,8 +512,11 @@ def _save_keyring_password(
         )
         keyring_user = f"{sei_usuario}@{instance_url}" if instance_url else sei_usuario
 
-        # Chama o python do venv para registrar a senha no keyring do sistema
-        # Passa a senha via stdin para evitar expor a credencial em processos/logs
+        # Chama o python do venv para registrar a senha no keyring do sistema.
+        # Passa a senha via stdin para evitar expor a credencial em processos/logs.
+        # S603: executable is str(venv_python()) — an absolute Path constant derived from VENV_DIR,
+        # not user input. The -c snippet and keyring_user args are controlled by this script;
+        # the password is passed through stdin (not argv) to avoid shell/log exposure.
         subprocess.run(
             [
                 str(venv_python()),
