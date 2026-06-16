@@ -730,18 +730,19 @@ class SEIWebClient:
         response = await self._http.post(post_url, data=data, headers={"Referer": form_url})
         _check(response)
 
-        self._inbox_url = response.url
-        self._form_action = None
-        self._form_hidden = {}
-        self._trabalhar_links.clear()
-        self._pesquisa_rapida_action = None
-        self._arvore_cache.clear()
-        self._unidade_atual = None
         _soup = BeautifulSoup(response.text, "html.parser")
-        self._extract_main_form(response.text, _soup)
-        self._extract_pesquisa_rapida(response.text, _soup)
-        self._populate_trabalhar_links(response.text, _soup)
-        self._extract_unidade_atual(response.text, _soup)
+        async with self._cache_lock:
+            self._inbox_url = response.url
+            self._form_action = None
+            self._form_hidden = {}
+            self._trabalhar_links.clear()
+            self._pesquisa_rapida_action = None
+            self._arvore_cache.clear()
+            self._unidade_atual = None
+            self._extract_main_form(response.text, _soup)
+            self._extract_pesquisa_rapida(response.text, _soup)
+            self._populate_trabalhar_links(response.text, _soup)
+            self._extract_unidade_atual(response.text, _soup)
 
         current = await self.unidade_atual()
         self._verificar_troca(current, target)

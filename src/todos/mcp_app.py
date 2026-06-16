@@ -77,18 +77,14 @@ async def lifespan(_server: FastMCP):
         await get_catalog_cache().close()
 
 
-async def _store_session_client(clients: dict, session_id: str, client: object) -> None:
-    """Store a session-scoped client, evicting the oldest entry if the pool is full."""
-    if session_id in clients:
-        return
-    max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
-    if len(clients) >= max_sessions:
-        oldest_id = next(iter(clients))
-        oldest_client = clients.pop(oldest_id)
-        logger.warning("session pool at limit (%d); evicted oldest session", max_sessions)
-        with suppress(Exception):
-            await oldest_client.close()
-    clients[session_id] = client
+def _evict_oldest(clients: dict, max_sessions: int) -> object | None:
+    """Pop the oldest client from the pool if at capacity; return it for the caller to close."""
+    if len(clients) < max_sessions:
+        return None
+    oldest_id = next(iter(clients))
+    evicted = clients.pop(oldest_id)
+    logger.warning("session pool at limit (%d); evicted oldest session", max_sessions)
+    return evicted
 
 
 async def _get_client(ctx: Context | None) -> SEIClient:
@@ -108,15 +104,21 @@ async def _get_client(ctx: Context | None) -> SEIClient:
         if not creds:
             raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
 
+        max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
         lock: asyncio.Lock = ctx.lifespan_context["sei_lock"]
         async with lock:
             clients = ctx.lifespan_context["sei_by_session"]
             client = clients.get(ctx.session_id)
             if client is not None:
                 return client
+            evicted = _evict_oldest(clients, max_sessions)
             client = SEIClient(**creds)
-            await _store_session_client(clients, ctx.session_id, client)
-            return client
+            clients[ctx.session_id] = client
+
+        if evicted is not None:
+            with suppress(OSError, httpx.HTTPError):
+                await evicted.close()
+        return client
 
     client = ctx.lifespan_context.get("sei")
     if client is not None:
@@ -145,15 +147,21 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
         if not creds:
             raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
 
+        max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
         lock: asyncio.Lock = ctx.lifespan_context["sei_lock"]
         async with lock:
             clients = ctx.lifespan_context["sei_web_by_session"]
             client = clients.get(ctx.session_id)
             if client is not None:
                 return client
+            evicted = _evict_oldest(clients, max_sessions)
             client = SEIWebClient(**creds)
-            await _store_session_client(clients, ctx.session_id, client)
-            return client
+            clients[ctx.session_id] = client
+
+        if evicted is not None:
+            with suppress(OSError, httpx.HTTPError):
+                await evicted.close()
+        return client
 
     client = ctx.lifespan_context.get("sei_web")
     if client is not None:
@@ -178,7 +186,9 @@ async def _backend(ctx: Context | None) -> _SEIBackendV2:
     try:
         web = await _get_web_client(ctx)
     except ValueError:
-        web = SEIWebClient()  # instância vazia; usada só quando não há REST
+        if _http_mode:
+            raise
+        web = SEIWebClient()  # stdio fallback: web client not configured
     return build_backend(rest, web)
 
 
