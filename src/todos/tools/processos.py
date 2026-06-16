@@ -603,8 +603,9 @@ def _salvar_arquivo_temp(
         msg = f"{extensao.upper()} muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI."
         raise SEIValidationError(msg)
 
+    # O regex mantém apenas \w (letras/dígitos/_) e hífens; "." vira "_",
+    # portanto "../" torna-se "___" — path traversal já está prevenido pelo regex.
     protocolo_safe = re.sub(r"[^\w\-]", "_", protocolo)
-    protocolo_safe = protocolo_safe.replace("..", "_")
     caminho = Path(tempfile.gettempdir()) / f"SEI_{protocolo_safe}.{extensao}"
     try:
         caminho.write_bytes(conteudo)
