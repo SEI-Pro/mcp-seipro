@@ -91,6 +91,13 @@ def _detect_organs(
         print_yellow(
             "    Isso ocorre comumente em redes governamentais com proxies ou certificados internos."
         )
+        print_red("AVISO DE SEGURANÇA:")
+        print_red(
+            "  Desativar a verificação SSL remove a proteção contra ataques de"
+            " interceptação (man-in-the-middle). Um atacante na mesma rede poderia"
+            " interceptar suas credenciais do SEI (usuário e senha) sem que você perceba."
+        )
+        print_red("  Utilize esta opção SOMENTE em redes controladas e de confiança.")
         confirm_ssl = (
             input("Deseja tentar a conexão desativando a verificação de certificado SSL? (s/n): ")
             .strip()

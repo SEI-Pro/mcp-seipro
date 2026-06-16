@@ -176,4 +176,3 @@ paths = ["src/"]
 skips = [
     "B101",  # assert ok in non-test code here
     "B104",  # 0.0.0.0 intencional — deploy Railway/container
-]
