@@ -60,7 +60,7 @@ async def _step_consultar(client: SEIWebClient, protocolo: str) -> None:
         dados = await client.consultar_processo(protocolo)
         _out(f"    ✓ Tipo={dados.get('tipo_processo')!r}")
         _out(f"    ✓ Documentos={len(dados.get('documentos', []))}")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _out(f"    ✗ {e}")
 
 
@@ -112,7 +112,7 @@ async def smoke(protocolo: str | None) -> None:
         _out("  Smoke test concluído com sucesso.")
         _out(_SEP)
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _err(f"\n✗ FALHA: {e}")
         sys.exit(1)
     finally:

@@ -74,6 +74,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "bootstrap.py" = ["S603", "S606"]  # subprocess with controlled inputs (sys.executable, Path objects)
 "setup_claude.py" = ["S603"]  # legitimate subprocess calls with trusted input
+"scripts/smoke_web.py" = ["BLE001"]  # smoke test catch-all is intentional — any failure must be logged
 "src/todos/html_utils.py" = [
     # pytesseract/pdf2image/pdfplumber/io must be deferred — heavy optional deps
     "PLC0415",

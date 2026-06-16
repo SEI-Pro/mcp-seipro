@@ -35,7 +35,7 @@ except ValueError as exc:
     raise RuntimeError(_ttl_err) from exc
 if CATALOG_CACHE_TTL <= 0:
     _ttl_zero_err = f"SEI_CACHE_TTL_SECONDS / CATALOG_CACHE_TTL deve ser positivo; recebido: {CATALOG_CACHE_TTL}"
-    raise ValueError(_ttl_zero_err)
+    raise RuntimeError(_ttl_zero_err)
 _SWEEP_PROBABILITY = 0.05  # probabilistic expired-row sweep: run on ~5% of writes
 _rng = secrets.SystemRandom()  # non-crypto RNG for probabilistic sweep
 

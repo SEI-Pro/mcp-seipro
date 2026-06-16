@@ -20,10 +20,9 @@ class AcompanhamentoRest(_RestMixin):
         """Remove o acompanhamento especial de um processo."""
         id_proc = await self._resolver_processo(processo)
         acomp = await self._rest.consultar_acompanhamento(id_proc)
-        # The SEI REST API consistently returns "idAcompanhamento" (camelCase) for
-        # this field — matching the naming convention used throughout the mod-wssei
-        # v2 endpoints.  No fallback to "id" is needed.
-        id_acomp = str(acomp.get("idAcompanhamento", "")) if acomp else ""
+        # mod-wssei 2.0.x returns this field as "idAcompanhamento"; some older builds
+        # used plain "id". Check both for compatibility.
+        id_acomp = str(acomp.get("idAcompanhamento") or acomp.get("id", "")) if acomp else ""
         if not id_acomp:
             msg = f"Nenhum acompanhamento ativo no processo '{processo}'."
             raise SEINotFoundError(msg)
