@@ -21,8 +21,8 @@ Os dispatchers genéricos são gerados a partir do contrato `SEIBackend` em
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import inspect
+import logging
 from typing import TYPE_CHECKING, cast
 
 import httpx
@@ -43,6 +43,9 @@ if TYPE_CHECKING:
 
     from todos.sei_client import SEIClient
     from todos.sei_web_client import SEIWebClient
+
+logger = logging.getLogger(__name__)
+
 
 # Operações onde o scraper web é preferido mesmo quando a REST está disponível
 # (fonte canônica da árvore/andamentos, ou desempenho muito superior ao REST).
@@ -74,8 +77,14 @@ class CompositeBackend(SEIBackend):
             raise SEIConnectionError(msg) from exc
         if self._rest is not None:
             # Sincroniza a REST para que tools REST usem a mesma unidade (best-effort).
-            with contextlib.suppress(SEIError, httpx.HTTPError):
+            try:
                 await self._rest.trocar_unidade(result.get("id_unidade", id_unidade))
+            except (SEIError, httpx.HTTPError) as exc:
+                logger.warning(
+                    "Falha ao sincronizar unidade no backend REST (%s); "
+                    "chamadas REST subsequentes podem operar na unidade errada.",
+                    exc,
+                )
         return result
 
     async def consultar_processo(self, processo: str) -> dict:
@@ -122,6 +131,9 @@ class CompositeBackend(SEIBackend):
         web_first = bool(getattr(dados, "arquivo_base64", ""))
         ordered = (self._web, self._rest) if web_first else (self._rest, self._web)
         result = await _dispatch_in_order("criar_documento_externo", ordered, (processo, dados), {})
+        if not isinstance(result, dict):
+            msg = f"criar_documento_externo: esperado dict, backend retornou {type(result).__name__!r}"
+            raise TypeError(msg)
         return cast("dict", result)
 
 
