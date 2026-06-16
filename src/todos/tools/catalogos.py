@@ -31,7 +31,7 @@ async def sei_pesquisar_hipoteses_legais(
     Exemplos: "pessoal", "controle interno", "sigilo fiscal"
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_hipoteses_legais(
         filtro=filtro,
         limit=limit,
@@ -58,7 +58,7 @@ async def sei_pesquisar_tipos_processo(
     Use o 'id' retornado como tipo_processo em sei_criar_processo.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_tipos_processo(
         filtro=filtro,
         favoritos=favoritos,
@@ -89,7 +89,7 @@ async def sei_pesquisar_tipos_documento(
     Use o 'id' retornado como id_serie em sei_criar_documento.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_tipos_documento(
         filtro=filtro,
         favoritos=favoritos,
@@ -115,7 +115,7 @@ async def sei_pesquisar_tipos_documento_externo(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_tipos_documento_externo(
         filtro=filtro,
         limit=limit,
@@ -139,7 +139,7 @@ async def sei_pesquisar_tipos_conferencia(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_tipos_conferencia(
         filtro=filtro,
         limit=limit,
@@ -162,7 +162,7 @@ async def sei_pesquisar_assuntos(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_assuntos(
         filtro=filtro,
         limit=limit,
@@ -181,7 +181,7 @@ async def sei_pesquisar_contatos(
 
     Em instâncias sem mod-wssei, requer filtro não-vazio (busca via autocomplete AJAX).
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_contatos(filtro=filtro, limit=limit)
     return _json(result)
 
@@ -199,7 +199,7 @@ async def sei_criar_contato(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.criar_contato(nome, tipo=tipo, email=email, telefone=telefone)
     return _json(result)
 
@@ -219,7 +219,7 @@ async def sei_pesquisar_textos_padrao(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_textos_padrao(
         filtro=filtro,
         limit=limit,
@@ -240,7 +240,7 @@ async def sei_listar_grupos_modelos(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_grupos_modelos(limit=limit, pagina=pagina)
     return _json(result)
 
@@ -262,7 +262,7 @@ async def sei_listar_modelos(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_modelos(
         id_grupo=id_grupo,
         filtro=filtro,
@@ -283,6 +283,6 @@ async def sei_sugestao_assuntos_processo(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.sugestao_assuntos_processo(id_tipo_processo)
     return _json(result)

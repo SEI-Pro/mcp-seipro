@@ -85,7 +85,7 @@ async def sei_buscar_documento(
     Retorna o documento com seu id interno (necessário para sei_ler_documento),
     tipo, metadados e o processo onde está.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     # Composite: estratégia Solr (REST) quando há mod-wssei, senão árvore web.
     result = await backend.buscar_documento(numero_sei, processo)
     return _json(result)
@@ -240,7 +240,7 @@ async def sei_resumo_processos(
                 campos = ", ".join(sorted(_CAMPOS_AGRUPAMENTO.keys()))
                 raise SEIValidationError(f"Campo '{agrupar_por_2}' inválido. Disponíveis: {campos}")
 
-        client = _get_client(ctx)
+        client = await _get_client(ctx)
 
         # Busca todos os processos
         todos = []
@@ -345,7 +345,7 @@ async def sei_pesquisar_processos(
     """
     _rest_unavailable = False
     try:
-        client = _get_client(ctx)
+        client = await _get_client(ctx)
         result = await client.pesquisar_processos(
             palavras_chave=palavras_chave,
             descricao=descricao,
@@ -384,7 +384,7 @@ async def sei_pesquisar_processos(
         if v
     ]
     try:
-        web = _get_web_client(ctx)
+        web = await _get_web_client(ctx)
         result_dict = await web.pesquisar_processos_web(
             q=q_web,
             descricao=descricao,
@@ -453,7 +453,7 @@ async def sei_enviar_processo(
     - dias_retorno: prazo em dias para retorno (alternativa à data, só se pedir)
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     # O backend resolve sigla→id da(s) unidade(s) destino (REST via
     # pesquisar_unidades, web via autocomplete) e levanta SEIValidationError
     # com os candidatos quando uma sigla não casa.
@@ -487,7 +487,7 @@ async def sei_atribuir_processo(
     Via web, o usuário é escolhido de um <select> no form — use
     sei_atribuir_processo(usuario="?") para listar os usuários disponíveis.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     if usuario == "?":
         # Descoberta: lista os usuários atribuíveis na unidade atual.
         return _json(await backend.listar_usuarios())
@@ -512,7 +512,7 @@ async def sei_sobrestar_processo(
     - processo_vinculado: protocolo de outro processo para vincular (opcional)
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     # O backend resolve processo/vinculado → id; se o processo estiver aberto em
     # outra unidade, o SEI rejeita e o erro original (com a mensagem do SEI)
     # propaga ao agente.

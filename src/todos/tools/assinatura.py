@@ -64,12 +64,12 @@ async def sei_cancelar_assinatura(
     enviado), o SEI rejeita a edição e o erro original propaga ao agente — é um
     ToolError com a mensagem do próprio SEI.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
 
     # Resolver número SEI → id interno (best-effort, pesquisa Solr REST-only)
     doc_id = id_documento.strip()
     with suppress(SEIError, httpx.HTTPError):
-        doc_id, _ = await _resolver_documento(_get_client(ctx), doc_id)
+        doc_id, _ = await _resolver_documento(await _get_client(ctx), doc_id)
 
     # Verificar se está assinado e capturar a versão atual
     secoes_data = await backend.listar_secoes(doc_id)
@@ -123,7 +123,7 @@ async def sei_assinar_documento(
       OBRIGATÓRIO. Se omitido, retorna a lista de cargos disponíveis.
     - orgao: código do órgão (usa o padrão se omitido)
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     if not cargo:
         try:
             cargos = await backend.listar_assinantes()
@@ -146,7 +146,7 @@ async def sei_listar_assinaturas(
     - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_assinaturas(id_documento, processo=processo)
     return _json(result)
 
@@ -168,7 +168,7 @@ async def sei_assinar_bloco(
     - id_bloco: ID do bloco
     - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     if not cargo:
         try:
             cargos = await backend.listar_assinantes()
@@ -196,7 +196,7 @@ async def sei_assinar_documentos_bloco(
     - documentos: ID(s) de documento(s) separados por vírgula
     - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     if not cargo:
         try:
             cargos = await backend.listar_assinantes()
@@ -225,7 +225,7 @@ async def sei_dar_ciencia(
 
     instâncias sem mod-wssei. Tipo "documento" exige REST.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.dar_ciencia(referencia, tipo=tipo)
     return _json(result)
 
@@ -245,6 +245,6 @@ async def sei_listar_ciencias(
     - processo: protocolo do processo (necessário em instâncias sem mod-wssei quando tipo="documento")
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_ciencias(referencia, tipo=tipo, processo=processo)
     return _json(result)

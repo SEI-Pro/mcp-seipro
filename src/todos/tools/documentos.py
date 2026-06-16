@@ -167,14 +167,14 @@ async def sei_ler_documento(
     PDFs escaneados são processados via OCR automaticamente.
     """
     try:
-        backend = _backend(ctx)
+        backend = await _backend(ctx)
         tipo_doc = tipo_documento
         # Auto-resolução número SEI → id interno + tipo: pesquisa Solr, REST-only.
         # Em modo web-only o id é usado direto e o tipo continua "auto". O erro de
         # resolução já orienta (sei_arvore_processo) e propaga.
-        if _has_rest(ctx) and tipo_documento == "auto":
-            id_documento, tipo_doc = await _resolver_documento(_get_client(ctx), id_documento)
-        if not _has_rest(ctx) and processo is None:
+        if await _has_rest(ctx) and tipo_documento == "auto":
+            id_documento, tipo_doc = await _resolver_documento(await _get_client(ctx), id_documento)
+        if not await _has_rest(ctx) and processo is None:
             msg = (
                 "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
                 "(protocolo do processo, ex: '50300.018905/2018-67') para ler documentos."
@@ -240,11 +240,11 @@ async def sei_baixar_anexo(
     usuário e aguarde decisão explícita — não tente caminhos alternativos.
     """
     try:
-        backend = _backend(ctx)
+        backend = await _backend(ctx)
         # Auto-resolução número SEI → id interno (Solr, REST-only). O erro de
         # resolução já traz orientação (sei_arvore_processo) e propaga.
-        if _has_rest(ctx):
-            id_documento, _ = await _resolver_documento(_get_client(ctx), id_documento)
+        if await _has_rest(ctx):
+            id_documento, _ = await _resolver_documento(await _get_client(ctx), id_documento)
         elif processo is None:
             msg = "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' para baixar anexos."
             raise SEIValidationError(msg)
@@ -287,7 +287,7 @@ async def sei_criar_documento(
     para inserir conteúdo.
     """
     # id_serie é obrigatório no caminho REST; no web vazio retorna os tipos.
-    if _has_rest(ctx) and not id_serie:
+    if await _has_rest(ctx) and not id_serie:
         msg = (
             "id_serie é obrigatório no modo REST. "
             "Use sei_pesquisar_tipos_documento para listar os tipos disponíveis."
@@ -300,7 +300,7 @@ async def sei_criar_documento(
         hipotese_legal=hipotese_legal,
         id_unidade=id_unidade,
     )
-    result = await _backend(ctx).criar_documento_interno(processo, dados)
+    result = await (await _backend(ctx)).criar_documento_interno(processo, dados)
     return _json(result)
 
 
@@ -312,7 +312,7 @@ async def sei_listar_secoes(id_documento: str, ctx: Context | None = None) -> st
     e a versão do documento (campo ultimaVersaoDocumento),
     necessária para usar sei_editar_secao.
     """
-    result = await _backend(ctx).listar_secoes(id_documento)
+    result = await (await _backend(ctx)).listar_secoes(id_documento)
     return _json(result)
 
 
@@ -340,7 +340,7 @@ async def sei_gerar_referencia(
         if id_documento:
             doc_id = id_documento.strip()
         else:
-            client = _get_client(ctx)
+            client = await _get_client(ctx)
             doc_id, _ = await _resolver_documento(client, numero_sei)
         snippet = html_referencia_sei(doc_id, numero_sei)
         return _json(
@@ -440,7 +440,7 @@ async def sei_editar_secao(
     IMPORTANTE: O SEI exige que TODAS as seções sejam enviadas. Esta tool
     faz isso automaticamente — basta informar as seções que deseja alterar.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
 
     # Buscar todas as seções atuais do documento
     secoes_data = await backend.listar_secoes(id_documento)
@@ -507,7 +507,7 @@ async def sei_criar_documento_externo(
         descricao=descricao,
         nivel_acesso=nivel_acesso,
     )
-    result = await _backend(ctx).criar_documento_externo(processo, dados)
+    result = await (await _backend(ctx)).criar_documento_externo(processo, dados)
     return _json(result)
 
 
@@ -536,7 +536,7 @@ async def sei_consultar_documento_externo(
     Se falhar com erro inesperado, use sei_versao para verificar a versão.
     """
     try:
-        result = await _backend(ctx).consultar_documento_externo(id_documento, processo)
+        result = await (await _backend(ctx)).consultar_documento_externo(id_documento, processo)
         nivel, hipotese = access_control.extrair_nivel(result)
         if nivel is None:
             nivel = access_control.extrair_nivel_web(result)
@@ -575,7 +575,7 @@ async def sei_alterar_documento_interno(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    result = await _backend(ctx).alterar_documento_interno(
+    result = await (await _backend(ctx)).alterar_documento_interno(
         id_documento=id_documento,
         descricao=descricao,
         nivel_acesso=nivel_acesso,
@@ -604,7 +604,7 @@ async def sei_alterar_documento_externo(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    result = await _backend(ctx).alterar_documento_externo(
+    result = await (await _backend(ctx)).alterar_documento_externo(
         id_documento=id_documento,
         descricao=descricao,
         nivel_acesso=nivel_acesso,
@@ -625,7 +625,7 @@ async def sei_sugestao_assuntos_documento(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    result = await _backend(ctx).sugestao_assuntos_documento(id_serie)
+    result = await (await _backend(ctx)).sugestao_assuntos_documento(id_serie)
     return _json(result)
 
 
@@ -639,7 +639,7 @@ async def sei_listar_blocos_documento(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    result = await _backend(ctx).listar_blocos_documento(id_documento)
+    result = await (await _backend(ctx)).listar_blocos_documento(id_documento)
     return _json(result)
 
 
@@ -714,7 +714,7 @@ async def sei_incluir_documento_externo(
             nivel_acesso=nivel_acesso,
             hipotese_legal=hipotese_legal,
         )
-        result = await _backend(ctx).criar_documento_externo(processo, dados)
+        result = await (await _backend(ctx)).criar_documento_externo(processo, dados)
         return _json(result)
     except httpx.RequestError as e:
         msg = f"SEI inacessível: {e}"

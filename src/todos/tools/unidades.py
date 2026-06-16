@@ -22,7 +22,7 @@ async def sei_unidade_atual(ctx: Context) -> str:
     Informa id_unidade, sigla e nome. Use antes de listar ou alterar processos
     para confirmar em qual caixa as operacoes serao executadas.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.unidade_atual()
     return _json(result)
 
@@ -34,7 +34,7 @@ async def sei_listar_unidades(ctx: Context) -> str:
     Retorna id, sigla e nome de cada unidade. Use o id para trocar
     de unidade com sei_trocar_unidade.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     units = await backend.listar_unidades()
     return _json({"data": units, "total": len(units)})
 
@@ -48,7 +48,7 @@ async def sei_trocar_unidade(id_unidade: str, ctx: Context) -> str:
     a caixa da nova unidade. Use sei_listar_unidades para ver
     as unidades disponíveis.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.trocar_unidade(id_unidade)
     return _json(result)
 
@@ -66,7 +66,7 @@ async def sei_pesquisar_unidades(
     Paginação: pagina=0 é a primeira página, pagina=1 a segunda, etc.
     Em instâncias sem mod-wssei, requer filtro não-vazio (busca via autocomplete AJAX).
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_unidades(filtro=filtro, limit=limit, pagina=pagina)
     return _json(result)
 
@@ -87,7 +87,7 @@ async def sei_listar_usuarios(
     Use o campo id_usuario retornado para sei_atribuir_processo.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_usuarios(filtro=filtro, apenas_unidade=apenas_unidade)
     return _json(result)
 
@@ -100,7 +100,7 @@ async def sei_versao(ctx: Context) -> str:
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.versao()
     return _json(result)
 
@@ -112,7 +112,7 @@ async def sei_listar_orgaos(ctx: Context) -> str:
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_orgaos()
     return _json(result)
 
@@ -124,7 +124,7 @@ async def sei_listar_contextos(id_orgao: str, ctx: Context) -> str:
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_contextos(id_orgao)
     return _json(result)
 
@@ -145,7 +145,7 @@ async def sei_pesquisar_usuarios(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_usuarios(
         filtro=filtro, id_orgao=id_orgao, limit=limit, pagina=pagina
     )
@@ -166,7 +166,7 @@ async def sei_pesquisar_outras_unidades(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_outras_unidades(filtro=filtro, limit=limit, pagina=pagina)
     return _json(result)
 
@@ -178,7 +178,7 @@ async def sei_parametros_upload(ctx: Context) -> str:
     Útil antes de criar documentos externos para saber os limites.
     Em instâncias sem mod-wssei, retorna valores padrão do SEI 4.x.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.parametros_upload()
     return _json(result)
 
@@ -191,7 +191,7 @@ async def sei_listar_assinantes(ctx: Context) -> str:
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_assinantes()
     return _json(result)
 
@@ -203,6 +203,6 @@ async def sei_listar_orgaos_assinante(ctx: Context) -> str:
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_orgaos_assinante()
     return _json(result)
