@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -19,6 +20,14 @@ from todos.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_int(val: str | int | None, default: int = 0) -> int:
+    """Convert val to int, returning default on ValueError (e.g. server returns 'N/A')."""
+    try:
+        return int(val or default)
+    except (TypeError, ValueError):
+        return default
 
 
 class SEIClient:
@@ -43,8 +52,14 @@ class SEIClient:
         _sei_web_url = sei_web_url or os.environ.get("SEI_WEB_URL", "")
         if _sei_web_url:
             self.sei_root = _sei_web_url.rstrip("/")
-        elif "/sei/" in self.base_url:
-            self.sei_root = self.base_url.split("/sei/", 1)[0]
+        elif self.base_url:
+            parsed = urlparse(self.base_url)
+            path = parsed.path
+            for marker in ("/modulos/", "/sei/", "/api/"):
+                if marker in path:
+                    path = path[: path.index(marker)]
+                    break
+            self.sei_root = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
         else:
             self.sei_root = self.base_url.rstrip("/")
 
@@ -223,15 +238,16 @@ class SEIClient:
         data = resp.json()
         if not data.get("sucesso"):
             raise SEIAuthError(f"Falha na autenticação SEI: {data.get('mensagem')}")
-        try:
-            payload = data["data"]
-            self._token = payload["token"]
-        except KeyError as exc:
-            msg = (
-                "Resposta de autenticação SEI com formato inesperado "
-                f"(chaves presentes: {list(data.keys())}): {exc}"
-            )
-            raise RuntimeError(msg) from exc
+        if "data" not in data:
+            logger.error("Resposta de autenticação sem campo 'data': %r", data)
+            msg = "Resposta de autenticação inesperada do SEI (sem campo 'data')"
+            raise SEIAuthError(msg)
+        payload = data["data"]
+        if "token" not in payload:
+            logger.error("Payload de autenticação sem campo 'token': %r", payload)
+            msg = "Resposta de autenticação inesperada do SEI (sem campo 'token')"
+            raise SEIAuthError(msg)
+        self._token = payload["token"]
         login_data = payload.get("loginData") or {}
         id_usuario = login_data.get("IdUsuario") or login_data.get("idUsuario")
         if id_usuario is not None:
@@ -1160,10 +1176,7 @@ class SEIClient:
     @staticmethod
     def _paginated(data: dict, items_key: str, itens: list, pagina: int, limit: int) -> dict:
         """Monta resposta paginada com metadados."""
-        try:
-            total = int(data.get("total", 0))
-        except (ValueError, TypeError):
-            total = len(itens)
+        total = _safe_int(data.get("total"), default=len(itens))
         return {
             items_key: itens,
             "pagina_atual": pagina,
