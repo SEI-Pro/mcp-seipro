@@ -1,5 +1,6 @@
 """MCP Server genérico para o SEI (Sistema Eletrônico de Informações)."""
 
+import re
 import sys
 from collections.abc import Callable
 from typing import TypeAlias, TypeGuard
@@ -89,6 +90,21 @@ async def sei_buscar_documento(
     # Composite: estratégia Solr (REST) quando há mod-wssei, senão árvore web.
     result = await backend.buscar_documento(numero_sei, processo)
     return _json(result)
+
+
+# §29.4 — Compiled regex for validating the `filtro` parameter.
+# Allows alphanumeric characters, spaces, and Brazilian protocol separators (. / -).
+# Rejects anything else to prevent injection into backend search queries.
+_RE_FILTRO_VALIDO = re.compile(r"^[\w\s./\-]*$")
+
+
+def _validar_filtro(filtro: str) -> None:
+    """Validate the `filtro` search parameter; raise SEIValidationError on invalid chars."""
+    if filtro and not _RE_FILTRO_VALIDO.match(filtro):
+        raise SEIValidationError(
+            f"Parâmetro 'filtro' contém caracteres inválidos: {filtro!r}. "
+            "Permitidos: letras, dígitos, espaços e separadores de protocolo (. / -)."
+        )
 
 
 # Extratores em _CAMPOS_AGRUPAMENTO: todos aceitam (atributos, status) mesmo que
@@ -282,6 +298,8 @@ async def sei_resumo_processos(
     - agrupar_por="retorno" → processos com prazo vencido
     """
     try:
+        _validar_filtro(filtro)  # §29.4 — reject chars outside allowlist before forwarding
+
         campo1 = _validar_campo(agrupar_por)
         campo2 = _validar_campo(agrupar_por_2) if agrupar_por_2 else None
 

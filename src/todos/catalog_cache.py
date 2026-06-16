@@ -16,12 +16,26 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_raw_catalog_ttl = os.environ.get("CATALOG_CACHE_TTL", "")
+_DEFAULT_CATALOG_CACHE_TTL: int = 24 * 60 * 60  # 24 hours
+
+# §33.2 — Env-variable override: SEI_CACHE_TTL_SECONDS takes precedence; legacy
+# CATALOG_CACHE_TTL is kept for backwards compatibility.
+_raw_catalog_ttl = os.environ.get("SEI_CACHE_TTL_SECONDS") or os.environ.get(
+    "CATALOG_CACHE_TTL", ""
+)
 try:
-    CATALOG_CACHE_TTL: int = int(_raw_catalog_ttl) if _raw_catalog_ttl else 24 * 60 * 60
+    CATALOG_CACHE_TTL: int = (
+        int(_raw_catalog_ttl) if _raw_catalog_ttl else _DEFAULT_CATALOG_CACHE_TTL
+    )
 except ValueError as exc:
-    _ttl_err = f"CATALOG_CACHE_TTL deve ser um inteiro em segundos; recebido: {_raw_catalog_ttl!r}"
+    _ttl_err = (
+        f"SEI_CACHE_TTL_SECONDS / CATALOG_CACHE_TTL deve ser um inteiro em segundos; "
+        f"recebido: {_raw_catalog_ttl!r}"
+    )
     raise RuntimeError(_ttl_err) from exc
+if CATALOG_CACHE_TTL <= 0:
+    _ttl_zero_err = f"SEI_CACHE_TTL_SECONDS / CATALOG_CACHE_TTL deve ser positivo; recebido: {CATALOG_CACHE_TTL}"
+    raise ValueError(_ttl_zero_err)
 _SWEEP_PROBABILITY = 0.05  # probabilistic expired-row sweep: run on ~5% of writes
 
 

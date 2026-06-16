@@ -305,7 +305,9 @@ def extrair_nivel_web(metadata: dict) -> str | None:
             return SIGILOSO
         if "restrit" in texto:
             return RESTRITO
-        if "public" in texto:
+        # "Público" after NFKD + lower() becomes "publico" (no accent).
+        # Check "publico" not "public" to avoid matching English words like "publication".
+        if "publico" in texto:
             return PUBLICO
         return normalizar_nivel(v)
     return None

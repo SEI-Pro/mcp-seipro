@@ -623,9 +623,26 @@ class _ModseiDetection:
     confirmed: bool  # False when Cloudflare blocked the probe; url is a best-guess
 
 
+_logger_setup = logging.getLogger(__name__)
+
+
 def _is_cloudflare_response(resp: httpx.Response) -> bool:
-    """Return True if the response came from Cloudflare's edge, not from the PHP app."""
-    return "cf-ray" in resp.headers or resp.headers.get("server", "").lower() == "cloudflare"
+    """Return True if the response came from an edge/CDN proxy, not from the PHP app.
+
+    §35.3 — Uses multiple signals via any() to avoid false negatives:
+    - cf-ray header: Cloudflare primary signal
+    - server: cloudflare header: Cloudflare secondary signal
+    - x-amzn-requestid header: AWS API Gateway / CloudFront signal
+    """
+    signals = {
+        "cf-ray": "cf-ray" in resp.headers,
+        "server:cloudflare": resp.headers.get("server", "").lower() == "cloudflare",
+        "x-amzn-requestid": "x-amzn-requestid" in resp.headers,
+    }
+    detected = [name for name, found in signals.items() if found]
+    for name in detected:
+        _logger_setup.debug("Edge/CDN proxy signal detected in response: %s", name)
+    return any(signals.values())
 
 
 def _detect_modsei_url(sei_root: str, *, verify_ssl: bool) -> _ModseiDetection:
