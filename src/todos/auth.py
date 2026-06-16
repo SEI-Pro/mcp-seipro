@@ -29,6 +29,8 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.requests import Request
 from starlette.responses import HTMLResponse
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Crypto helpers (HMAC-SHA256 para assinatura, sem dep externa)
 # ---------------------------------------------------------------------------
@@ -71,6 +73,8 @@ def _verify(token: str) -> dict | None:
         payload = json.loads(base64.urlsafe_b64decode(padded))
     except (ValueError, UnicodeDecodeError):
         return None
+    if "exp" not in payload:
+        logger.warning("Token sem campo 'exp' — tratado como expirado.")
     if payload.get("exp", 0) < time.time():
         return None
     return payload
