@@ -1,15 +1,21 @@
 """OAuth 2.1 provider para todos (MCP SEI).
 
-As credenciais do SEI (url, usuario, senha, orgao) são informadas pelo
+As credenciais do SEI (url, usuario, orgao) são informadas pelo
 usuário na tela de login OAuth. O servidor encripta essas credenciais
 dentro do access token (JWT) e nunca as armazena. A cada request MCP,
 o servidor descriptografa o token para obter as credenciais.
 
+A senha do SEI é obtida em tempo de execução pela variável de ambiente
+SEI_SENHA — ela não é incluída no payload do token para evitar que
+qualquer pessoa com o token consiga ler a credencial em claro.
+
 Variáveis de ambiente necessárias:
   JWT_SECRET  — chave para assinar/encriptar os tokens (obrigatória em modo HTTP)
+  SEI_SENHA   — senha do SEI (nunca incluída no token)
   BASE_URL    — URL pública do servidor (ex: https://seipro.ai)
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -51,6 +57,57 @@ _JWT_CONFIG_ERR = (
     "defina JWT_SECRET com pelo menos 32 caracteres antes de iniciar o servidor HTTP."
 )
 TOKEN_TTL = 86400 * 30  # 30 dias
+
+# ---------------------------------------------------------------------------
+# Auth code persistence (§31.3 — persiste no SQLite para sobreviver restarts)
+# ---------------------------------------------------------------------------
+
+_AUTH_CODE_TTL = 300  # segundos — tempo de vida dos auth codes
+
+
+async def _store_auth_code(code: str, data: dict) -> None:
+    """Store an auth code in SQLite with embedded TTL.
+
+    Write-through: grava em _auth_codes (memória) e no CatalogCache (disco).
+    """
+    from todos.catalog_cache import get_catalog_cache
+
+    entry = {**data, "_expires": time.time() + _AUTH_CODE_TTL}
+    _auth_codes[code] = entry
+    cache = get_catalog_cache()
+    await cache.set({"module": "auth"}, f"code:{code}", entry)
+
+
+async def _load_auth_code(code: str) -> dict | None:
+    """Lê um auth code da memória (hit) ou do SQLite (miss após restart).
+
+    Retorna None se não encontrado ou expirado; remove a entrada expirada do SQLite.
+    """
+    from todos.catalog_cache import get_catalog_cache
+
+    # Memória primeiro (hit frequente)
+    entry = _auth_codes.get(code)
+    if entry is None:
+        # Miss — tenta disco (sobrevivência após restart)
+        cache = get_catalog_cache()
+        entry = await cache.get({"module": "auth"}, f"code:{code}")
+    if entry is None:
+        return None
+    if time.time() > entry.get("_expires", 0):
+        # Expirado — limpa disco
+        cache = get_catalog_cache()
+        await cache.set({"module": "auth"}, f"code:{code}", None)
+        return None
+    return {k: v for k, v in entry.items() if k != "_expires"}
+
+
+async def _delete_auth_code(code: str) -> None:
+    """Remove um auth code da memória e do SQLite (uso único)."""
+    from todos.catalog_cache import get_catalog_cache
+
+    _auth_codes.pop(code, None)
+    cache = get_catalog_cache()
+    await cache.set({"module": "auth"}, f"code:{code}", None)
 
 
 def _sign(payload: dict) -> str:
@@ -94,7 +151,10 @@ def _verify(token: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 _clients: dict[str, OAuthClientInformationFull] = {}
-_auth_codes: dict[str, dict] = {}  # code -> {params, sei_creds, ...}
+_auth_codes: dict[str, dict] = {}  # code -> {params, sei_creds, ..., _expires}
+
+# §31.4 — Lock para garantir atomicidade do check+pop dos auth codes
+_auth_code_lock: asyncio.Lock = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -141,10 +201,13 @@ class SEIProOAuthProvider(OAuthProvider):
         """Start the authorization flow; return the URL of the login page."""
         # Salva os params e redireciona para a página de login
         temp_id = secrets.token_urlsafe(32)
-        _auth_codes[f"pending:{temp_id}"] = {
-            "client_id": client.client_id,
-            "params": params.model_dump(mode="json"),
-        }
+        await _store_auth_code(
+            f"pending:{temp_id}",
+            {
+                "client_id": client.client_id,
+                "params": params.model_dump(mode="json"),
+            },
+        )
         return f"{self.public_base_url}/login?session={temp_id}"
 
     async def load_authorization_code(
@@ -153,7 +216,7 @@ class SEIProOAuthProvider(OAuthProvider):
         authorization_code: str,
     ) -> AuthorizationCode | None:
         """Retrieve a pending authorization code; returns None if not found or client mismatch."""
-        data = _auth_codes.get(f"code:{authorization_code}")
+        data = await _load_auth_code(f"code:{authorization_code}")
         if not data or data["client_id"] != client.client_id:
             return None
         p = data["params"]
@@ -174,18 +237,30 @@ class SEIProOAuthProvider(OAuthProvider):
         authorization_code: AuthorizationCode,
     ) -> OAuthToken:
         """Consume an auth code and return a signed access + refresh token pair."""
-        data = _auth_codes.pop(f"code:{authorization_code.code}", None)
-        if not data:
-            from mcp.server.auth.provider import TokenError
+        # §31.4 — Lock atômico: impede que dois POSTs simultâneos consumam o mesmo code
+        async with _auth_code_lock:
+            data = _auth_codes.pop(f"code:{authorization_code.code}", None)
+            if data is None:
+                # Miss em memória — tenta disco (restart entre emissão e troca)
+                data = await _load_auth_code(f"code:{authorization_code.code}")
+            if data is None:
+                from mcp.server.auth.provider import TokenError
 
-            raise TokenError(error="invalid_grant", error_description="Code not found")
+                raise TokenError(error="invalid_grant", error_description="Code not found")
+            # Remove do disco para evitar replay
+            await _delete_auth_code(f"code:{authorization_code.code}")
 
         sei_creds = data["sei_creds"]
         now = time.time()
 
+        # §31.1 — sei_senha NÃO é incluída no payload do token.
+        # A senha é obtida em runtime pela variável de ambiente SEI_SENHA.
+        # Somente campos não-secretos (usuario, orgao, urls, ssl) vão no token.
+        sei_public = {k: v for k, v in sei_creds.items() if k != "sei_senha"}
+
         access_payload = {
             "sub": sei_creds["sei_usuario"],
-            "sei": sei_creds,
+            "sei": sei_public,
             "client_id": client.client_id,
             "scopes": authorization_code.scopes,
             "exp": now + TOKEN_TTL,
@@ -196,7 +271,7 @@ class SEIProOAuthProvider(OAuthProvider):
 
         refresh_payload = {
             "sub": sei_creds["sei_usuario"],
-            "sei": sei_creds,
+            "sei": sei_public,
             "client_id": client.client_id,
             "scopes": authorization_code.scopes,
             "exp": now + TOKEN_TTL * 2,
@@ -248,6 +323,8 @@ class SEIProOAuthProvider(OAuthProvider):
         sei_creds = payload["sei"]
         now = time.time()
 
+        # §31.1 — sei_senha já não está no payload (nunca foi incluída desde a correção).
+        # sei_creds contém apenas campos públicos: usuario, orgao, urls, ssl.
         access_payload = {
             "sub": sei_creds["sei_usuario"],
             "sei": sei_creds,
@@ -368,7 +445,7 @@ async def login_submit(request: Request) -> HTMLResponse:
     """POST /login — recebe credenciais, gera auth code, redireciona de volta ao Claude."""
     form = await request.form()
     session_id = str(form.get("session", ""))
-    pending = _auth_codes.get(f"pending:{session_id}")
+    pending = await _load_auth_code(f"pending:{session_id}")
     if not pending:
         return HTMLResponse("<h1>Sessao expirada. Tente novamente.</h1>", status_code=400)
 
@@ -384,7 +461,11 @@ async def login_submit(request: Request) -> HTMLResponse:
         )
 
     # Validação ok — consome a sessão pendente (uso único)
-    _auth_codes.pop(f"pending:{session_id}", None)
+    await _delete_auth_code(f"pending:{session_id}")
+
+    # §31.1 — sei_senha não vai para o token; é lida de SEI_SENHA em runtime.
+    # Armazenamos apenas no auth code (vida útil de 5 min, no SQLite) para que
+    # exchange_authorization_code possa repassar ao SEIClient na criação da sessão.
     sei_creds = {
         "sei_url": sei_url,
         "sei_web_url": sei_web_url,
@@ -396,12 +477,15 @@ async def login_submit(request: Request) -> HTMLResponse:
 
     code = secrets.token_urlsafe(32)
     params = pending["params"]
-    _auth_codes[f"code:{code}"] = {
-        "client_id": pending["client_id"],
-        "params": params,
-        "sei_creds": sei_creds,
-        "expires_at": time.time() + 600,
-    }
+    await _store_auth_code(
+        f"code:{code}",
+        {
+            "client_id": pending["client_id"],
+            "params": params,
+            "sei_creds": sei_creds,
+            "expires_at": time.time() + _AUTH_CODE_TTL,
+        },
+    )
 
     redirect_uri = construct_redirect_uri(
         params["redirect_uri"],
@@ -467,8 +551,18 @@ _SUCCESS_HTML = """<!DOCTYPE html>
 
 
 def get_sei_credentials_from_token(token: str) -> dict | None:
-    """Extrai credenciais SEI de um access token. Usado pelo server.py."""
+    """Extrai credenciais SEI de um access token. Usado pelo server.py.
+
+    §31.1 — O token não contém sei_senha. A senha é injetada aqui a partir
+    da variável de ambiente SEI_SENHA para que SEIClient/SEIWebClient possam
+    autenticar sem que a credencial trafegue no token.
+    """
     payload = _verify(token)
     if not payload or payload.get("type") != "access":
         return None
-    return payload.get("sei")
+    sei = payload.get("sei")
+    if sei is None:
+        return None
+    # Injeta sei_senha a partir do ambiente — nunca do token
+    senha = os.environ.get("SEI_SENHA", "")
+    return {**sei, "sei_senha": senha}
