@@ -21,9 +21,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Limiar mínimo de bytes para considerar um documento interno como não-vazio.
-# Algumas respostas do SEI retornam um shell HTML mínimo como `<p></p>` (~7 bytes)
-# para documentos sem corpo. 10 bytes é deliberadamente baixo para evitar falsos
-# negativos em conteúdos finos mas válidos.
+# O SEI retorna `"<br>"` (5 bytes) ou `"&nbsp;"` (6 bytes) para documentos sem
+# conteúdo real. Qualquer conteúdo genuíno será mais longo que esses shells;
+# 10 bytes é deliberadamente conservador para não descartar conteúdos finos mas válidos.
 _MIN_DOC_CONTENT_LENGTH = 10
 
 

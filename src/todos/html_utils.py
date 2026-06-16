@@ -6,9 +6,27 @@ import os
 import re
 
 from bs4 import BeautifulSoup
-from markdownify import markdownify
+from markdownify import MarkdownConverter
 
 logger = logging.getLogger(__name__)
+
+
+# Número máximo de páginas que o OCR processa em um único PDF.
+# Lê SEI_MAX_OCR_PAGES do ambiente; deve ser um inteiro positivo.
+def _parse_max_ocr_pages(raw: str) -> int:
+    """Parse and validate SEI_MAX_OCR_PAGES env var; raises ValueError if invalid."""
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        _msg = f"SEI_MAX_OCR_PAGES deve ser um inteiro positivo; recebido: {raw!r}"
+        raise ValueError(_msg) from exc
+    if value <= 0:
+        _msg = f"SEI_MAX_OCR_PAGES deve ser um inteiro positivo; recebido: {raw!r}"
+        raise ValueError(_msg)
+    return value
+
+
+MAX_OCR_PAGES: int = _parse_max_ocr_pages(os.getenv("SEI_MAX_OCR_PAGES", "20"))
 
 
 def html_to_text(raw: str) -> str:
@@ -76,27 +94,90 @@ def _clean_markdown_tables(md: str) -> str:
                 i += 1
                 continue
 
-            # Verificar se é linha de separador (| --- | --- |)
-            if all(re.match(r"\s*-+\s*$", c) for c in inner if c.strip()):
-                # Ajustar separador para o número de colunas preenchidas da próxima/anterior tabela
-                # Buscar a linha de dados mais próxima para contar colunas
-                ncols = len(filled)
-                if ncols == 0:
-                    # Contar da linha anterior
-                    for prev in reversed(result):
-                        if "|" in prev and prev.strip().startswith("|"):
-                            prev_cells = [c for c in prev.split("|")[1:-1] if c.strip()]
-                            ncols = max(len(prev_cells), 1)
-                            break
-                    else:
-                        ncols = 1
-                result.append("| " + " | ".join(["---"] * ncols) + " |")
+            # Verificar se é linha de separador (| --- | --- | ou | ---: | :---: |)
+            if all(re.match(r"\s*:?-+:?\s*$", c) for c in inner if c.strip()):
+                # Preservar separadores de alinhamento (com ':') das colunas preenchidas
+                filled_seps = [c.strip() for c in inner if c.strip()]
+                result.append("| " + " | ".join(filled_seps) + " |")
             else:
                 result.append("| " + " | ".join(c.strip() for c in filled) + " |")
         else:
             result.append(line)
         i += 1
     return "\n".join(result)
+
+
+def _align_to_separator(align: str | None) -> str:
+    """Return the Markdown column separator for an HTML align attribute value."""
+    if align == "right":
+        return "---:"
+    if align == "center":
+        return ":---:"
+    # left or unspecified → left-align (default)
+    return "---"
+
+
+class _SEIMarkdownConverter(MarkdownConverter):
+    """MarkdownConverter subclass that respects HTML 'align' attributes on table cells.
+
+    When generating the header separator row, reads the ``align`` attribute from
+    each ``<th>`` (or ``<td>`` when no ``<th>`` is present) and emits ``---``,
+    ``---:`` or ``:---:`` accordingly. Falls back to left-align when the
+    attribute is absent, instead of varying by content heuristics.
+    """
+
+    def convert_tr(self, el: object, text: str, _parent_tags: object) -> str:
+        """Convert a table row, honouring per-cell HTML align attributes."""
+        from bs4 import Tag
+
+        cells = el.find_all(["td", "th"]) if isinstance(el, Tag) else []
+        is_first_row = isinstance(el, Tag) and el.find_previous_sibling() is None
+        is_headrow = isinstance(el, Tag) and (
+            all(cell.name == "th" for cell in cells)
+            or (el.parent.name == "thead" and len(el.parent.find_all("tr")) == 1)
+        )
+        is_head_row_missing = isinstance(el, Tag) and (
+            (is_first_row and el.parent.name != "tbody")
+            or (
+                is_first_row
+                and el.parent.name == "tbody"
+                and len(el.parent.parent.find_all(["thead"])) < 1
+            )
+        )
+
+        overline = ""
+        underline = ""
+        full_colspan = 0
+        col_alignments: list[str] = []
+
+        for cell in cells:
+            colspan = 1
+            if "colspan" in cell.attrs and str(cell["colspan"]).isdigit():
+                colspan = max(1, min(1000, int(cell["colspan"])))
+            full_colspan += colspan
+            # Read align from HTML attribute first; fall back to left-align when absent.
+            raw_align = cell.get("align")
+            align_val = str(raw_align).lower().strip() if raw_align else None
+            col_alignments.extend([_align_to_separator(align_val)] * colspan)
+
+        separator_row = "| " + " | ".join(col_alignments) + " |"
+
+        if (
+            is_headrow or (is_head_row_missing and self.options["table_infer_header"])
+        ) and is_first_row:
+            underline += separator_row + "\n"
+        elif (is_head_row_missing and not self.options["table_infer_header"]) or (
+            is_first_row
+            and isinstance(el, Tag)
+            and (
+                el.parent.name == "table"
+                or (el.parent.name == "tbody" and not el.parent.find_previous_sibling())
+            )
+        ):
+            overline += "| " + " | ".join([""] * full_colspan) + " |\n"
+            overline += separator_row + "\n"
+
+        return overline + "|" + text + "\n" + underline
 
 
 def html_to_markdown(raw: str) -> str:
@@ -110,37 +191,26 @@ def html_to_markdown(raw: str) -> str:
         html = html_module.unescape(raw)
         cleaned = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
         cleaned = re.sub(r"<script[^>]*>.*?</script>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
-        resultado = markdownify(
-            cleaned,
+        resultado = _SEIMarkdownConverter(
             heading_style="ATX",
             strip=["img", "link", "meta", "head", "title"],
-        )
+        ).convert(cleaned)
         resultado = _clean_markdown_tables(resultado)
         return re.sub(r"\n{3,}", "\n\n", resultado).strip()
-    except (AttributeError, TypeError, ValueError, UnicodeDecodeError):
+    except (AttributeError, TypeError, ValueError, UnicodeDecodeError) as _md_err:
+        logger.warning("Falha ao converter HTML para Markdown (fallback texto): %s", _md_err)
         return html_to_text(raw)
 
 
 OCR_LANG = os.environ.get("SEI_OCR_LANG", "por")
 
 
-def _max_ocr_pages() -> int:
-    """Retorna MAX_OCR_PAGES do ambiente, com validação lazy (não trava o import)."""
-    raw = os.environ.get("MAX_OCR_PAGES", "")
-    if not raw:
-        return 20
-    try:
-        return int(raw)
-    except ValueError as exc:
-        _err = f"MAX_OCR_PAGES deve ser um inteiro; recebido: {raw!r}"
-        raise RuntimeError(_err) from exc
-
-
 def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
-    """Extrai texto de PDF via OCR (pdf2image + tesseract).
+    """Extract text from a PDF via OCR (pdf2image + tesseract).
 
-    Retorna lista de (num_pagina, texto).
-    Limita a MAX_OCR_PAGES páginas para evitar timeout.
+    Returns list of (page_number, text) tuples.
+    Processing is limited to MAX_OCR_PAGES pages to avoid timeouts.
+    When OCR fails on an individual page, logs a WARNING and skips the page.
     """
     import pytesseract
     from pdf2image import convert_from_bytes
@@ -152,18 +222,29 @@ def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
     except (PDFInfoNotInstalledError, PDFPageCountError) as e:
         msg = f"poppler não instalado ou PDF inválido: {e}"
         raise OSError(msg) from e
-    max_pages = _max_ocr_pages()
     pages = []
-    limit = min(len(images), max_pages)
+    limit = min(len(images), MAX_OCR_PAGES)
     for i, img in enumerate(images[:limit], 1):
-        text = pytesseract.image_to_string(img, lang=lang)
+        try:
+            text = pytesseract.image_to_string(img, lang=lang)
+        except (
+            pytesseract.TesseractError,
+            pytesseract.TesseractNotFoundError,
+            OSError,
+        ) as _ocr_page_err:
+            logger.warning(
+                "OCR falhou na página %d: %s",
+                i,
+                _ocr_page_err,
+            )
+            continue
         if text and text.strip():
             pages.append((i, text.strip()))
-    if len(images) > max_pages:
+    if len(images) > MAX_OCR_PAGES:
         pages.append(
             (
-                max_pages + 1,
-                f"[OCR limitado a {max_pages} páginas. "
+                MAX_OCR_PAGES + 1,
+                f"[OCR limitado a {MAX_OCR_PAGES} páginas. "
                 f"O documento tem {len(images)} páginas no total. "
                 f"Use sei_baixar_anexo para obter o PDF completo.]",
             )
@@ -172,10 +253,10 @@ def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
 
 
 def _extract_pdf_pages(content: bytes) -> list[tuple[int, str]]:
-    """Extrai texto de PDF, usando pdfplumber primeiro e OCR como fallback.
+    """Extract text from a PDF, using pdfplumber first and OCR as fallback.
 
-    Retorna lista de (num_pagina, texto).
-    Retorna lista vazia se o conteúdo não é um PDF válido ou está vazio.
+    Returns list of (page_number, text) tuples.
+    Returns an empty list if the content is not a valid PDF or is empty.
     """
     import io
 
@@ -213,7 +294,7 @@ def _extract_pdf_pages(content: bytes) -> list[tuple[int, str]]:
 
 
 def pdf_to_text(content: bytes) -> str:
-    """Extrai texto de um PDF binário.
+    """Extract text from a binary PDF.
 
     Usa pdfplumber para PDFs com texto nativo, e OCR (tesseract)
     como fallback para PDFs escaneados.
@@ -226,7 +307,7 @@ def pdf_to_text(content: bytes) -> str:
 
 
 def pdf_to_markdown(content: bytes) -> str:
-    """Extrai texto de um PDF e formata como Markdown.
+    """Extract text from a binary PDF and format as Markdown.
 
     Usa pdfplumber para PDFs com texto nativo, e OCR (tesseract)
     como fallback para PDFs escaneados. Formata títulos em negrito.
