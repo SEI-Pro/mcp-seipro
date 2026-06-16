@@ -11,7 +11,7 @@ ser objetos reais (não strings adiadas).
 
 import html
 import logging
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import httpx
 from fastmcp import Context
@@ -28,6 +28,9 @@ from todos.mcp_app import (
     mcp,
 )
 
+if TYPE_CHECKING:
+    from todos.backends.base import SEIBackend
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +43,16 @@ def _exigir_cargo(cargos: object) -> SEIValidationError:
         f"Cargos/funções disponíveis: {nomes}. Pergunte ao usuário qual usar e "
         "reutilize a escolha nas próximas assinaturas desta conversa."
     )
+
+
+async def _validar_cargo(backend: "SEIBackend", cargo: str) -> None:
+    """Valida que cargo não está vazio; levanta SEIValidationError com lista de opções."""
+    if not cargo:
+        try:
+            cargos = await backend.listar_assinantes()
+        except (SEIError, httpx.HTTPError):
+            cargos = []
+        raise _exigir_cargo(cargos)
 
 
 @mcp.tool(annotations=_IDEM)
@@ -132,12 +145,7 @@ async def sei_assinar_documento(
     - orgao: código do órgão (usa o padrão se omitido)
     """
     backend = await _backend(ctx)
-    if not cargo:
-        try:
-            cargos = await backend.listar_assinantes()
-        except (SEIError, httpx.HTTPError):
-            cargos = []
-        raise _exigir_cargo(cargos)
+    await _validar_cargo(backend, cargo)
     result = await backend.assinar_documento(id_documento, cargo=cargo, orgao=orgao)
     return _json(result)
 
@@ -177,12 +185,7 @@ async def sei_assinar_bloco(
     - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
     """
     backend = await _backend(ctx)
-    if not cargo:
-        try:
-            cargos = await backend.listar_assinantes()
-        except (SEIError, httpx.HTTPError):
-            cargos = []
-        raise _exigir_cargo(cargos)
+    await _validar_cargo(backend, cargo)
     result = await backend.assinar_bloco(id_bloco, cargo=cargo)
     return _json(result)
 
@@ -205,12 +208,7 @@ async def sei_assinar_documentos_bloco(
     - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
     """
     backend = await _backend(ctx)
-    if not cargo:
-        try:
-            cargos = await backend.listar_assinantes()
-        except (SEIError, httpx.HTTPError):
-            cargos = []
-        raise _exigir_cargo(cargos)
+    await _validar_cargo(backend, cargo)
     result = await backend.assinar_documentos_bloco(documentos, cargo=cargo)
     return _json(result)
 
