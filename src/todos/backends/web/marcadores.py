@@ -34,7 +34,7 @@ class MarcadoresWeb(_WebMixin):
         aplicado no cliente após obter a lista completa.
         """
         result = await self._web.pesquisar_marcadores_web(filtro=filtro)
-        if limit > 0 and len(result.get("marcadores", [])) > limit:
-            marcadores = result["marcadores"][:limit]
-            return {"marcadores": marcadores, "total_itens": len(marcadores)}
-        return result
+        marcadores = result.get("marcadores", [])
+        if limit >= 0:
+            marcadores = marcadores[:limit]
+        return {"marcadores": marcadores, "total_itens": len(marcadores)}

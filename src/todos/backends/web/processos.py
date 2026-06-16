@@ -192,6 +192,7 @@ class ProcessosWeb(_WebMixin):
                 "Campo selAtribuicao ausente na resposta do SEI — layout alterado? "
                 f"Selects disponíveis: {list(_selects.keys())}"
             )
+            logger.warning(msg)
             raise SEIConnectionError(msg)
         opcoes_usuario = _selects.get("selAtribuicao", [])
         if not opcoes_usuario:

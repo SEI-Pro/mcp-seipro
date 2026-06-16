@@ -135,7 +135,7 @@ class _SEIMarkdownConverter(MarkdownConverter):
         parent = el.parent if isinstance(el, Tag) else None
         is_tag_parent = isinstance(parent, Tag)
         is_headrow = isinstance(el, Tag) and (
-            all(cell.name == "th" for cell in cells)
+            (cells and all(cell.name == "th" for cell in cells))
             or (is_tag_parent and parent.name == "thead" and len(parent.find_all("tr")) == 1)
         )
         grandparent = parent.parent if is_tag_parent else None

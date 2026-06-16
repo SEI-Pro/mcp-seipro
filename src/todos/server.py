@@ -93,7 +93,8 @@ async def sei_buscar_documento(
 
 
 # §29.4 — Compiled regex for validating the `filtro` parameter.
-# Allows alphanumeric characters, spaces, and Brazilian protocol separators (. / -).
+# Allows word chars (\w = letters incl. accented/Unicode, digits, underscores),
+# whitespace, and Brazilian protocol separators (. / -).
 # Rejects anything else to prevent injection into backend search queries.
 _RE_FILTRO_VALIDO = re.compile(r"^[\w\s./\-]*$")
 
@@ -103,7 +104,7 @@ def _validar_filtro(filtro: str) -> None:
     if filtro and not _RE_FILTRO_VALIDO.match(filtro):
         raise SEIValidationError(
             f"Parâmetro 'filtro' contém caracteres inválidos: {filtro!r}. "
-            "Permitidos: letras, dígitos, espaços e separadores de protocolo (. / -)."
+            "Permitidos: letras (incluindo acentuadas), dígitos, sublinhado, espaços e separadores de protocolo (. / -)."
         )
 
 
