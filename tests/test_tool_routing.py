@@ -25,6 +25,7 @@ import pytest
 from helpers import aconst
 
 from todos.backends.base import SEIBackend
+from todos.mcp_app import mcp
 from todos.tools import documentos, processos
 
 if TYPE_CHECKING:
@@ -53,15 +54,25 @@ class RecordingBackend:
     Tools delegate to it by name (`backend.consultar_processo(...)`); `__getattr__`
     returns a coroutine that records the call and yields a canned dict. `name` is a
     real attribute so it is never intercepted.
+
+    Only operations listed in ``_RECORDING_BACKEND_OPS`` are accepted; unknown
+    names raise ``AttributeError`` immediately so typos in the routing table are
+    caught before any assertion runs.
     """
 
     name = "fake"
 
     def __init__(self, result: Any = None) -> None:
+        """Initialise the backend with an optional canned result."""
         self.calls: list[tuple[str, tuple, dict]] = []
         self._result = {"ok": True} if result is None else result
 
     def __getattr__(self, op: str) -> Callable[..., Any]:
+        """Return a coroutine that records the call, or raise for unknown ops."""
+        if op not in _RECORDING_BACKEND_OPS:
+            msg = f"Unknown backend operation: {op!r}"
+            raise AttributeError(msg)
+
         async def _op(*args: object, **kwargs: object) -> Any:
             self.calls.append((op, args, kwargs))
             return dict(self._result) if isinstance(self._result, dict) else self._result
@@ -566,6 +577,19 @@ _ROUTES: list[tuple[str, str, dict, str, list[object]]] = [
     ("unidades", "sei_listar_contextos", {"id_orgao": "Org"}, "listar_contextos", ["Org"]),
 ]
 
+# Whitelist of backend operation names that RecordingBackend will accept.
+# Derived from the _ROUTES table plus the extra ops used in hand-written tests.
+_RECORDING_BACKEND_OPS: frozenset[str] = frozenset(
+    # Operations exercised by the parametrised _ROUTES table.
+    {op for *_, op, _ in _ROUTES}
+    # Extra operations called in hand-written tests below.
+    | {
+        "consultar_processo",  # test_consultar_processo_routes_and_keeps_public_payload
+        "alterar_secoes",  # test_editar_secao_reads_then_writes_via_composite
+        "criar_documento_interno",  # test_criar_documento_routes_to_composite
+    }
+)
+
 
 def _flatten(args: tuple, kwargs: dict) -> list[object]:
     return [*args, *kwargs.values()]
@@ -585,6 +609,9 @@ def test_tool_routes_to_expected_op(
     result = asyncio.run(tool(ctx=None, **call_kwargs))
 
     assert len(fake.calls) == 1, f"{tool_name} made {len(fake.calls)} backend calls, expected 1"
+    assert fake.calls[0][0] == expected_op, (
+        f"{tool_name} routed to {fake.calls[0][0]!r}, expected {expected_op!r}"
+    )
     op, args, kwargs = fake.calls[0]
     assert op == expected_op, f"{tool_name} routed to {op!r}, expected {expected_op!r}"
     forwarded = _flatten(args, kwargs)
@@ -713,3 +740,20 @@ def test_no_route_targets_a_nonexistent_contract_op() -> None:
     contract = {n for n in dir(SEIBackend) if not n.startswith("_")}
     unknown = sorted({op for *_, op, _ in _ROUTES} - contract)
     assert not unknown, f"table references ops absent from the contract: {unknown}"
+
+
+def test_all_routed_tools_exist_in_mcp() -> None:
+    """Every tool name in _ROUTES must be a tool registered with the MCP server.
+
+    This catches stale entries — when a tool is renamed or removed, the _ROUTES
+    table must be updated too.  New tools that are NOT in _ROUTES are permitted
+    (they may be complex tools with dedicated hand-written tests).
+    """
+    registered = {t.name for t in asyncio.run(mcp.list_tools())}
+    routed = {tool_name for _, tool_name, *_ in _ROUTES}
+
+    # Sanity: the table is non-empty (guards against an accidental wipe).
+    assert routed, "_ROUTES table is empty"
+
+    unknown = sorted(routed - registered)
+    assert not unknown, f"_ROUTES references tool names not registered in the MCP server: {unknown}"
