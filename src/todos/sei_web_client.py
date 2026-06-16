@@ -304,7 +304,11 @@ class SEIWebClient:
     @property
     def itens_painel(self) -> int:
         """Total de itens no painel (0 antes do primeiro listar_processos)."""
-        return int(self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0")
+        raw = self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0"
+        try:
+            return int(raw)
+        except ValueError:
+            return 0
 
     @property
     def is_authenticated(self) -> bool:
@@ -337,7 +341,7 @@ class SEIWebClient:
                 asyncio.to_thread(keyring.get_password, "todos-mcp", keyring_user),
                 timeout=5.0,
             )
-        except (TimeoutError, ImportError, OSError, RuntimeError, ValueError, AttributeError):
+        except (TimeoutError, ImportError, OSError, RuntimeError, ValueError):
             return None
 
     async def login(self, *, _retry_keyring: bool = True) -> None:
@@ -369,7 +373,7 @@ class SEIWebClient:
                 logger.warning(
                     "Timeout ao buscar senha do keyring (>5s); use SEI_SENHA como fallback"
                 )
-            except (ImportError, OSError, RuntimeError, ValueError, AttributeError) as e:
+            except (ImportError, OSError, RuntimeError, ValueError) as e:
                 self._keyring_user = keyring_user  # restore: transient error, allow retry
                 logger.warning("Não foi possível obter a senha do keyring: %s", e)
 
@@ -2707,7 +2711,11 @@ class SEIWebClient:
                         "atribuido": bool(atrib),
                     }
             seen += len(rows)
-            total = int(self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0")
+            _raw_total = self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0"
+            try:
+                total = int(_raw_total)
+            except ValueError:
+                total = 0
             # `total == 0` quando o hidden não existe nesta instância — nesse caso
             # pagina até esvaziar (senão `seen >= 0` quebraria já na página 0).
             if not rows or (total > 0 and seen >= total):
@@ -3665,12 +3673,18 @@ class SEIWebClient:
         # total_itens: vem dos hidden fields hdn{Selecao}NroItens (capturados
         # pelo _extract_main_form via fetch_inbox). Esses campos têm o total
         # da seleção atual no servidor, não só da página visível.
+        def _safe_int(val: str) -> int:
+            try:
+                return int(val)
+            except ValueError:
+                return 0
+
         if layout == "detalhada":
-            total_servidor = int(self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0")
+            total_servidor = _safe_int(self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0")
         else:
-            total_servidor = int(self._form_hidden.get("hdnRecebidosNroItens", "0") or "0") + int(
-                self._form_hidden.get("hdnGeradosNroItens", "0") or "0"
-            )
+            total_servidor = _safe_int(
+                self._form_hidden.get("hdnRecebidosNroItens", "0") or "0"
+            ) + _safe_int(self._form_hidden.get("hdnGeradosNroItens", "0") or "0")
         if total_servidor == 0:
             total_servidor = len(rows)
 
