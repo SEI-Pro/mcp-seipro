@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from todos.backends.web._session import _WebMixin
+from todos.exceptions import SEINotImplementedError
 
 
 class UnidadesWeb(_WebMixin):
@@ -59,39 +60,14 @@ class UnidadesWeb(_WebMixin):
         return await self._web.pesquisar_usuarios_web(filtro=filtro, limit=limit)
 
     async def parametros_upload(self) -> dict:
-        """Retorna parâmetros de upload (extensões e tamanhos permitidos)."""
-        return {
-            "extensoes_permitidas": [
-                "pdf",
-                "doc",
-                "docx",
-                "xls",
-                "xlsx",
-                "ppt",
-                "pptx",
-                "odt",
-                "ods",
-                "odp",
-                "txt",
-                "rtf",
-                "csv",
-                "jpg",
-                "jpeg",
-                "png",
-                "gif",
-                "bmp",
-                "tif",
-                "tiff",
-                "zip",
-                "rar",
-                "7z",
-                "mp3",
-                "mp4",
-                "avi",
-                "mov",
-            ],
-            "tamanho_maximo_mb": 50,
-            "_aviso": (
-                "Valores padrão do SEI 4.x — configure SEI_URL para valores reais desta instância."
-            ),
-        }
+        """Retorna parâmetros de upload; requer backend REST (mod-wssei).
+
+        O scraping web não expõe as configurações de upload da instância.
+        Use uma instância com mod-wssei para obter os valores reais.
+        """
+        msg = (
+            "parametros_upload requer o backend REST (mod-wssei). "
+            "Configurações de upload não estão disponíveis via scraping web — "
+            "os valores variam por instância e não podem ser inferidos com segurança."
+        )
+        raise SEINotImplementedError(msg)
