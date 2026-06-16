@@ -75,10 +75,6 @@ ignore = [
 "bootstrap.py" = ["S603", "S606"]  # subprocess with controlled inputs (sys.executable, Path objects)
 "setup_claude.py" = ["S603"]  # legitimate subprocess calls with trusted input
 "scripts/smoke_web.py" = ["BLE001"]  # smoke test catch-all is intentional — any failure must be logged
-"src/todos/catalog_cache.py" = [
-    # Cache stores arbitrary JSON-deserializable values; Any is the correct type
-    "ANN401",
-]
 "src/todos/setup_wizard.py" = [
     # subprocess calls use sys.executable or controlled Path objects — not shell injection
     "S603",
@@ -88,8 +84,6 @@ ignore = [
     "PLR0913",
     # Complexity inherent in HTTP client retry/auth/cache logic
     "C901",
-    # Cache stores arbitrary API-returned values; Any is the correct type here
-    "ANN401",
 ]
 "src/todos/sei_web_client.py" = [
     # Scraper methods are inherently complex (multi-step web flows, branching HTML layouts)
@@ -97,18 +91,9 @@ ignore = [
     # Web scraper response dicts contain heterogeneous API values; Any is the correct element type
     "ANN401",
 ]
-# server.py (tool registrations) + mcp_app.py (shared core extracted from it):
-# same code, same framework-dictated/boundary-file justifications below.
-"src/todos/{server,mcp_app}.py" = [
-    "PLR0912", "C901",  # 121 tools + scraper helpers — complexity is architectural
-    "PLR0911",  # multiple return paths in tools inherent to the dual web/REST dispatch model
-    "PLR0913",  # tools need ctx + ≥4 business params; grouping into dataclasses hides the MCP schema
-    # Deferred/conditional imports: fastmcp auth, tempfile, html, setup_wizard, remote are
-    # all runtime-optional — moving to top-level would fail on envs where they're absent
-    "PLC0415",
-    # ASYNC230: sync write to tempfile for MCP output artifacts — acceptable here
-    "ASYNC230",
-]  # boundary file: 121 tools, complexity is inherent
+"src/todos/server.py" = [
+    "PLR0913",  # MCP tools need ctx + ≥4 business params; grouping into dataclasses hides the MCP schema
+]
 # per-domain tool modules split out of server.py: same framework-dictated MCP
 # signature constraint — tools need ctx + ≥4 business params, and grouping into
 # dataclasses hides the MCP schema.
@@ -121,7 +106,7 @@ ignore = [
 "src/todos/tools/documentos.py" = [
     "PLR0913",  # sei_criar_documento/sei_ler_documento/sei_alterar_documento_externo/
                 # sei_criar_documento_externo/sei_incluir_documento_externo: MCP API needs all
-                # fields individually; _ler_documento_via_backend mirrors the public tool signature
+                # fields individually; _ler_documento_via_backend still has 7 params
 ]
 "src/todos/tools/processos.py" = [
     "PLR0913",  # sei_criar_processo (7 business fields) + sei_alterar_processo: MCP API surface

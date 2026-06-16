@@ -6,12 +6,15 @@ import logging
 import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
+from typing import TypedDict
 
 import httpx
 from fastmcp import Context, FastMCP
+from fastmcp.server.dependencies import get_access_token
 from pydantic import BaseModel, Field
 
 from todos import access_control
+from todos.auth import get_sei_credentials_from_token
 from todos.backends import SEIBackend as _SEIBackendV2
 from todos.backends import (
     build_backend,
@@ -98,10 +101,6 @@ async def _get_client(ctx: Context | None) -> SEIClient:
         raise ValueError(msg)
 
     if _http_mode:
-        from fastmcp.server.dependencies import get_access_token
-
-        from todos.auth import get_sei_credentials_from_token
-
         access_token = get_access_token()
         if not access_token:
             msg = "Autenticacao necessaria. Reconecte o MCP."
@@ -145,10 +144,6 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
         raise ValueError(msg)
 
     if _http_mode:
-        from fastmcp.server.dependencies import get_access_token
-
-        from todos.auth import get_sei_credentials_from_token
-
         access_token = get_access_token()
         if not access_token:
             msg = "Autenticacao necessaria. Reconecte o MCP."
@@ -490,12 +485,18 @@ async def _consultar_meta_documento(
     return await backend.consultar_documento_interno(id_documento, processo)
 
 
+class _DocumentoRef(TypedDict):
+    """Identidade de um documento: id interno, tipo (I/X) e processo opcional."""
+
+    id: str
+    tipo_documento: str
+    processo: str | None
+
+
 async def _aplicar_gate_documento(
     ctx: Context | None,
     backend: _SEIBackendV2,
-    id_documento: str,
-    tipo_documento: str,
-    processo: str | None = None,
+    doc: _DocumentoRef,
     *,
     confirmou: bool,
 ) -> tuple[str, dict | None]:
@@ -514,16 +515,16 @@ async def _aplicar_gate_documento(
       - "bloquear": retorne payload (JSON de bloqueio) ao caller
       - "recusou": retorne payload (JSON de recusa) ao caller
     """
-    meta = await _consultar_meta_documento(backend, id_documento, tipo_documento, processo)
+    meta = await _consultar_meta_documento(
+        backend, doc["id"], doc["tipo_documento"], doc["processo"]
+    )
 
     nivel, hipotese = access_control.extrair_nivel(meta)
     if nivel is None:
         nivel = access_control.extrair_nivel_web(meta)
     alvo = {
         "tipo": "documento",
-        "id": str(id_documento),
-        "tipo_documento": tipo_documento,
-        "processo": processo,
+        **doc,
     }
 
     if not access_control.precisa_disclaimer(nivel):
@@ -559,6 +560,44 @@ async def _resolver_processo(client: SEIClient, referencia: str) -> str:
     return referencia
 
 
+async def _buscar_documento_em_processo(
+    client: SEIClient, id_proc: str, referencia: str
+) -> tuple[str, str] | None:
+    """Busca um documento pelo protocoloFormatado dentro de um processo.
+
+    Retorna (id_documento, tipo) ou None se não encontrado.
+    """
+    try:
+        docs = await client.listar_documentos(id_proc, limit=200)
+        ref_norm = referencia.lstrip("0")
+        for d in docs:
+            proto = d.get("atributos", {}).get("protocoloFormatado", "")
+            if proto == referencia or proto.lstrip("0") == ref_norm:
+                doc_id = str(d.get("id", ""))
+                if doc_id:
+                    tipo = d.get("atributos", {}).get("tipoDocumento", "I")
+                    return doc_id, tipo
+    except (SEIError, httpx.RequestError):
+        pass
+    return None
+
+
+async def _buscar_documento_via_solr(client: SEIClient, referencia: str) -> tuple[str, str] | None:
+    """Pesquisa um documento via Solr. Retorna (id, tipo) ou None se não encontrado."""
+    try:
+        result = await client.pesquisar_processos(palavras_chave=referencia, limit=20)
+        for p in result.get("processos", []):
+            id_proc = str(p.get("idProcedimento", ""))
+            if not id_proc:
+                continue
+            found = await _buscar_documento_em_processo(client, id_proc, referencia)
+            if found is not None:
+                return found
+    except (SEIError, httpx.RequestError):
+        pass
+    return None
+
+
 async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, str]:
     """Resolve uma referência de documento para (id_interno, tipo_documento).
 
@@ -580,28 +619,9 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
     referencia = referencia.strip()
 
     # Estratégia 1: Pesquisa Solr (mais confiável, evita confusão id/proto)
-    try:
-        result = await client.pesquisar_processos(palavras_chave=referencia, limit=20)
-        processos = result.get("processos", [])
-
-        for p in processos:
-            id_proc = str(p.get("idProcedimento", ""))
-            if not id_proc:
-                continue
-            try:
-                docs = await client.listar_documentos(id_proc, limit=200)
-                for d in docs:
-                    proto = d.get("atributos", {}).get("protocoloFormatado", "")
-                    if proto == referencia or proto.lstrip("0") == referencia.lstrip("0"):
-                        doc_id = str(d.get("id", ""))
-                        if not doc_id:
-                            continue
-                        tipo = d.get("atributos", {}).get("tipoDocumento", "I")
-                        return doc_id, tipo
-            except (SEIError, httpx.RequestError):
-                continue
-    except (SEIError, httpx.RequestError):
-        pass
+    solr_result = await _buscar_documento_via_solr(client, referencia)
+    if solr_result is not None:
+        return solr_result
 
     # Estratégia 2: Tentar como id direto (para quando o usuário informa o id interno)
     # Só tenta se o Solr não encontrou nada — para evitar confusão

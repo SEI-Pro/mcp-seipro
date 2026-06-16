@@ -12,7 +12,6 @@ import sqlite3
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +74,7 @@ class CatalogCache:
         )
         return hashlib.sha256(payload.encode()).hexdigest()
 
-    async def get(self, namespace: dict[str, str], key: str) -> Any:
+    async def get(self, namespace: dict[str, str], key: str) -> object | None:
         """Retorna um valor válido ou None em miss/falha do cache (executado em thread worker)."""
         try:
             return await asyncio.to_thread(self._get_sync, namespace, key)
@@ -83,7 +82,7 @@ class CatalogCache:
             logger.warning("Falha ao ler cache de catalogos", exc_info=True)
         return None
 
-    def _get_sync(self, namespace: dict[str, str], key: str) -> Any:
+    def _get_sync(self, namespace: dict[str, str], key: str) -> object | None:
         db_key = self.make_key(namespace, key)
         now = time.time()
         with sqlite3.connect(self.db_path) as conn:
@@ -100,14 +99,14 @@ class CatalogCache:
                 conn.execute("DELETE FROM catalogs WHERE key = ?", (db_key,))
         return None
 
-    async def set(self, namespace: dict[str, str], key: str, value: Any) -> None:
+    async def set(self, namespace: dict[str, str], key: str, value: object) -> None:
         """Persista uma resposta bem-sucedida pelo TTL padrão (executado em thread worker)."""
         try:
             await asyncio.to_thread(self._set_sync, namespace, key, value)
         except (sqlite3.Error, json.JSONDecodeError):
             logger.warning("Falha ao gravar cache de catalogos", exc_info=True)
 
-    def _set_sync(self, namespace: dict[str, str], key: str, value: Any) -> None:
+    def _set_sync(self, namespace: dict[str, str], key: str, value: object) -> None:
         db_key = self.make_key(namespace, key)
         val_str = json.dumps(value, ensure_ascii=False)
         now = time.time()

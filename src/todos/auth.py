@@ -24,6 +24,7 @@ import logging
 import os
 import secrets
 import time
+from typing import cast
 
 from fastmcp.server.auth import AccessToken, OAuthProvider
 from mcp.server.auth.provider import (
@@ -49,13 +50,6 @@ logger = logging.getLogger(__name__)
 _JWT_SECRET_MIN_LEN = 32
 
 _JWT_SECRET = os.environ.get("JWT_SECRET", "")
-if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
-    _jwt_config_err = (
-        f"JWT_SECRET deve ter pelo menos {_JWT_SECRET_MIN_LEN} caracteres "
-        f"(atual: {len(_JWT_SECRET)}). "
-        'Gere um com: python -c "import secrets; print(secrets.token_hex(32))"'
-    )
-    raise RuntimeError(_jwt_config_err)
 
 _JWT_CONFIG_ERR = (
     "JWT_SECRET não configurado ou muito curto — "
@@ -64,6 +58,17 @@ _JWT_CONFIG_ERR = (
 TOKEN_TTL = 86400 * 30  # 30 dias
 _JWT_PARTS = 2  # JWT tokens have exactly 2 parts: payload.signature
 _BEARER_SCHEME = "Bearer"  # RFC 6750 §6.1.1 token type string
+
+
+def validate_jwt_secret() -> None:
+    """Raise RuntimeError if JWT_SECRET is absent or shorter than the minimum.
+
+    Call this at HTTP server startup (run_remote) for fail-fast behaviour.
+    Not called at import time so the module stays importable in test environments.
+    """
+    if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+        raise RuntimeError(_JWT_CONFIG_ERR)
+
 
 # ---------------------------------------------------------------------------
 # Auth code persistence (§31.3 — persiste no SQLite para sobreviver restarts)
@@ -93,7 +98,7 @@ async def _load_auth_code(code: str) -> dict | None:
     if entry is None:
         # Miss — tenta disco (sobrevivência após restart)
         cache = get_catalog_cache()
-        entry = await cache.get({"module": "auth"}, f"code:{code}")
+        entry = cast("dict | None", await cache.get({"module": "auth"}, f"code:{code}"))
     if entry is None:
         return None
     if time.time() > entry.get("_expires", 0):

@@ -8,7 +8,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import cast
 from urllib.parse import urlparse
 
 import httpx
@@ -152,11 +152,11 @@ class SEIClient:
         await self._get_headers()
         return self._id_usuario or ""
 
-    async def _cache_get(self, key: str) -> Any:
+    async def _cache_get(self, key: str) -> object | None:
         """Retorna um catálogo persistido ou None."""
         return await self._catalog_cache.get(self._cache_namespace, key)
 
-    async def _cache_set(self, key: str, val: Any) -> None:
+    async def _cache_set(self, key: str, val: object) -> None:
         """Persista um catálogo retornado com sucesso pelo SEI."""
         await self._catalog_cache.set(self._cache_namespace, key, val)
 
@@ -672,7 +672,7 @@ class SEIClient:
         """
         cached = await self._cache_get("unidades_usuario")
         if cached is not None:
-            return cached
+            return cast("list[dict]", cached)
         resp = await self._request("GET", "/usuario/unidades")
         data = resp.json()
         if not data.get("sucesso"):
@@ -960,7 +960,7 @@ class SEIClient:
         if not filtro and not favoritos:
             cached = await self._cache_get(cache_key)
             if cached is not None:
-                return cached
+                return cast("dict", cached)
         params: dict = {"limit": limit, "start": start}
         if filtro:
             params["filter"] = filtro
@@ -1136,7 +1136,7 @@ class SEIClient:
         if not filtro and not favoritos:
             cached = await self._cache_get(cache_key)
             if cached is not None:
-                return cached
+                return cast("dict", cached)
         params: dict = {"limit": limit, "start": start}
         if filtro:
             params["filter"] = filtro
