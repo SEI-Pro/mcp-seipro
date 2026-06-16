@@ -27,7 +27,9 @@ from todos.mcp_app import (
     _json,
     mcp,
 )
+from todos.remote import run_remote
 from todos.sei_web_client import SEI_WEB_PAGE_SIZE
+from todos.setup_wizard import run_set_password, run_setup_wizard
 from todos.tools import (
     acompanhamento,
     assinatura,
@@ -573,8 +575,6 @@ def main() -> None:
         if not sys.stdin.isatty():
             sys.stderr.write("Erro: 'todos setup' requer um terminal interativo.\n")
             sys.exit(1)
-        from todos.setup_wizard import run_setup_wizard
-
         run_setup_wizard(force="--force" in sys.argv[2:])
         return
 
@@ -582,14 +582,10 @@ def main() -> None:
         if not sys.stdin.isatty():
             sys.stderr.write("Erro: 'todos set-password' requer um terminal interativo.\n")
             sys.exit(1)
-        from todos.setup_wizard import run_set_password
-
         run_set_password()
         return
 
     if _http_mode:
-        from todos.remote import run_remote
-
         run_remote(mcp, port=_http_port)
     else:
         mcp.run(transport="stdio", show_banner=False)

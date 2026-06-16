@@ -47,6 +47,7 @@ from todos.mcp_app import (
     MAX_BINARY_SIZE,
     _aplicar_gate_documento,
     _backend,
+    _DocumentoRef,
     _get_client,
     _has_rest,
     _http_mode,
@@ -119,7 +120,10 @@ async def _ler_documento_via_backend(
     """
     gate_tipo = "X" if tipo_documento == "X" else "I"
     acao, payload = await _aplicar_gate_documento(
-        ctx, backend, str(id_documento), gate_tipo, processo, confirmou=confirmou
+        ctx,
+        backend,
+        _DocumentoRef(id=str(id_documento), tipo_documento=gate_tipo, processo=processo),
+        confirmou=confirmou,
     )
     if acao in ("bloquear", "recusou"):
         return _json(payload)
@@ -258,7 +262,10 @@ async def sei_baixar_anexo(
             raise SEIValidationError(msg)
 
         acao, payload = await _aplicar_gate_documento(
-            ctx, backend, str(id_documento), "X", processo, confirmou=confirmar_acesso_restrito
+            ctx,
+            backend,
+            _DocumentoRef(id=str(id_documento), tipo_documento="X", processo=processo),
+            confirmou=confirmar_acesso_restrito,
         )
         if acao in ("bloquear", "recusou"):
             return _json(payload)
