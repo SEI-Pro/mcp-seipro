@@ -262,7 +262,7 @@ async def sei_resumo_processos(
         # Agrupar
         grupos: dict = {}
         for p in todos:
-            a = p.get("atributos", {})
+            a = p.get("atributos") or {}
             s = a.get("status", {})
             chave1 = cast(Callable[..., str], campo1["extract"])(a, s)
 
