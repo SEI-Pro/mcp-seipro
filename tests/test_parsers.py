@@ -40,6 +40,7 @@ class TestParseDocLabel:
     def test_empty_string(self) -> None:
         result = _parse_doc_label("")
         assert isinstance(result, dict)
+        assert result == {}, f"Label vazio deve retornar dict vazio, retornou: {result!r}"
 
     def test_no_number(self) -> None:
         result = _parse_doc_label("Memorando")
@@ -262,34 +263,32 @@ class TestParseArvoreNos:
         assert result == []
 
     def test_returns_list_type(self) -> None:
-        assert isinstance(parse_arvore_nos(""), list)
+        result = parse_arvore_nos("")
+        assert isinstance(result, list)
+        assert result == [], f"String vazia deve retornar lista vazia, retornou: {result!r}"
 
     def test_minimal_nos_structure(self) -> None:
         js = r"""
         Nos = [];
-        Nos[0] = new Object();
-        Nos[0].id = 'proctipo';
-        Nos[0].label = 'Processo';
-        Nos[0].acoes = '<span></span>';
-        Nos[0].conteudo = '';
+        Nos[0] = new infraArvoreNo('proctipo', 'id123', null, '', '', 'Processo', '', '');
         """
         result = parse_arvore_nos(js)
         assert isinstance(result, list)
+        assert len(result) == 1, f"Esperado 1 nó, obtido {len(result)}: {result!r}"
+        assert result[0]["tipo_no"] == "proctipo", f"tipo_no inesperado: {result[0]!r}"
+        assert result[0]["id"] == "id123", f"id inesperado: {result[0]!r}"
 
     def test_full_nos_with_link(self) -> None:
         js = r"""
         Nos = [];
-        Nos[0] = new Object();
-        Nos[0].id = 'proctipo';
-        Nos[0].label = 'Processo 0001.000001\/2024-01';
-        Nos[0].acoes = '<a href=\"controlador.php?acao=procedimento_concluir&id_procedimento=123&infra_hash=abc\">Concluir<\/a>';
-        Nos[0].conteudo = '';
-        Nos[1] = new Object();
-        Nos[1].id = 'doc456';
-        Nos[1].label = 'Despacho';
-        Nos[1].acoes = '';
-        Nos[1].conteudo = '';
+        Nos[0] = new infraArvoreNo('proctipo', 'proc0001', null, 'controlador.php?acao=procedimento_concluir&id_procedimento=123&infra_hash=abc', '_self', 'Processo 0001.000001\/2024-01', 'tooltip', 'icone.gif');
+        Nos[1] = new infraArvoreNo('doc', 'doc456', 'proc0001', '', '_self', 'Despacho', '', '');
         """
         result = parse_arvore_nos(js)
         assert isinstance(result, list)
-        # At minimum the parser shouldn't crash
+        assert len(result) == 2, f"Esperados 2 nós, obtidos {len(result)}: {result!r}"
+        assert result[0]["tipo_no"] == "proctipo", f"tipo_no do nó raiz inesperado: {result[0]!r}"
+        assert result[0]["id"] == "proc0001", f"id do nó raiz inesperado: {result[0]!r}"
+        assert "Processo" in result[0]["label"], f"label do nó raiz inesperado: {result[0]!r}"
+        assert result[1]["tipo_no"] == "doc", f"tipo_no do nó documento inesperado: {result[1]!r}"
+        assert result[1]["id"] == "doc456", f"id do nó documento inesperado: {result[1]!r}"
