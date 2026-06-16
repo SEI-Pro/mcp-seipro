@@ -73,6 +73,14 @@ def _check(r: httpx.Response) -> None:
         raise SEIValidationError(str(exc)) from exc
 
 
+def _safe_int(val: str, default: int = 0) -> int:
+    """Convert val to int, returning default on ValueError (e.g. server returns 'N/A')."""
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+
 def _extrair_erro_sei(html: str) -> str | None:
     """Extrai mensagem de erro do HTML do SEI, se houver.
 
@@ -305,10 +313,7 @@ class SEIWebClient:
     def itens_painel(self) -> int:
         """Total de itens no painel (0 antes do primeiro listar_processos)."""
         raw = self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0"
-        try:
-            return int(raw)
-        except ValueError:
-            return 0
+        return _safe_int(raw)
 
     @property
     def is_authenticated(self) -> bool:
@@ -341,7 +346,8 @@ class SEIWebClient:
                 asyncio.to_thread(keyring.get_password, "todos-mcp", keyring_user),
                 timeout=5.0,
             )
-        except (TimeoutError, ImportError, OSError, RuntimeError, ValueError):
+        except (TimeoutError, ImportError, OSError, RuntimeError, ValueError, AttributeError):
+            # AttributeError: Linux SecretService/dbus backend raises this on headless sessions
             return None
 
     async def login(self, *, _retry_keyring: bool = True) -> None:
@@ -373,7 +379,8 @@ class SEIWebClient:
                 logger.warning(
                     "Timeout ao buscar senha do keyring (>5s); use SEI_SENHA como fallback"
                 )
-            except (ImportError, OSError, RuntimeError, ValueError) as e:
+            except (ImportError, OSError, RuntimeError, ValueError, AttributeError) as e:
+                # AttributeError: Linux SecretService/dbus backend raises this on headless sessions
                 self._keyring_user = keyring_user  # restore: transient error, allow retry
                 logger.warning("Não foi possível obter a senha do keyring: %s", e)
 
@@ -1668,10 +1675,9 @@ class SEIWebClient:
             tentados[mid] = self._split_marcador_desc(desc)[0]
             self._invalidar_arvore(protocolo)
         else:
-            logger.warning(
-                "Loop de remoção de marcador atingiu o limite de %d iterações para processo %s",
-                max_iter_marcador,
-                protocolo,
+            raise SEIConnectionError(
+                f"Remoção de marcador interrompida após {max_iter_marcador} iterações "
+                f"para {protocolo}."
             )
         if not tentados:
             qual = f'"{marcador}" ' if marcador else ""
@@ -2719,10 +2725,7 @@ class SEIWebClient:
                     }
             seen += len(rows)
             _raw_total = self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0"
-            try:
-                total = int(_raw_total)
-            except ValueError:
-                total = 0
+            total = _safe_int(_raw_total)
             # `total == 0` quando o hidden não existe nesta instância — nesse caso
             # pagina até esvaziar (senão `seen >= 0` quebraria já na página 0).
             if not rows or (total > 0 and seen >= total):
@@ -3680,12 +3683,6 @@ class SEIWebClient:
         # total_itens: vem dos hidden fields hdn{Selecao}NroItens (capturados
         # pelo _extract_main_form via fetch_inbox). Esses campos têm o total
         # da seleção atual no servidor, não só da página visível.
-        def _safe_int(val: str) -> int:
-            try:
-                return int(val)
-            except ValueError:
-                return 0
-
         if layout == "detalhada":
             total_servidor = _safe_int(self._form_hidden.get("hdnDetalhadoNroItens", "0") or "0")
         else:
@@ -3913,10 +3910,9 @@ class SEIWebClient:
             removidos += 1
             self._invalidar_arvore(protocolo)
         else:
-            logger.warning(
-                "Loop de remoção de acompanhamento atingiu o limite de %d iterações para processo %s",
-                max_iter_acompanhamento,
-                protocolo,
+            raise SEIConnectionError(
+                f"Remoção de acompanhamento interrompida após {max_iter_acompanhamento} iterações "
+                f"para {protocolo}. {removidos} removido(s); verifique se há mais."
             )
         if removidos == 0:
             raise SEINotFoundError(f"Nenhum acompanhamento especial aplicado em {protocolo}.")

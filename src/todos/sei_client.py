@@ -205,7 +205,8 @@ class SEIClient:
                 logger.warning(
                     "Timeout ao buscar senha do keyring (>5s); use SEI_SENHA como fallback"
                 )
-            except (ImportError, OSError, RuntimeError, ValueError) as e:
+            except (ImportError, OSError, RuntimeError, ValueError, AttributeError) as e:
+                # AttributeError: Linux SecretService/dbus backend raises this on headless sessions
                 self._keyring_user = keyring_user  # restore: transient error, allow retry
                 logger.warning("Não foi possível obter a senha do keyring: %s", e)
 

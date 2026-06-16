@@ -46,7 +46,10 @@ class BlocosWeb(_WebMixin):
             except (SEIError, httpx.HTTPError) as exc:
                 erros.append(f"{id_doc}: {exc}")
         if erros:
-            msg = f"Falha ao retirar {len(erros)} documento(s): {'; '.join(erros)}"
+            msg = (
+                f"Falha ao retirar {len(erros)} de {len(ids)} documento(s): {'; '.join(erros)}. "
+                f"{len(resultados)} retirado(s) com sucesso."
+            )
             raise SEIError(msg)
         return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
 
@@ -66,7 +69,10 @@ class BlocosWeb(_WebMixin):
             except (SEIError, httpx.HTTPError) as exc:
                 erros.append(f"{id_bloco}: {exc}")
         if erros:
-            msg = f"Falha ao excluir {len(erros)} bloco(s): {'; '.join(erros)}"
+            msg = (
+                f"Falha ao excluir {len(erros)} de {len(ids)} bloco(s): {'; '.join(erros)}. "
+                f"{len(resultados)} excluído(s) com sucesso."
+            )
             raise SEIError(msg)
         return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
 
@@ -82,7 +88,10 @@ class BlocosWeb(_WebMixin):
             except (SEIError, httpx.HTTPError) as exc:
                 erros.append(f"{id_bloco}: {exc}")
         if erros:
-            msg = f"Falha ao concluir {len(erros)} bloco(s): {'; '.join(erros)}"
+            msg = (
+                f"Falha ao concluir {len(erros)} de {len(ids)} bloco(s): {'; '.join(erros)}. "
+                f"{len(resultados)} concluído(s) com sucesso."
+            )
             raise SEIError(msg)
         return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
 
