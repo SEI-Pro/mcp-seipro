@@ -9,6 +9,7 @@ import httpx
 from fastmcp import Context
 
 from todos.backends import EnvioProcesso
+from todos.backends.models import FiltroListagemProcessos, FiltrosPesquisaProcessos
 from todos.exceptions import (
     SEIConnectionError,
     SEIError,
@@ -320,10 +321,9 @@ async def sei_resumo_processos(
             if ctx:
                 await ctx.report_progress(len(todos), None, f"Buscando página {pg + 1}…")
             result = await client.listar_processos(
-                limit=200,
-                start=pg,
-                apenas_meus=apenas_meus,
-                filtro=filtro,
+                FiltroListagemProcessos(
+                    limit=200, pagina=pg, apenas_meus=apenas_meus, filtro=filtro
+                )
             )
             todos.extend(result["processos"])
             if not result.get("tem_proxima"):
@@ -393,17 +393,19 @@ async def sei_pesquisar_processos(
     try:
         client = await _get_client(ctx)
         result = await client.pesquisar_processos(
-            palavras_chave=palavras_chave,
-            descricao=descricao,
-            busca_rapida=busca_rapida,
-            data_inicio=data_inicio,
-            data_fim=data_fim,
-            sta_tipo_data=sta_tipo_data,
-            id_unidade_geradora=id_unidade_geradora,
-            id_assunto=id_assunto,
-            grupo=grupo,
-            limit=limit,
-            start=pagina,
+            FiltrosPesquisaProcessos(
+                palavras_chave=palavras_chave,
+                descricao=descricao,
+                busca_rapida=busca_rapida,
+                data_inicio=data_inicio,
+                data_fim=data_fim,
+                sta_tipo_data=sta_tipo_data,
+                id_unidade_geradora=id_unidade_geradora,
+                id_assunto=id_assunto,
+                grupo=grupo,
+                limit=limit,
+                pagina=pagina,
+            )
         )
         return _json(result)
     except (ValueError, httpx.UnsupportedProtocol):

@@ -60,6 +60,8 @@ class EnvioProcesso:
     enviar_email: str = "N"
     data_retorno: str = ""
     dias_retorno: str = ""
+    dias_uteis_retorno: str = "S"
+    reabrir: str = "N"
 
 
 @dataclass(frozen=True)
@@ -85,3 +87,35 @@ class NovoDocumentoExterno:
     data_elaboracao: str = ""
     nivel_acesso: str = "0"
     hipotese_legal: str = ""
+
+
+@dataclass(frozen=True)
+class FiltroListagemProcessos:
+    """Filtros para listagem de processos da unidade."""
+
+    pagina: int = 0
+    limit: int = 50
+    tipo: str = ""
+    usuario: str = ""
+    apenas_meus: str = ""
+    filtro: str = ""
+
+    def __post_init__(self) -> None:
+        """Valida os campos numéricos."""
+        if self.limit < 1:
+            msg = f"limit deve ser >= 1, recebido: {self.limit}"
+            raise ValueError(msg)
+        if self.pagina < 0:
+            msg = f"pagina deve ser >= 0, recebido: {self.pagina}"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class CredenciaisAssinatura:
+    """Credenciais para assinatura eletrônica de documentos ou blocos."""
+
+    login: str
+    senha: str
+    cargo: str
+    orgao: str = ""
+    id_usuario: str = ""
