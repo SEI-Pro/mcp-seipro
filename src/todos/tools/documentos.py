@@ -26,7 +26,12 @@ from fastmcp import Context
 from todos import access_control
 from todos.backends import NovoDocumentoExterno, NovoDocumentoInterno
 from todos.backends.base import SEIBackend
-from todos.exceptions import SEIConnectionError, SEIError, SEIValidationError
+from todos.exceptions import (
+    SEIConnectionError,
+    SEINotFoundError,
+    SEIPermissionError,
+    SEIValidationError,
+)
 from todos.html_utils import (
     html_to_markdown,
     html_to_text,
@@ -55,6 +60,21 @@ from todos.sei_styles import (
 )
 
 
+def _aplicar_disclaimer(conteudo: str, disclaimer: dict | None, formato: str) -> str:
+    """Aplica o disclaimer de classificação ao conteúdo conforme o formato.
+
+    Delega para o helper correto de access_control (markdown / texto / html).
+    Retorna `conteudo` sem modificação quando `disclaimer` é None.
+    """
+    if not disclaimer:
+        return conteudo
+    if formato == "markdown":
+        return access_control.prefixar_markdown(disclaimer, conteudo)
+    if formato == "texto":
+        return access_control.prefixar_texto(disclaimer, conteudo)
+    return access_control.envelopar_html(disclaimer, conteudo)
+
+
 def _formatar_doc_externo(content: bytes, formato: str, disclaimer: dict | None) -> str:
     """Formata conteúdo de documento externo (PDF) com disclaimer opcional."""
     if len(content) > MAX_BINARY_SIZE:
@@ -67,31 +87,17 @@ def _formatar_doc_externo(content: bytes, formato: str, disclaimer: dict | None)
         msg = "Documento externo não é PDF. Use sei_baixar_anexo para obter o arquivo em base64."
         raise SEIValidationError(msg)
     if formato == "markdown":
-        resultado = pdf_to_markdown(content)
-        if disclaimer:
-            resultado = access_control.prefixar_markdown(disclaimer, resultado)
-        return resultado
-    resultado = pdf_to_text(content)
-    if disclaimer:
-        resultado = access_control.prefixar_texto(disclaimer, resultado)
-    return resultado
+        return _aplicar_disclaimer(pdf_to_markdown(content), disclaimer, formato)
+    return _aplicar_disclaimer(pdf_to_text(content), disclaimer, formato)
 
 
 def _formatar_doc_interno(raw: str, formato: str, disclaimer: dict | None) -> str:
     """Formata conteúdo de documento interno (HTML) com disclaimer opcional."""
     if formato == "markdown":
-        resultado = html_to_markdown(raw)
-        if disclaimer:
-            resultado = access_control.prefixar_markdown(disclaimer, resultado)
-        return resultado
+        return _aplicar_disclaimer(html_to_markdown(raw), disclaimer, formato)
     if formato == "texto":
-        resultado = html_to_text(raw)
-        if disclaimer:
-            resultado = access_control.prefixar_texto(disclaimer, resultado)
-        return resultado
-    if disclaimer:
-        return access_control.envelopar_html(disclaimer, raw)
-    return raw
+        return _aplicar_disclaimer(html_to_text(raw), disclaimer, formato)
+    return _aplicar_disclaimer(raw, disclaimer, formato)
 
 
 async def _ler_documento_via_backend(
@@ -123,7 +129,7 @@ async def _ler_documento_via_backend(
     if tipo_documento == "auto":
         try:
             raw = await backend.visualizar_documento_interno(str(id_documento), processo)
-        except (SEIError, httpx.HTTPError):
+        except (SEINotFoundError, SEIPermissionError):
             content = await backend.baixar_anexo(str(id_documento), processo)
             return _formatar_doc_externo(content, formato, disclaimer)
         return _formatar_doc_interno(raw, formato, disclaimer)
