@@ -19,15 +19,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
 import os
 import re
 import time
 import warnings
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
+from urllib.parse import quote as _quote
 
 import httpx
+
+try:
+    import keyring as _keyring
+except ImportError:
+    _keyring = None  # type: ignore[assignment]
+
 from bs4 import BeautifulSoup, Tag
 
 from todos.exceptions import (
@@ -291,6 +300,7 @@ class SEIWebClient:
 
         # SEI_ORGAO no .env é o id da REST (geralmente "0"). O selOrgao do SIP
         # é descoberto dinamicamente do <select> na página de login.
+        self._sei_orgao = sei_orgao  # stored for API parity with SEIClient; not used by web flow
         self._sigla_orgao = sei_sigla_orgao or os.environ.get("SEI_SIGLA_ORGAO", "ANTAQ")
         self._sigla_sistema = sei_sigla_sistema or os.environ.get("SEI_SIGLA_SISTEMA", "SEI")
         # SEI_SIGLA_ORGAO_SISTEMA: parâmetro da URL do SIP login (ex: "RO" para Rondônia).
@@ -401,14 +411,14 @@ class SEIWebClient:
 
     async def _ler_senha_keyring(self, keyring_user: str) -> str | None:
         """Lê a senha do keyring (com timeout); None em caso de erro/ausência."""
+        if _keyring is None:
+            return None
         try:
-            import keyring
-
             return await asyncio.wait_for(
-                asyncio.to_thread(keyring.get_password, "todos-mcp", keyring_user),
+                asyncio.to_thread(_keyring.get_password, "todos-mcp", keyring_user),
                 timeout=5.0,
             )
-        except (TimeoutError, ImportError, OSError, RuntimeError, ValueError, AttributeError):
+        except (TimeoutError, OSError, RuntimeError, ValueError, AttributeError):
             # AttributeError: Linux SecretService/dbus backend raises this on headless sessions
             return None
 
@@ -423,28 +433,27 @@ class SEIWebClient:
         if not self._senha and self._keyring_user:
             keyring_user = self._keyring_user
             self._keyring_user = None  # prevent concurrent / empty-string repeated lookups
-            try:
-                import keyring
-
-                senha = await asyncio.wait_for(
-                    asyncio.to_thread(keyring.get_password, "todos-mcp", keyring_user),
-                    timeout=5.0,
-                )
-                if senha:
-                    self._senha = senha
-                    _senha_source = f"keyring (chave: {keyring_user!r})"
-                else:
-                    _senha_source = f"keyring (chave {keyring_user!r} não encontrada)"
-                # _keyring_user stays None: keyring answered definitively (found or not found)
-            except TimeoutError:
-                self._keyring_user = keyring_user  # restore: transient timeout, allow retry
-                logger.warning(
-                    "Timeout ao buscar senha do keyring (>5s); use SEI_SENHA como fallback"
-                )
-            except (ImportError, OSError, RuntimeError, ValueError, AttributeError) as e:
-                # AttributeError: Linux SecretService/dbus backend raises this on headless sessions
-                self._keyring_user = keyring_user  # restore: transient error, allow retry
-                logger.warning("Não foi possível obter a senha do keyring: %s", e)
+            if _keyring is not None:
+                try:
+                    senha = await asyncio.wait_for(
+                        asyncio.to_thread(_keyring.get_password, "todos-mcp", keyring_user),
+                        timeout=5.0,
+                    )
+                    if senha:
+                        self._senha = senha
+                        _senha_source = f"keyring (chave: {keyring_user!r})"
+                    else:
+                        _senha_source = f"keyring (chave {keyring_user!r} não encontrada)"
+                    # _keyring_user stays None: keyring answered definitively (found or not found)
+                except TimeoutError:
+                    self._keyring_user = keyring_user  # restore: transient timeout, allow retry
+                    logger.warning(
+                        "Timeout ao buscar senha do keyring (>5s); use SEI_SENHA como fallback"
+                    )
+                except (OSError, RuntimeError, ValueError, AttributeError) as e:
+                    # AttributeError: Linux SecretService/dbus backend raises this on headless sessions
+                    self._keyring_user = keyring_user  # restore: transient error, allow retry
+                    logger.warning("Não foi possível obter a senha do keyring: %s", e)
 
         if not self.sei_root:
             msg = (
@@ -2466,6 +2475,7 @@ class SEIWebClient:
         O parâmetro `apenas_unidade` é ignorado — o form mostra apenas
         usuários da unidade atual (equivalente a apenas_unidade=True).
         """
+        _ = apenas_unidade  # web form always returns unit users; kept for SEIClient API parity
         await self.ensure_authenticated()
         async with self._form_lock:
             _has_links = bool(self._trabalhar_links)
@@ -3573,9 +3583,6 @@ class SEIWebClient:
             {"sucesso": True, "url_final": str}
             ou {"tipos_disponiveis": [{id, nome}, ...]} se id_serie=None
         """
-        import mimetypes
-        from datetime import date as _date
-
         await self.ensure_authenticated()
 
         async with self._form_lock:
@@ -3735,15 +3742,16 @@ class SEIWebClient:
             if not arquivo_path:
                 msg = "Informe arquivo_path ou conteudo"
                 raise ValueError(msg)
-            if not Path(arquivo_path).is_file():
+            _path = Path(arquivo_path)
+            if not await asyncio.to_thread(_path.is_file):
                 msg = f"Arquivo não encontrado ou não é regular: {arquivo_path}"
                 raise ValueError(msg)
-            if Path(arquivo_path).stat().st_size > self.MAX_UPLOAD_BYTES:
+            _stat = await asyncio.to_thread(_path.stat)
+            if _stat.st_size > self.MAX_UPLOAD_BYTES:
                 msg = f"Arquivo excede o limite de {self.MAX_UPLOAD_BYTES // 1024 // 1024} MB"
                 raise ValueError(msg)
-            nome = nome_arquivo or Path(arquivo_path).name
-            with Path(arquivo_path).open("rb") as f:
-                file_bytes = f.read(self.MAX_UPLOAD_BYTES + 1)
+            nome = nome_arquivo or _path.name
+            file_bytes = await asyncio.to_thread(_path.read_bytes)
         if len(file_bytes) > self.MAX_UPLOAD_BYTES:
             msg = f"Conteúdo excede o limite de {self.MAX_UPLOAD_BYTES // 1024 // 1024} MB"
             raise ValueError(msg)
@@ -3798,15 +3806,13 @@ class SEIWebClient:
         # SEI Pro extension usa ± (U+00B1) como separador, com encodeURIComponent
         # e remoção do byte alto UTF-8 (%C2) para manter %B1 (ISO-8859-1 ±).
         # O PHP servidor divide hdnAnexos em \xB1.
-        import urllib.parse as _up
-
         _sep = "%B1"  # ± URL-encoded como ISO-8859-1 (PHP split target)
 
         def _qpart(s: str) -> str:
             # '+' fora do safe → vira %2B ('+' literal no nome não pode chegar
             # cru ao corpo x-www-form-urlencoded, onde decodifica como espaço);
             # espaço → %20 → '+' (convenção form-urlencoded)
-            return _up.quote(s, safe="-.!~*'()_").replace("%20", "+")
+            return _quote(s, safe="-.!~*'()_").replace("%20", "+")
 
         hdn_anexos = _sep.join(
             [
@@ -3824,7 +3830,9 @@ class SEIWebClient:
         form4_data["hdnAnexos"] = ""  # placeholder — substituído abaixo
         form4_data["hdnIdSerie"] = id_serie
         form4_data["selSerie"] = id_serie
-        form4_data["txtDataElaboracao"] = data_elaboracao or _date.today().strftime("%d/%m/%Y")
+        form4_data["txtDataElaboracao"] = data_elaboracao or datetime.now(
+            tz=UTC
+        ).astimezone().date().strftime("%d/%m/%Y")
         form4_data[_FIELD_NIVEL_ACESSO_LOCAL] = nivel_acesso
         form4_data[_FIELD_NIVEL_ACESSO] = nivel_acesso
         if hipotese_legal and nivel_acesso in ("1", "2"):
@@ -3835,7 +3843,7 @@ class SEIWebClient:
 
         # Codifica todos os campos exceto hdnAnexos, depois concatena manualmente
         other_fields = {k: v for k, v in form4_data.items() if k != "hdnAnexos"}
-        raw_body = _up.urlencode(other_fields) + "&hdnAnexos=" + hdn_anexos
+        raw_body = urlencode(other_fields) + "&hdnAnexos=" + hdn_anexos
 
         r6 = await self._http.post(
             post4_url,
