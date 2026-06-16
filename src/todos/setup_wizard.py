@@ -87,17 +87,17 @@ def _detect_organs(
             resp = client.get(login_url)
             resp.raise_for_status()
     except httpx.RequestError:
-        print_yellow("[!] Alerta de Segurança: Falha ao estabelecer conexão SSL segura com o SEI.")
+        print_yellow("[!] Falha ao estabelecer conexão SSL segura com o SEI.")
         print_yellow(
             "    Isso ocorre comumente em redes governamentais com proxies ou certificados internos."
         )
-        print_red("AVISO DE SEGURANÇA:")
-        print_red(
-            "  Desativar a verificação SSL remove a proteção contra ataques de"
-            " interceptação (man-in-the-middle). Um atacante na mesma rede poderia"
-            " interceptar suas credenciais do SEI (usuário e senha) sem que você perceba."
+        sys.stderr.write(
+            "\033[91m"
+            "⚠️  AVISO DE SEGURANÇA: Desabilitar verificação SSL expõe suas credenciais\n"
+            "    a ataques de interceptação (man-in-the-middle). Use apenas em ambientes\n"
+            "    controlados (ex: rede corporativa com certificado auto-assinado conhecido).\n"
+            "\033[0m"
         )
-        print_red("  Utilize esta opção SOMENTE em redes controladas e de confiança.")
         confirm_ssl = (
             input("Deseja tentar a conexão desativando a verificação de certificado SSL? (s/n): ")
             .strip()

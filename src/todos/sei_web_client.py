@@ -4149,6 +4149,17 @@ _RE_DOC_LABEL = re.compile(
 
 _RE_TOOLTIP = re.compile(r"infraTooltipMostrar\(\s*'([^']*)'\s*,\s*'([^']*)'\s*\)")
 
+# Colunas sem header textual na Visualização Detalhada do painel de processos do SEI.
+# A ordem é invariante: checkbox / ícones de status / link do processo / atribuição.
+# Colunas além do índice 3 recebem nome genérico ("col4", "col5"…) e dependem da
+# configuração do painel de cada usuário.
+_COLUNAS_DETALHADA: dict[int, str] = {
+    0: "_check",
+    1: "icones",
+    2: "_processo",
+    3: "atribuicao",
+}
+
 
 def _parse_doc_label(label: str) -> dict:
     """Parseia o label de um nó DOCUMENTO da árvore do SEI.
@@ -4245,9 +4256,7 @@ def parse_inbox(html: str) -> tuple[str, list[dict]]:
             if h:
                 col_names.append(h)
             else:
-                col_names.append(
-                    {0: "_check", 1: "icones", 2: "_processo", 3: "atribuicao"}.get(i, f"col{i}")
-                )
+                col_names.append(_COLUNAS_DETALHADA.get(i, f"col{i}"))
 
         for tr in tbl.find_all("tr", id=re.compile(r"^P\d+$")):
             tds = tr.find_all("td", recursive=False)
