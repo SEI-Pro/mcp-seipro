@@ -24,6 +24,7 @@ import logging
 import os
 import secrets
 import time
+from typing import cast
 
 from fastmcp.server.auth import AccessToken, OAuthProvider
 from mcp.server.auth.provider import (
@@ -86,7 +87,7 @@ async def _load_auth_code(code: str) -> dict | None:
     if entry is None:
         # Miss — tenta disco (sobrevivência após restart)
         cache = get_catalog_cache()
-        entry = await cache.get({"module": "auth"}, f"code:{code}")
+        entry = cast("dict | None", await cache.get({"module": "auth"}, f"code:{code}"))
     if entry is None:
         return None
     if time.time() > entry.get("_expires", 0):
