@@ -182,6 +182,11 @@ def test_backends_construct_without_network() -> None:
 class _FakeRest(SEIBackend):
     name = "rest"
 
+    def __getattr__(self, name: str) -> object:
+        """Raise for any attribute not explicitly defined on this fake."""
+        msg = f"_FakeRest.{name} not implemented — add it explicitly if needed by this test"
+        raise NotImplementedError(msg)
+
     async def verificar_acesso(self, processo: str) -> dict:
         return {"src": "rest", "processo": processo}
 
@@ -194,6 +199,11 @@ class _FakeRest(SEIBackend):
 
 class _FakeWeb(SEIBackend):
     name = "web"
+
+    def __getattr__(self, name: str) -> object:
+        """Raise for any attribute not explicitly defined on this fake."""
+        msg = f"_FakeWeb.{name} not implemented — add it explicitly if needed by this test"
+        raise NotImplementedError(msg)
 
     async def verificar_acesso(self, processo: str) -> dict:
         return {"src": "web", "processo": processo}

@@ -135,9 +135,14 @@ def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
     """
     import pytesseract
     from pdf2image import convert_from_bytes
+    from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError
 
     lang = lang or OCR_LANG
-    images = convert_from_bytes(content, dpi=200)
+    try:
+        images = convert_from_bytes(content, dpi=200)
+    except (PDFInfoNotInstalledError, PDFPageCountError) as e:
+        msg = f"poppler não instalado ou PDF inválido: {e}"
+        raise OSError(msg) from e
     pages = []
     limit = min(len(images), MAX_OCR_PAGES)
     for i, img in enumerate(images[:limit], 1):
@@ -160,17 +165,26 @@ def _extract_pdf_pages(content: bytes) -> list[tuple[int, str]]:
     """Extrai texto de PDF, usando pdfplumber primeiro e OCR como fallback.
 
     Retorna lista de (num_pagina, texto).
+    Retorna lista vazia se o conteúdo não é um PDF válido ou está vazio.
     """
     import io
 
     import pdfplumber
+    from pdfplumber.utils.exceptions import PdfminerException
 
     pages = []
-    with pdfplumber.open(io.BytesIO(content)) as pdf:
-        for i, page in enumerate(pdf.pages, 1):
-            text = page.extract_text()
-            if text and text.strip():
-                pages.append((i, text.strip()))
+    try:
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            for i, page in enumerate(pdf.pages, 1):
+                text = page.extract_text()
+                if text and text.strip():
+                    pages.append((i, text.strip()))
+    except (PdfminerException, ValueError, OSError) as e:
+        logger.warning(
+            "pdfplumber falhou (%s: %s) — tentando OCR",
+            type(e).__name__,
+            e,
+        )
 
     if pages:
         return pages
