@@ -88,20 +88,10 @@ ignore = [
 "src/todos/catalog_cache.py" = [
     # Cache stores arbitrary JSON-deserializable values; Any is the correct type
     "ANN401",
-    # random.random() used for probabilistic sweep (not crypto); S311 doesn't apply here
-    "S311",
 ]
 "src/todos/setup_wizard.py" = [
     # subprocess calls use sys.executable or controlled Path objects — not shell injection
     "S603",
-]
-"src/todos/auth.py" = [
-    # base64/TokenError are conditional imports loaded only when the auth flow is exercised
-    "PLC0415",
-    # token_type="Bearer" is the RFC 6750 standard string, not a credential
-    "S106",
-    # len(parts) != 2 checks JWT structure (header.signature); constant would add no clarity
-    "PLR2004",
 ]
 "src/todos/sei_client.py" = [
     "TRY002", "TRY003", "EM101", "EM102",

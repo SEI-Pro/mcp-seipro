@@ -123,7 +123,7 @@ class TestExpiry:
                 (stale_key, "{}", time.time() - 100),
             )
         # Force the probabilistic sweep to run on the next write.
-        monkeypatch.setattr(cc.random, "random", lambda: 0.0)
+        monkeypatch.setattr(cc._rng, "random", lambda: 0.0)
         asyncio.run(cache.set(_NS, "fresh", {"v": 1}))
         with sqlite3.connect(cache.db_path) as conn:
             stale = conn.execute("SELECT 1 FROM catalogs WHERE key = ?", (stale_key,)).fetchone()

@@ -16,6 +16,7 @@ Variáveis de ambiente necessárias:
 """
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -29,11 +30,15 @@ from mcp.server.auth.provider import (
     AuthorizationCode,
     AuthorizationParams,
     RefreshToken,
+    TokenError,
     construct_redirect_uri,
 )
+from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from starlette.requests import Request
 from starlette.responses import HTMLResponse
+
+from todos.catalog_cache import get_catalog_cache
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,8 @@ _JWT_CONFIG_ERR = (
     "defina JWT_SECRET com pelo menos 32 caracteres antes de iniciar o servidor HTTP."
 )
 TOKEN_TTL = 86400 * 30  # 30 dias
+_JWT_PARTS = 2  # JWT tokens have exactly 2 parts: payload.signature
+_BEARER_SCHEME = "Bearer"  # RFC 6750 §6.1.1 token type string
 
 # ---------------------------------------------------------------------------
 # Auth code persistence (§31.3 — persiste no SQLite para sobreviver restarts)
@@ -70,8 +77,6 @@ async def _store_auth_code(code: str, data: dict) -> None:
 
     Write-through: grava em _auth_codes (memória) e no CatalogCache (disco).
     """
-    from todos.catalog_cache import get_catalog_cache
-
     entry = {**data, "_expires": time.time() + _AUTH_CODE_TTL}
     _auth_codes[code] = entry
     cache = get_catalog_cache()
@@ -83,8 +88,6 @@ async def _load_auth_code(code: str) -> dict | None:
 
     Retorna None se não encontrado ou expirado; remove a entrada expirada do SQLite.
     """
-    from todos.catalog_cache import get_catalog_cache
-
     # Memória primeiro (hit frequente)
     entry = _auth_codes.get(code)
     if entry is None:
@@ -103,8 +106,6 @@ async def _load_auth_code(code: str) -> dict | None:
 
 async def _delete_auth_code(code: str) -> None:
     """Remove um auth code da memória e do SQLite (uso único)."""
-    from todos.catalog_cache import get_catalog_cache
-
     _auth_codes.pop(code, None)
     cache = get_catalog_cache()
     await cache.delete({"module": "auth"}, f"code:{code}")
@@ -112,8 +113,6 @@ async def _delete_auth_code(code: str) -> None:
 
 def _sign(payload: dict) -> str:
     """Cria um token JWT-like: base64(payload).base64(signature)."""
-    import base64
-
     if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
         raise RuntimeError(_JWT_CONFIG_ERR)
     raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
@@ -123,12 +122,10 @@ def _sign(payload: dict) -> str:
 
 def _verify(token: str) -> dict | None:
     """Verifica e decodifica um token. Retorna None se invalido."""
-    import base64
-
     if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
         raise RuntimeError(_JWT_CONFIG_ERR)
     parts = token.split(".")
-    if len(parts) != 2:
+    if len(parts) != _JWT_PARTS:
         return None
     raw, sig = parts
     expected = hmac.new(_JWT_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
@@ -167,11 +164,6 @@ class SEIProOAuthProvider(OAuthProvider):
 
     def __init__(self, base_url: str) -> None:
         """Configura os endpoints OAuth para a URL pública do servidor."""
-        from mcp.server.auth.settings import (
-            ClientRegistrationOptions,
-            RevocationOptions,
-        )
-
         super().__init__(
             base_url=base_url,
             resource_base_url=base_url,
@@ -244,8 +236,6 @@ class SEIProOAuthProvider(OAuthProvider):
                 # Miss em memória — tenta disco (restart entre emissão e troca)
                 data = await _load_auth_code(f"code:{authorization_code.code}")
             if data is None:
-                from mcp.server.auth.provider import TokenError
-
                 raise TokenError(error="invalid_grant", error_description="Code not found")
             # Remove do disco para evitar replay
             await _delete_auth_code(f"code:{authorization_code.code}")
@@ -283,7 +273,7 @@ class SEIProOAuthProvider(OAuthProvider):
         return OAuthToken(
             access_token=access_token,
             refresh_token=refresh_token,
-            token_type="Bearer",
+            token_type=_BEARER_SCHEME,
             expires_in=int(TOKEN_TTL),
         )
 
@@ -316,8 +306,6 @@ class SEIProOAuthProvider(OAuthProvider):
         """Issue a new access + refresh token pair from a valid refresh token."""
         payload = _verify(refresh_token.token)
         if not payload:
-            from mcp.server.auth.provider import TokenError
-
             raise TokenError(error="invalid_grant", error_description="Invalid refresh token")
 
         sei_creds = payload["sei"]
@@ -350,7 +338,7 @@ class SEIProOAuthProvider(OAuthProvider):
         return OAuthToken(
             access_token=new_access,
             refresh_token=new_refresh,
-            token_type="Bearer",
+            token_type=_BEARER_SCHEME,
             expires_in=int(TOKEN_TTL),
         )
 
