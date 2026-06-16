@@ -121,13 +121,19 @@ def html_to_markdown(raw: str) -> str:
         return html_to_text(raw)
 
 
-_raw_max_ocr = os.environ.get("MAX_OCR_PAGES", "")
-try:
-    MAX_OCR_PAGES: int = int(_raw_max_ocr) if _raw_max_ocr else 20
-except ValueError as exc:
-    _err = f"MAX_OCR_PAGES deve ser um inteiro; recebido: {_raw_max_ocr!r}"
-    raise RuntimeError(_err) from exc
 OCR_LANG = os.environ.get("SEI_OCR_LANG", "por")
+
+
+def _max_ocr_pages() -> int:
+    """Retorna MAX_OCR_PAGES do ambiente, com validação lazy (não trava o import)."""
+    raw = os.environ.get("MAX_OCR_PAGES", "")
+    if not raw:
+        return 20
+    try:
+        return int(raw)
+    except ValueError as exc:
+        _err = f"MAX_OCR_PAGES deve ser um inteiro; recebido: {raw!r}"
+        raise RuntimeError(_err) from exc
 
 
 def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
@@ -146,17 +152,18 @@ def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
     except (PDFInfoNotInstalledError, PDFPageCountError) as e:
         msg = f"poppler não instalado ou PDF inválido: {e}"
         raise OSError(msg) from e
+    max_pages = _max_ocr_pages()
     pages = []
-    limit = min(len(images), MAX_OCR_PAGES)
+    limit = min(len(images), max_pages)
     for i, img in enumerate(images[:limit], 1):
         text = pytesseract.image_to_string(img, lang=lang)
         if text and text.strip():
             pages.append((i, text.strip()))
-    if len(images) > MAX_OCR_PAGES:
+    if len(images) > max_pages:
         pages.append(
             (
-                MAX_OCR_PAGES + 1,
-                f"[OCR limitado a {MAX_OCR_PAGES} páginas. "
+                max_pages + 1,
+                f"[OCR limitado a {max_pages} páginas. "
                 f"O documento tem {len(images)} páginas no total. "
                 f"Use sei_baixar_anexo para obter o PDF completo.]",
             )

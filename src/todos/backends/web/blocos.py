@@ -55,9 +55,9 @@ class BlocosWeb(_WebMixin):
         if erros and not resultados:
             msg = f"Falha ao retirar todos os documentos: {'; '.join(erros)}"
             raise SEIError(msg)
-        if erros:
-            logger.warning("Falha parcial ao retirar documentos do bloco: %s", "; ".join(erros))
-        return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
+        if len(resultados) == 1 and not erros:
+            return resultados[0]
+        return {"ok": True, "resultados": resultados, "erros": erros}
 
     async def alterar_bloco_assinatura(self, id_bloco: str, descricao: str) -> dict:
         """Altera a descrição de um bloco de assinatura."""
@@ -78,9 +78,9 @@ class BlocosWeb(_WebMixin):
         if erros and not resultados:
             msg = f"Falha ao excluir todos os blocos: {'; '.join(erros)}"
             raise SEIError(msg)
-        if erros:
-            logger.warning("Falha parcial ao excluir blocos de assinatura: %s", "; ".join(erros))
-        return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
+        if len(resultados) == 1 and not erros:
+            return resultados[0]
+        return {"ok": True, "resultados": resultados, "erros": erros}
 
     async def concluir_blocos_assinatura(self, ids_blocos: str) -> dict:
         """Conclui blocos de assinatura."""
@@ -97,9 +97,9 @@ class BlocosWeb(_WebMixin):
         if erros and not resultados:
             msg = f"Falha ao concluir todos os blocos: {'; '.join(erros)}"
             raise SEIError(msg)
-        if erros:
-            logger.warning("Falha parcial ao concluir blocos de assinatura: %s", "; ".join(erros))
-        return resultados[0] if len(resultados) == 1 else {"ok": True, "resultados": resultados}
+        if len(resultados) == 1 and not erros:
+            return resultados[0]
+        return {"ok": True, "resultados": resultados, "erros": erros}
 
     async def reabrir_bloco_assinatura(self, id_bloco: str) -> dict:
         """Reabre um bloco de assinatura concluído."""

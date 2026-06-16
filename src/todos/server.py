@@ -210,7 +210,7 @@ def _extrator_de_campo(campo: dict[str, str | _Extrator], nome_campo: str) -> _E
     ext = campo.get("extract")
     if not _is_extrator(ext):
         msg = f"campo 'extract' não é callable para campo={nome_campo!r}"
-        raise TypeError(msg)
+        raise SEIValidationError(msg)
     return ext
 
 
