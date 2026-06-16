@@ -82,8 +82,6 @@ ignore = [
 "src/todos/html_utils.py" = [
     # pytesseract/pdf2image/pdfplumber/io must be deferred — heavy optional deps
     "PLC0415",
-    # Layout parsing thresholds (table column count, uppercase header length heuristic)
-    "PLR2004",
 ]
 "src/todos/catalog_cache.py" = [
     # Cache stores arbitrary JSON-deserializable values; Any is the correct type

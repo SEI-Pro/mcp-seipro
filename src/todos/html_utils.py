@@ -10,6 +10,22 @@ from markdownify import MarkdownConverter
 
 logger = logging.getLogger(__name__)
 
+# Número máximo de caracteres retornados pelo fallback regex de html_to_text.
+_FALLBACK_TEXT_LIMIT: int = 10_000
+
+# Comprimento máximo de uma linha para ser formatada como título em negrito no PDF.
+_HEADER_MAX_LEN: int = 100
+
+# DPI usado pelo pdf2image ao rasterizar páginas para OCR.
+_OCR_DPI: int = 200
+
+# Valor máximo aceito para o atributo HTML colspan (evita alocações excessivas).
+_COLSPAN_MAX: int = 1_000
+
+# Número mínimo de partes após split("|") para que a linha de tabela tenha delimitadores externos.
+# Uma linha "|a|b|" gera ["", "a", "b", ""] — 4 partes (> 2 indica delimitadores presentes).
+_TABLE_OUTER_DELIM_MIN: int = 2
+
 
 # Número máximo de páginas que o OCR processa em um único PDF.
 # Lê SEI_MAX_OCR_PAGES do ambiente; deve ser um inteiro positivo.
@@ -63,9 +79,13 @@ def html_to_text(raw: str) -> str:
         text = html_module.unescape(raw)
         text = re.sub(r"<[^>]+>", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
-        if len(text) > 10000:
-            logger.warning("Texto truncado de %d para 10000 caracteres após fallback", len(text))
-        return text[:10000]
+        if len(text) > _FALLBACK_TEXT_LIMIT:
+            logger.warning(
+                "Texto truncado de %d para %d caracteres após fallback",
+                len(text),
+                _FALLBACK_TEXT_LIMIT,
+            )
+        return text[:_FALLBACK_TEXT_LIMIT]
 
 
 def _clean_markdown_tables(md: str) -> str:
@@ -86,7 +106,7 @@ def _clean_markdown_tables(md: str) -> str:
             # Extrair células e filtrar vazias
             cells = line.split("|")
             # Manter delimitadores externos (primeiro e último são vazios por causa do split)
-            inner = cells[1:-1] if len(cells) > 2 else cells
+            inner = cells[1:-1] if len(cells) > _TABLE_OUTER_DELIM_MIN else cells
             filled = [c for c in inner if c.strip()]
 
             if not filled:
@@ -162,7 +182,7 @@ class _SEIMarkdownConverter(MarkdownConverter):
         for cell in cells:
             colspan = 1
             if "colspan" in cell.attrs and str(cell["colspan"]).isdigit():
-                colspan = max(1, min(1000, int(str(cell["colspan"]))))
+                colspan = max(1, min(_COLSPAN_MAX, int(str(cell["colspan"]))))
             full_colspan += colspan
             # Read align from HTML attribute first; fall back to left-align when absent.
             raw_align = cell.get("align")
@@ -229,7 +249,7 @@ def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
 
     lang = lang or OCR_LANG
     try:
-        images = convert_from_bytes(content, dpi=200)
+        images = convert_from_bytes(content, dpi=_OCR_DPI)
     except (PDFInfoNotInstalledError, PDFPageCountError) as e:
         msg = f"poppler não instalado ou PDF inválido: {e}"
         raise OSError(msg) from e
@@ -335,7 +355,7 @@ def pdf_to_markdown(content: bytes) -> str:
             stripped = line.strip()
             if not stripped:
                 continue
-            if stripped.isupper() and len(stripped) < 100:
+            if stripped.isupper() and len(stripped) < _HEADER_MAX_LEN:
                 lines.append(f"**{stripped}**")
             else:
                 lines.append(stripped)
