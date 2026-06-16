@@ -22,13 +22,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_MAX_ICON_BYTES = 1 * 1024 * 1024  # 1 MB
+
+
 def _icon_bytes() -> bytes:
+    """Load the server icon, skipping files larger than _MAX_ICON_BYTES."""
     for candidate in (
         Path(__file__).resolve().parent.parent.parent / "icon.png",
         Path("/app/icon.png"),
     ):
-        if candidate.exists():
-            return candidate.read_bytes()
+        if not candidate.exists():
+            continue
+        stat = candidate.stat()
+        if stat.st_size > _MAX_ICON_BYTES:
+            logger.warning(
+                "Ícone ignorado: arquivo muito grande (%d bytes): %s",
+                stat.st_size,
+                candidate,
+            )
+            continue
+        return candidate.read_bytes()
     return b""
 
 
