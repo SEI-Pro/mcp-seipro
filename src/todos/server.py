@@ -2,7 +2,7 @@
 
 import sys
 from collections.abc import Callable
-from typing import TypeAlias, cast
+from typing import TypeAlias
 
 import httpx
 from fastmcp import Context
@@ -191,6 +191,55 @@ _CAMPOS_AGRUPAMENTO: dict[str, dict[str, str | _Extrator]] = {
 }
 
 
+def _validar_campo(nome: str) -> dict[str, str | _Extrator]:
+    """Valida e retorna a entrada de _CAMPOS_AGRUPAMENTO para `nome`."""
+    campo = _CAMPOS_AGRUPAMENTO.get(nome)
+    if not campo:
+        campos = ", ".join(sorted(_CAMPOS_AGRUPAMENTO.keys()))
+        raise SEIValidationError(f"Campo '{nome}' inválido. Disponíveis: {campos}")
+    return campo
+
+
+def _extrator_de_campo(campo: dict[str, str | _Extrator], nome_campo: str) -> _Extrator:
+    """Retorna o extrator callable de um campo, com erro contextualizado se ausente."""
+    ext = campo.get("extract")
+    if not callable(ext):
+        msg = f"campo 'extract' não é callable para campo={nome_campo!r}"
+        raise TypeError(msg)
+    return ext  # type: ignore[return-value]  # narrowed by callable() check above
+
+
+def _agrupar_processos(
+    todos: list[dict],
+    extrator1: _Extrator,
+    extrator2: _Extrator | None,
+) -> dict[str, dict]:
+    """Agrupa processos por chave(s) derivada(s) dos extratores."""
+    grupos: dict[str, dict] = {}
+    for p in todos:
+        a = p.get("atributos") or {}
+        s = a.get("status") or {}
+        chave1 = extrator1(a, s)
+        chave = f"{chave1} | {extrator2(a, s)}" if extrator2 is not None else chave1
+        if chave not in grupos:
+            grupos[chave] = {"quantidade": 0, "processos": []}
+        grupos[chave]["quantidade"] += 1
+        grupos[chave]["processos"].append(a.get("numero", ""))
+    return grupos
+
+
+def _ordenar_resumo(grupos: dict[str, dict]) -> list[dict]:
+    """Ordena grupos por quantidade decrescente; inclui lista de processos se ≤ _MAX_GRUPO_INLINE."""
+    resumo = []
+    for chave in sorted(grupos.keys(), key=lambda k: -grupos[k]["quantidade"]):
+        g = grupos[chave]
+        item: dict = {"grupo": chave, "quantidade": g["quantidade"]}
+        if g["quantidade"] <= _MAX_GRUPO_INLINE:
+            item["processos"] = g["processos"]
+        resumo.append(item)
+    return resumo
+
+
 @mcp.tool(annotations=_READ)
 async def sei_resumo_processos(
     agrupar_por: str = "tipo",
@@ -228,17 +277,11 @@ async def sei_resumo_processos(
     - agrupar_por="retorno" → processos com prazo vencido
     """
     try:
-        campo1 = _CAMPOS_AGRUPAMENTO.get(agrupar_por)
-        if not campo1:
-            campos = ", ".join(sorted(_CAMPOS_AGRUPAMENTO.keys()))
-            raise SEIValidationError(f"Campo '{agrupar_por}' inválido. Disponíveis: {campos}")
+        campo1 = _validar_campo(agrupar_por)
+        campo2 = _validar_campo(agrupar_por_2) if agrupar_por_2 else None
 
-        campo2 = None
-        if agrupar_por_2:
-            campo2 = _CAMPOS_AGRUPAMENTO.get(agrupar_por_2)
-            if not campo2:
-                campos = ", ".join(sorted(_CAMPOS_AGRUPAMENTO.keys()))
-                raise SEIValidationError(f"Campo '{agrupar_por_2}' inválido. Disponíveis: {campos}")
+        extrator1 = _extrator_de_campo(campo1, agrupar_por)
+        extrator2 = _extrator_de_campo(campo2, agrupar_por_2) if campo2 else None
 
         client = await _get_client(ctx)
 
@@ -259,37 +302,12 @@ async def sei_resumo_processos(
                 break
             pg += 1
 
-        # Agrupar
-        grupos: dict = {}
-        for p in todos:
-            a = p.get("atributos") or {}
-            s = a.get("status", {})
-            chave1 = cast(Callable[..., str], campo1["extract"])(a, s)
+        grupos = _agrupar_processos(todos, extrator1, extrator2)
+        resumo = _ordenar_resumo(grupos)
 
-            if campo2:
-                chave2 = cast(Callable[..., str], campo2["extract"])(a, s)
-                chave = f"{chave1} | {chave2}"
-            else:
-                chave = chave1
-
-            if chave not in grupos:
-                grupos[chave] = {"quantidade": 0, "processos": []}
-            grupos[chave]["quantidade"] += 1
-            grupos[chave]["processos"].append(a.get("numero", ""))
-
-        # Ordenar por quantidade decrescente
-        resumo = []
-        for chave in sorted(grupos.keys(), key=lambda k: -grupos[k]["quantidade"]):
-            g = grupos[chave]
-            item = {"grupo": chave, "quantidade": g["quantidade"]}
-            # Incluir lista de processos se grupo pequeno (≤ 20)
-            if g["quantidade"] <= _MAX_GRUPO_INLINE:
-                item["processos"] = g["processos"]
-            resumo.append(item)
-
-        header = cast(str, campo1["desc"])
+        header = str(campo1["desc"])
         if campo2:
-            header += f" × {cast(str, campo2['desc'])}"
+            header += f" × {campo2['desc']}"
 
         return _json(
             {
