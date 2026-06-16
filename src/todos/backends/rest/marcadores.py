@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import sys
+
+if sys.version_info >= (3, 12):
+    from typing import override
+else:
+    from typing_extensions import override
+
 from todos.backends.rest._session import _RestMixin
 
 
@@ -33,16 +40,23 @@ class MarcadoresRest(_RestMixin):
         """Lista marcadores disponíveis na unidade."""
         return await self._rest.pesquisar_marcadores(filtro=filtro, limit=limit)
 
+    @override
     async def consultar_marcador_processo(self, processo: str) -> list[dict]:
-        """Consulta os marcadores ativos de um processo."""
+        """Consulta os marcadores ativos de um processo.
+
+        Narrows the base-class return type ``dict | list[dict]`` to ``list[dict]``
+        because the REST backend always returns a list for this endpoint.
+        """
         id_proc = await self._resolver_processo(processo)
         return await self._rest.consultar_marcador_processo(id_proc)
 
+    @override
     async def historico_marcador_processo(self, processo: str) -> list[dict]:
         """Lista o histórico de marcadores de um processo."""
         id_proc = await self._resolver_processo(processo)
         return await self._rest.historico_marcador_processo(id_proc)
 
+    @override
     async def listar_cores_marcador(self) -> list[dict]:
         """Lista as cores disponíveis para marcadores."""
         return await self._rest.listar_cores_marcador()

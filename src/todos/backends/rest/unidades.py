@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import sys
+
+if sys.version_info >= (3, 12):
+    from typing import override
+else:
+    from typing_extensions import override
+
 from todos.backends.rest._session import _RestMixin
 
 
@@ -34,10 +41,12 @@ class UnidadesRest(_RestMixin):
             filtro=filtro, id_orgao=id_orgao, limit=limit, start=pagina
         )
 
+    @override
     async def listar_orgaos(self) -> list[dict]:
         """Lista os órgãos cadastrados na instalação do SEI."""
         return await self._rest.listar_orgaos()
 
+    @override
     async def listar_contextos(self, id_orgao: str) -> list[dict]:
         """Lista os contextos disponíveis para um órgão."""
         return await self._rest.listar_contextos(id_orgao)
@@ -46,10 +55,12 @@ class UnidadesRest(_RestMixin):
         """Retorna a versão do SEI e do mod-wssei instalado."""
         return await self._rest.versao()
 
+    @override
     async def listar_assinantes(self) -> list[dict]:
         """Lista os cargos/funções de assinatura da unidade atual."""
         return await self._rest.listar_assinantes()
 
+    @override
     async def listar_orgaos_assinante(self) -> list[dict]:
         """Lista os órgãos disponíveis para assinatura."""
         return await self._rest.listar_orgaos_assinante()
