@@ -5,9 +5,19 @@ import io
 import logging
 import os
 import re
+from types import ModuleType
+from typing import Any
 
 from bs4 import BeautifulSoup, Tag
 from markdownify import MarkdownConverter
+
+# Optional OCR deps — pre-declared so that except-block None/fallback assignments
+# are always valid (ty checks that assigned types match the declared annotation).
+_pytesseract: ModuleType | None = None
+_convert_from_bytes: Any = None  # pdf2image.convert_from_bytes callable
+PDFInfoNotInstalledError: type[BaseException] = OSError
+PDFPageCountError: type[BaseException] = OSError
+_HAS_OCR = False
 
 try:
     import pytesseract as _pytesseract
@@ -16,11 +26,12 @@ try:
 
     _HAS_OCR = True
 except ImportError:
-    _pytesseract = None  # type: ignore[assignment]
-    _convert_from_bytes = None  # type: ignore[assignment]
-    PDFInfoNotInstalledError = OSError  # type: ignore[assignment,misc]
-    PDFPageCountError = OSError  # type: ignore[assignment,misc]
-    _HAS_OCR = False
+    pass
+
+# Optional PDF text-extraction dep
+_pdfplumber: ModuleType | None = None
+PdfminerException: type[BaseException] = ValueError
+_HAS_PDFPLUMBER = False
 
 try:
     import pdfplumber as _pdfplumber
@@ -28,9 +39,7 @@ try:
 
     _HAS_PDFPLUMBER = True
 except ImportError:
-    _pdfplumber = None  # type: ignore[assignment]
-    PdfminerException = ValueError  # type: ignore[assignment,misc]
-    _HAS_PDFPLUMBER = False
+    pass
 
 logger = logging.getLogger(__name__)
 

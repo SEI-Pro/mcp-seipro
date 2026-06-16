@@ -7,15 +7,11 @@ import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-
-try:
-    import keyring as _keyring
-except ImportError:
-    _keyring = None  # type: ignore[assignment]
 
 from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import (
@@ -27,6 +23,12 @@ from todos.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+_keyring: ModuleType | None = None
+try:
+    import keyring as _keyring
+except ImportError:
+    logger.debug("keyring not available; password will be read from SEI_SENHA env var")
 
 
 def _safe_int(val: str | int | None, default: int = 0) -> int:

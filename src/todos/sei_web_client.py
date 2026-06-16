@@ -26,18 +26,15 @@ import time
 import warnings
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 from urllib.parse import quote as _quote
 
 import httpx
-
-try:
-    import keyring as _keyring
-except ImportError:
-    _keyring = None  # type: ignore[assignment]
-
 from bs4 import BeautifulSoup, Tag
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 from todos.exceptions import (
     SEIAuthError,
@@ -51,6 +48,12 @@ from todos.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+_keyring: ModuleType | None = None
+try:
+    import keyring as _keyring
+except ImportError:
+    logger.debug("keyring not available; password will be read from SEI_SENHA env var")
 
 # TTL do cache da árvore do processo (links assinados valem a sessão inteira;
 # o TTL curto limita apenas a janela de staleness do conteúdo da árvore)
