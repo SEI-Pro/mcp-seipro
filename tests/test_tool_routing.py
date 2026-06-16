@@ -609,9 +609,6 @@ def test_tool_routes_to_expected_op(
     result = asyncio.run(tool(ctx=None, **call_kwargs))
 
     assert len(fake.calls) == 1, f"{tool_name} made {len(fake.calls)} backend calls, expected 1"
-    assert fake.calls[0][0] == expected_op, (
-        f"{tool_name} routed to {fake.calls[0][0]!r}, expected {expected_op!r}"
-    )
     op, args, kwargs = fake.calls[0]
     assert op == expected_op, f"{tool_name} routed to {op!r}, expected {expected_op!r}"
     forwarded = _flatten(args, kwargs)

@@ -35,20 +35,21 @@ logger = logging.getLogger(__name__)
 # Crypto helpers (HMAC-SHA256 para assinatura, sem dep externa)
 # ---------------------------------------------------------------------------
 
-logger = logging.getLogger(__name__)
-
 _JWT_SECRET_MIN_LEN = 32
+
+_JWT_SECRET = os.environ.get("JWT_SECRET", "")
+if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+    _jwt_config_err = (
+        f"JWT_SECRET deve ter pelo menos {_JWT_SECRET_MIN_LEN} caracteres "
+        f"(atual: {len(_JWT_SECRET)}). "
+        'Gere um com: python -c "import secrets; print(secrets.token_hex(32))"'
+    )
+    raise RuntimeError(_jwt_config_err)
+
 _JWT_CONFIG_ERR = (
     "JWT_SECRET não configurado ou muito curto — "
     "defina JWT_SECRET com pelo menos 32 caracteres antes de iniciar o servidor HTTP."
 )
-
-_JWT_SECRET = os.environ.get("JWT_SECRET", "")
-if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
-    logger.warning(
-        "JWT_SECRET está ausente ou muito curto (%d chars); tokens não são seguros.",
-        len(_JWT_SECRET),
-    )
 TOKEN_TTL = 86400 * 30  # 30 dias
 
 
