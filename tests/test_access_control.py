@@ -357,3 +357,128 @@ class TestExtrairNivelWeb:
 
     def test_no_matching_key_returns_none(self) -> None:
         assert ac.extrair_nivel_web({"tipo": "Despacho"}) is None
+
+    def test_sigiloso_lowercase(self) -> None:
+        # Exact lowercase spelling used by some SEI instances.
+        assert ac.extrair_nivel_web({"nivel_acesso": "sigiloso"}) == "2"
+
+    def test_sigiloso_uppercase(self) -> None:
+        assert ac.extrair_nivel_web({"nivel_acesso": "SIGILOSO"}) == "2"
+
+    def test_sigiloso_in_phrase(self) -> None:
+        # Value may include surrounding text, e.g. "Acesso Sigiloso (art. 26)".
+        assert ac.extrair_nivel_web({"nivel_de_acesso": "Acesso Sigiloso (art. 26)"}) == "2"
+
+    def test_restrito_lowercase(self) -> None:
+        assert ac.extrair_nivel_web({"nivel_acesso": "restrito"}) == "1"
+
+
+# ---------------------------------------------------------------------------
+# Adversarial gate tests — nivelAcesso="2" (sigiloso) must always be blocked
+# ---------------------------------------------------------------------------
+
+
+class TestGateSigiloso:
+    """Safety invariants for classified (sigiloso / nivelAcesso=2) documents.
+
+    A single incorrect 'liberar' for a sigiloso document is a LGPD/LAI
+    incident, so this class stress-tests the full call path from raw metadata
+    through to the final gate decision.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_env_consent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SEI_PERMITIR_RESTRITOS", raising=False)
+
+    # --- nivel string "2" --------------------------------------------------
+
+    def test_nivel_2_string_blocks_without_consent(self) -> None:
+        """nivelAcesso='2' without consent must produce a block."""
+        decisao, payload = ac.avaliar_acesso("2", confirmou=False, alvo=_ALVO)
+        assert decisao == "bloquear"
+        assert payload is not None
+        assert payload["tipo_resposta"] == "consentimento_pendente"
+        assert payload["consentimento_necessario"] is True
+
+    def test_nivel_2_string_liberates_with_consent(self) -> None:
+        """nivelAcesso='2' with explicit consent must liberate with a disclaimer."""
+        decisao, payload = ac.avaliar_acesso("2", confirmou=True, alvo=_ALVO)
+        assert decisao == "liberar"
+        assert payload is not None
+        assert payload["tipo_resposta"] == "aviso_classificacao_informativo"
+        assert payload["rotulo_nivel"] == "Sigiloso"
+
+    # --- hipotese_legal containing "sigiloso" text -------------------------
+
+    def test_sigiloso_hipotese_legal_blocked_without_consent(self) -> None:
+        # hipoteseLegal is metadata-only — it does NOT change the gate decision.
+        # The gate key is nivelAcesso; this test confirms hipoteseLegal text
+        # with "sigiloso" is properly propagated but doesn't bypass the block.
+        decisao, payload = ac.avaliar_acesso(
+            "2",
+            "Sigilo de investigacao policial (art. 20 LAI) - sigiloso",
+            confirmou=False,
+            alvo=_ALVO,
+        )
+        assert decisao == "bloquear"
+        assert payload is not None
+        assert "sigiloso" in payload["hipotese_legal"].lower()
+
+    def test_sigiloso_hipotese_legal_propagated_when_released(self) -> None:
+        """hipotese_legal is passed through unchanged when access is granted."""
+        decisao, payload = ac.avaliar_acesso(
+            "2",
+            "Sigilo bancario (LC 105/2001)",
+            confirmou=True,
+            alvo=_ALVO,
+        )
+        assert decisao == "liberar"
+        assert payload is not None
+        assert payload["hipotese_legal"] == "Sigilo bancario (LC 105/2001)"
+
+    # --- extrair_nivel then gate -------------------------------------------
+
+    def test_extrair_nivel_camel_then_gate_blocks(self) -> None:
+        """End-to-end: REST metadata with nivelAcesso=2 must produce a block."""
+        nivel, hl = ac.extrair_nivel({"nivelAcesso": "2", "hipoteseLegal": "Art. 26 LAI"})
+        assert nivel == "2"
+        decisao, _ = ac.avaliar_acesso(nivel, hl, confirmou=False, alvo=_ALVO)
+        assert decisao == "bloquear"
+
+    def test_extrair_nivel_integer_2_then_gate_blocks(self) -> None:
+        """Integer nivelAcesso=2 (REST sometimes returns ints) must also block."""
+        nivel, _ = ac.extrair_nivel({"nivelAcesso": 2})
+        assert nivel == "2"
+        decisao, _ = ac.avaliar_acesso(nivel, confirmou=False, alvo=_ALVO)
+        assert decisao == "bloquear"
+
+    def test_extrair_nivel_web_sigiloso_then_gate_blocks(self) -> None:
+        """Web-scraped text 'Sigiloso' must flow through to a gate block."""
+        nivel = ac.extrair_nivel_web({"nivel_de_acesso": "Sigiloso"})
+        assert nivel == "2"
+        decisao, _ = ac.avaliar_acesso(nivel, confirmou=False, alvo=_ALVO)
+        assert decisao == "bloquear"
+
+    # --- bloqueio payload structure for sigiloso ---------------------------
+
+    def test_bloqueio_sigiloso_has_correct_rotulo(self) -> None:
+        """Block payload for sigiloso must carry the 'Sigiloso' label."""
+        aviso = ac.construir_aviso_bloqueio("2", None, _ALVO)
+        assert aviso["rotulo_nivel"] == "Sigiloso"
+        assert aviso["nivel_acesso"] == "2"
+
+    def test_bloqueio_sigiloso_contains_all_mandatory_fields(self) -> None:
+        """Block payload must include every field required by the LLM framing contract."""
+        aviso = ac.construir_aviso_bloqueio("2", "Art. 26 LAI", _ALVO)
+        for field in (
+            "tipo_resposta",
+            "nao_e_erro_tecnico",
+            "instrucao_para_modelo",
+            "mensagem_para_usuario_humano",
+            "consentimento_necessario",
+            "riscos",
+            "como_liberar",
+            "alvo",
+        ):
+            assert field in aviso, f"Missing field: {field}"
+        assert aviso["hipotese_legal"] == "Art. 26 LAI"
