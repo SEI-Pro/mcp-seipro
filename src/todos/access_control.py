@@ -49,7 +49,7 @@ def env_permite_restritos() -> bool:
     return raw in ("1", "true", "yes", "sim")
 
 
-_RISCOS = [
+_RISCOS_BASE = [
     "LGPD (Lei 13.709/2018): pode conter dados pessoais ou sensíveis cuja "
     "exposição exige base legal específica.",
     "LAI (Lei 12.527/2011): informação classificada como restrita não é de "
@@ -63,6 +63,10 @@ _RISCOS = [
     "citado em respostas, exportado, copiado ou compartilhado pelo cliente "
     "fora do controle do SEI.",
 ]
+
+_RISCOS_EXTRA_RAW = os.environ.get("SEI_RISCOS_EXTRA", "")
+_RISCOS_EXTRA: list[str] = [r.strip() for r in _RISCOS_EXTRA_RAW.split(",") if r.strip()]
+_RISCOS = _RISCOS_BASE + _RISCOS_EXTRA
 
 _COMO_LIBERAR = [
     "O operador do servidor pode definir a variável de ambiente "
