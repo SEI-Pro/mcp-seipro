@@ -77,7 +77,7 @@ async def lifespan(_server: FastMCP):
         await get_catalog_cache().close()
 
 
-def _evict_oldest(clients: dict, max_sessions: int) -> object | None:
+def _evict_oldest(clients: dict, max_sessions: int) -> SEIClient | SEIWebClient | None:
     """Pop the oldest client from the pool if at capacity; return it for the caller to close."""
     if len(clients) < max_sessions:
         return None
