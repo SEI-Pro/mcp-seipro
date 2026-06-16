@@ -13,6 +13,14 @@ from urllib.parse import urlparse
 
 import httpx
 
+from todos.backends.models import (
+    CredenciaisAssinatura,
+    EnvioProcesso,
+    FiltroListagemProcessos,
+    FiltrosPesquisaProcessos,
+    NovoDocumentoInterno,
+    NovoProcesso,
+)
 from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import (
     SEIAuthError,
@@ -39,6 +47,32 @@ def _safe_int(val: str | int | None, default: int = 0) -> int:
         return int(val)
     except (TypeError, ValueError):
         return default
+
+
+_CAMPOS_PESQUISA_PROCESSO: dict[str, str] = {
+    "palavras_chave": "palavrasChave",
+    "descricao": "descricao",
+    "busca_rapida": "buscaRapida",
+    "data_inicio": "dataInicio",
+    "data_fim": "dataFim",
+    "sta_tipo_data": "staTipoData",
+    "id_unidade_geradora": "idUnidadeGeradora",
+    "id_assunto": "idAssunto",
+    "grupo": "grupo",
+}
+
+
+_CAMPOS_PESQUISA_PROCESSO: dict[str, str] = {
+    "palavras_chave": "palavrasChave",
+    "descricao": "descricao",
+    "busca_rapida": "buscaRapida",
+    "data_inicio": "dataInicio",
+    "data_fim": "dataFim",
+    "sta_tipo_data": "staTipoData",
+    "id_unidade_geradora": "idUnidadeGeradora",
+    "id_assunto": "idAssunto",
+    "grupo": "grupo",
+}
 
 
 class SEIClient:
@@ -216,8 +250,8 @@ class SEIClient:
             raise SEIError(str(e)) from e
         return resp
 
-    async def autenticar(self) -> str:
-        """Autentica no SEI e obtém token."""
+    async def _buscar_senha_keyring(self) -> None:
+        """Tenta carregar a senha do keyring do OS; atualiza self._senha em caso de sucesso."""
         if not self._senha and self._keyring_user:
             keyring_user = self._keyring_user
             self._keyring_user = None  # prevent concurrent / empty-string repeated lookups
@@ -239,6 +273,9 @@ class SEIClient:
                     self._keyring_user = keyring_user  # restore: transient error, allow retry
                     logger.warning("Não foi possível obter a senha do keyring: %s", e)
 
+    async def autenticar(self) -> str:
+        """Autentica no SEI e obtém token."""
+        await self._buscar_senha_keyring()
         resp = await self._client.post(
             f"{self.base_url}/autenticar",
             data={
@@ -581,11 +618,7 @@ class SEIClient:
     async def criar_documento_interno(
         self,
         id_procedimento: str,
-        id_serie: str,
-        descricao: str = "",
-        nivel_acesso: str = "0",
-        hipotese_legal: str = "",
-        id_unidade: str = "",
+        dados: NovoDocumentoInterno,
     ) -> dict:
         """Cria documento interno (nativo) em um processo SEI.
 
@@ -595,14 +628,14 @@ class SEIClient:
             "POST",
             f"/documento/{id_procedimento}/interno/criar",
             data={
-                "idSerie": id_serie,
+                "idSerie": dados.id_serie,
                 "numero": "",
-                "descricao": descricao,
+                "descricao": dados.descricao,
                 "dataElaboracao": "",
-                "nivelAcesso": nivel_acesso,
-                "idHipoteseLegal": hipotese_legal,
+                "nivelAcesso": dados.nivel_acesso,
+                "idHipoteseLegal": dados.hipotese_legal,
                 "grauSigilo": "",
-                "idUnidadeGeradoraProtocolo": id_unidade,
+                "idUnidadeGeradoraProtocolo": dados.id_unidade,
                 "assuntos": "",
                 "interessados": "",
                 "remetente": "",
@@ -808,76 +841,52 @@ class SEIClient:
 
     async def listar_processos(
         self,
-        limit: int = 50,
-        start: int = 0,
-        tipo: str = "",
-        usuario: str = "",
-        apenas_meus: str = "",
-        filtro: str = "",
+        filtros: FiltroListagemProcessos | None = None,
     ) -> dict:
         """Lista processos da caixa da unidade atual.
 
         Retorna: {data: [...], total: N}
         """
-        params: dict = {"limit": limit, "start": start}
-        if tipo:
-            params["tipo"] = tipo
-        if usuario:
-            params["usuario"] = usuario
-        if apenas_meus:
-            params["apenasMeus"] = apenas_meus
-        if filtro:
-            params["filter"] = filtro
+        f = filtros or FiltroListagemProcessos()
+        params: dict = {"limit": f.limit, "start": f.pagina}
+        if f.tipo:
+            params["tipo"] = f.tipo
+        if f.usuario:
+            params["usuario"] = f.usuario
+        if f.apenas_meus:
+            params["apenasMeus"] = f.apenas_meus
+        if f.filtro:
+            params["filter"] = f.filtro
         resp = await self._request("GET", "/processo/listar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
             msg = f"Erro ao listar processos: {data.get('mensagem')}"
             raise SEIError(msg)
-        return self._paginated(data, "processos", data.get("data", []), start, limit)
+        return self._paginated(data, "processos", data.get("data", []), f.pagina, f.limit)
 
     async def pesquisar_processos(
         self,
-        palavras_chave: str = "",
-        descricao: str = "",
-        busca_rapida: str = "",
-        data_inicio: str = "",
-        data_fim: str = "",
-        sta_tipo_data: str = "",
-        id_unidade_geradora: str = "",
-        id_assunto: str = "",
-        grupo: str = "",
-        limit: int = 50,
-        start: int = 0,
+        filtros: FiltrosPesquisaProcessos | None = None,
     ) -> dict:
         """Pesquisa processos via busca textual (Solr).
 
         Retorna: {data: [...], total: N}
         """
-        params: dict = {"limit": limit, "start": start}
-        if palavras_chave:
-            params["palavrasChave"] = palavras_chave
-        if descricao:
-            params["descricao"] = descricao
-        if busca_rapida:
-            params["buscaRapida"] = busca_rapida
-        if data_inicio:
-            params["dataInicio"] = data_inicio
-        if data_fim:
-            params["dataFim"] = data_fim
-        if sta_tipo_data:
-            params["staTipoData"] = sta_tipo_data
-        if id_unidade_geradora:
-            params["idUnidadeGeradora"] = id_unidade_geradora
-        if id_assunto:
-            params["idAssunto"] = id_assunto
-        if grupo:
-            params["grupo"] = grupo
+        f = filtros or FiltrosPesquisaProcessos()
+        params: dict = {"limit": f.limit, "start": f.pagina}
+        params.update(
+            {
+                api_k: getattr(f, k)
+                for k, api_k in _CAMPOS_PESQUISA_PROCESSO.items()
+                if getattr(f, k)
+            }
+        )
         resp = await self._request("GET", "/processo/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
             msg = f"Erro ao pesquisar processos: {data.get('mensagem')}"
             raise SEIError(msg)
-        return self._paginated(data, "processos", data.get("data", []), start, limit)
+        return self._paginated(data, "processos", data.get("data", []), f.pagina, f.limit)
 
     async def alterar_processo(
         self,
@@ -976,16 +985,7 @@ class SEIClient:
             await self._cache_set(cache_key, result)
         return result
 
-    async def criar_processo(
-        self,
-        tipo_processo: str,
-        especificacao: str = "",
-        assuntos: str = "",
-        interessados: str = "",
-        observacoes: str = "",
-        nivel_acesso: str = "0",
-        hipotese_legal: str = "",
-    ) -> dict:
+    async def criar_processo(self, dados: NovoProcesso) -> dict:
         """Cria novo processo no SEI.
 
         assuntos e interessados devem ser JSON arrays de objetos com campo "id".
@@ -993,6 +993,8 @@ class SEIClient:
         Retorna: {IdProcedimento, ProtocoloFormatado}
         """
         # Converter IDs simples para formato JSON esperado pela API
+        assuntos = dados.assuntos
+        interessados = dados.interessados
         if assuntos and not assuntos.startswith("["):
             ids = [a.strip() for a in assuntos.split(",")]
             assuntos = json.dumps([{"id": i} for i in ids])
@@ -1004,13 +1006,13 @@ class SEIClient:
             "POST",
             "/processo/criar",
             data={
-                "tipoProcesso": tipo_processo,
-                "especificacao": especificacao,
+                "tipoProcesso": dados.tipo_processo,
+                "especificacao": dados.especificacao,
                 "assuntos": assuntos,
                 "interessados": interessados,
-                "observacoes": observacoes,
-                "nivelAcesso": nivel_acesso,
-                "hipoteseLegal": hipotese_legal,
+                "observacoes": dados.observacoes,
+                "nivelAcesso": dados.nivel_acesso,
+                "hipoteseLegal": dados.hipotese_legal,
                 "grauSigilo": "",
             },
         )
@@ -1020,32 +1022,21 @@ class SEIClient:
             raise SEIError(msg)
         return data["data"]
 
-    async def enviar_processo(
-        self,
-        numero_processo: str,
-        unidades_destino: str,
-        manter_aberto: str = "N",
-        remover_anotacao: str = "N",
-        enviar_email: str = "N",
-        data_retorno: str = "",
-        dias_retorno: str = "",
-        dias_uteis_retorno: str = "S",
-        reabrir: str = "N",
-    ) -> dict:
+    async def enviar_processo(self, numero_processo: str, dados: EnvioProcesso) -> dict:
         """Envia (tramita) processo para outra(s) unidade(s)."""
         payload: dict = {
             "numeroProcesso": numero_processo,
-            "unidadesDestino": unidades_destino,
-            "sinManterAbertoUnidade": manter_aberto,
-            "sinRemoverAnotacao": remover_anotacao,
-            "sinEnviarEmailNotificacao": enviar_email,
-            "sinReabrir": reabrir,
+            "unidadesDestino": dados.unidades_destino,
+            "sinManterAbertoUnidade": dados.manter_aberto,
+            "sinRemoverAnotacao": dados.remover_anotacao,
+            "sinEnviarEmailNotificacao": dados.enviar_email,
+            "sinReabrir": dados.reabrir,
         }
-        if data_retorno:
-            payload["dataRetornoProgramado"] = data_retorno
-        if dias_retorno:
-            payload["diasRetornoProgramado"] = dias_retorno
-            payload["sinDiasUteisRetornoProgramado"] = dias_uteis_retorno
+        if dados.data_retorno:
+            payload["dataRetornoProgramado"] = dados.data_retorno
+        if dados.dias_retorno:
+            payload["diasRetornoProgramado"] = dados.dias_retorno
+            payload["sinDiasUteisRetornoProgramado"] = dados.dias_uteis_retorno
         resp = await self._request("POST", "/processo/enviar", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
@@ -1090,25 +1081,17 @@ class SEIClient:
     # Documentos — assinar, pesquisar tipos
     # ------------------------------------------------------------------
 
-    async def assinar_documento(
-        self,
-        id_documento: str,
-        login: str,
-        senha: str,
-        cargo: str,
-        orgao: str = "",
-        id_usuario: str = "",
-    ) -> dict:
+    async def assinar_documento(self, id_documento: str, cred: CredenciaisAssinatura) -> dict:
         """Assina documento eletronicamente."""
         payload = {
             "documento": id_documento,
-            "login": login,
-            "senha": senha,
-            "cargo": cargo,
-            "orgao": orgao or self._orgao,
+            "login": cred.login,
+            "senha": cred.senha,
+            "cargo": cred.cargo,
+            "orgao": cred.orgao or self._orgao,
         }
-        if id_usuario:
-            payload["usuario"] = id_usuario
+        if cred.id_usuario:
+            payload["usuario"] = cred.id_usuario
         resp = await self._request(
             "POST",
             "/documento/assinar",
@@ -2288,24 +2271,16 @@ class SEIClient:
     # Bloco de assinatura — assinar
     # ------------------------------------------------------------------
 
-    async def assinar_bloco(
-        self,
-        id_bloco: str,
-        login: str,
-        senha: str,
-        cargo: str,
-        orgao: str = "",
-        id_usuario: str = "",
-    ) -> dict:
+    async def assinar_bloco(self, id_bloco: str, cred: CredenciaisAssinatura) -> dict:
         """Assina todos os documentos de um bloco de assinatura."""
         payload = {
-            "orgao": orgao or self._orgao,
-            "cargo": cargo,
-            "login": login,
-            "senha": senha,
+            "orgao": cred.orgao or self._orgao,
+            "cargo": cred.cargo,
+            "login": cred.login,
+            "senha": cred.senha,
         }
-        if id_usuario:
-            payload["usuario"] = id_usuario
+        if cred.id_usuario:
+            payload["usuario"] = cred.id_usuario
         resp = await self._request("POST", f"/bloco/assinatura/{id_bloco}/assinar", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
@@ -2313,25 +2288,17 @@ class SEIClient:
             raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
-    async def assinar_documentos_bloco(
-        self,
-        login: str,
-        senha: str,
-        cargo: str,
-        documentos: str,
-        orgao: str = "",
-        id_usuario: str = "",
-    ) -> dict:
+    async def assinar_documentos_bloco(self, cred: CredenciaisAssinatura, documentos: str) -> dict:
         """Assina documentos específicos (de um ou mais blocos)."""
         payload = {
-            "orgao": orgao or self._orgao,
-            "cargo": cargo,
-            "login": login,
-            "senha": senha,
+            "orgao": cred.orgao or self._orgao,
+            "cargo": cred.cargo,
+            "login": cred.login,
+            "senha": cred.senha,
             "documentos": documentos,
         }
-        if id_usuario:
-            payload["usuario"] = id_usuario
+        if cred.id_usuario:
+            payload["usuario"] = cred.id_usuario
         resp = await self._request("POST", "/bloco/assinatura/assinar/documentos", data=payload)
         data = resp.json()
         if not data.get("sucesso"):

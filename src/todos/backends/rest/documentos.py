@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from todos.backends.models import CredenciaisAssinatura, FiltrosPesquisaProcessos
 from todos.backends.rest._session import _RestMixin
 from todos.exceptions import SEIError, SEIValidationError
 
@@ -41,7 +42,9 @@ class DocumentosRest(_RestMixin):
                 "mensagem": f"SEI {numero_sei} não encontrado no processo {id_procedimento}",
             }
 
-        result = await self._rest.pesquisar_processos(palavras_chave=numero_sei, limit=20)
+        result = await self._rest.pesquisar_processos(
+            FiltrosPesquisaProcessos(palavras_chave=numero_sei, limit=20)
+        )
         candidatos = result.get("processos", [])
         for p in candidatos:
             id_proc = str(p.get("idProcedimento", ""))
@@ -97,14 +100,7 @@ class DocumentosRest(_RestMixin):
     async def criar_documento_interno(self, processo: str, dados: NovoDocumentoInterno) -> dict:
         """Cria um documento interno (editor HTML) em um processo."""
         id_proc = await self._resolver_processo(processo)
-        return await self._rest.criar_documento_interno(
-            id_procedimento=id_proc,
-            id_serie=dados.id_serie,
-            descricao=dados.descricao,
-            nivel_acesso=dados.nivel_acesso,
-            hipotese_legal=dados.hipotese_legal,
-            id_unidade=dados.id_unidade,
-        )
+        return await self._rest.criar_documento_interno(id_proc, dados)
 
     async def criar_documento_externo(self, processo: str, dados: NovoDocumentoExterno) -> dict:
         """Cria um documento externo (upload de arquivo) em um processo."""
@@ -194,14 +190,14 @@ class DocumentosRest(_RestMixin):
                 "Verifique se o login está correto e se o usuário pertence à unidade ativa."
             )
             raise SEIValidationError(msg)
-        return await self._rest.assinar_documento(
-            id_documento=doc_id,
+        cred = CredenciaisAssinatura(
             login=login,
             senha=self._rest.senha,
             cargo=cargo,
             orgao=orgao,
             id_usuario=id_usuario,
         )
+        return await self._rest.assinar_documento(doc_id, cred)
 
     async def listar_assinaturas(
         self, id_documento: str, processo: str | None = None

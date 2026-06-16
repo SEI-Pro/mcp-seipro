@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from todos.backends.models import CredenciaisAssinatura
 from todos.backends.rest._session import _RestMixin
 
 
@@ -144,21 +145,21 @@ class BlocosRest(_RestMixin):
     async def assinar_bloco(self, id_bloco: str, cargo: str = "") -> dict:
         """Assina todos os documentos de um bloco de assinatura."""
         id_usuario = await self._rest.garantir_autenticacao()
-        return await self._rest.assinar_bloco(
-            id_bloco=id_bloco,
+        cred = CredenciaisAssinatura(
             login=self._rest.usuario,
             senha=self._rest.senha,
             cargo=cargo,
-            id_usuario=id_usuario,
+            id_usuario=id_usuario or "",
         )
+        return await self._rest.assinar_bloco(id_bloco, cred)
 
     async def assinar_documentos_bloco(self, documentos: str, cargo: str = "") -> dict:
         """Assina documentos específicos de um bloco de assinatura."""
         id_usuario = await self._rest.garantir_autenticacao()
-        return await self._rest.assinar_documentos_bloco(
+        cred = CredenciaisAssinatura(
             login=self._rest.usuario,
             senha=self._rest.senha,
             cargo=cargo,
-            documentos=documentos,
-            id_usuario=id_usuario,
+            id_usuario=id_usuario or "",
         )
+        return await self._rest.assinar_documentos_bloco(cred, documentos)

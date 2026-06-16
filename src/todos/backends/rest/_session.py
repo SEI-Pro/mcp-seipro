@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from todos.backends.models import FiltrosPesquisaProcessos
 from todos.exceptions import SEIError, SEINotFoundError
 
 if TYPE_CHECKING:
@@ -76,7 +77,9 @@ class _RestBase(_RestMixin):
         referencia = referencia.strip()
 
         try:
-            result = await self._rest.pesquisar_processos(palavras_chave=referencia, limit=20)
+            result = await self._rest.pesquisar_processos(
+                FiltrosPesquisaProcessos(palavras_chave=referencia, limit=20)
+            )
             processos = result.get("processos", [])
             for p in processos:
                 id_proc = str(p.get("idProcedimento", ""))

@@ -80,16 +80,15 @@ ignore = [
     "S603",
 ]
 "src/todos/sei_client.py" = [
-    # REST API methods inherently have many parameters (one per API field)
+    # __init__ has 7 keyword-only config params (URL + credential fields) — a dataclass
+    # would break the env-var-based constructor contract used everywhere.
+    # criar_documento_externo has 6 params; NovoDocumentoExterno model mismatch (id_unidade
+    # vs arquivo_base64/nome_arquivo) prevents a clean migration in this wave.
     "PLR0913",
-    # Complexity inherent in HTTP client retry/auth/cache logic
-    "C901",
 ]
 "src/todos/sei_web_client.py" = [
     # Scraper methods are inherently complex (multi-step web flows, branching HTML layouts)
     "C901", "PLR0912", "PLR0913", "PLR0915",
-    # Web scraper response dicts contain heterogeneous API values; Any is the correct element type
-    "ANN401",
 ]
 "src/todos/server.py" = [
     "PLR0913",  # MCP tools need ctx + ≥4 business params; grouping into dataclasses hides the MCP schema

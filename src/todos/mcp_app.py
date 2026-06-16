@@ -19,6 +19,7 @@ from todos.backends import SEIBackend as _SEIBackendV2
 from todos.backends import (
     build_backend,
 )
+from todos.backends.models import FiltrosPesquisaProcessos
 from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import (
     SEIConnectionError,
@@ -585,7 +586,9 @@ async def _buscar_documento_em_processo(
 async def _buscar_documento_via_solr(client: SEIClient, referencia: str) -> tuple[str, str] | None:
     """Pesquisa um documento via Solr. Retorna (id, tipo) ou None se não encontrado."""
     try:
-        result = await client.pesquisar_processos(palavras_chave=referencia, limit=20)
+        result = await client.pesquisar_processos(
+            FiltrosPesquisaProcessos(palavras_chave=referencia, limit=20)
+        )
         for p in result.get("processos", []):
             id_proc = str(p.get("idProcedimento", ""))
             if not id_proc:

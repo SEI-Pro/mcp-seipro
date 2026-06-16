@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from todos.backends.models import EnvioProcesso, FiltroListagemProcessos
 from todos.backends.rest._session import _RestMixin
 from todos.exceptions import SEIError, SEINotFoundError, SEIValidationError
 
 if TYPE_CHECKING:
     from todos.backends.models import (
-        EnvioProcesso,
         FiltrosPesquisaProcessos,
         NovoProcesso,
     )
@@ -38,24 +38,14 @@ class ProcessosRest(_RestMixin):
     ) -> dict:
         """Lista os processos abertos na unidade atual."""
         return await self._rest.listar_processos(
-            start=pagina, apenas_meus=apenas_meus, tipo=tipo, filtro=filtro
+            FiltroListagemProcessos(
+                pagina=pagina, apenas_meus=apenas_meus, tipo=tipo, filtro=filtro
+            )
         )
 
     async def pesquisar_processos(self, filtros: FiltrosPesquisaProcessos) -> dict:
         """Pesquisa processos por texto e filtros estruturados."""
-        return await self._rest.pesquisar_processos(
-            palavras_chave=filtros.palavras_chave,
-            descricao=filtros.descricao,
-            busca_rapida=filtros.busca_rapida,
-            data_inicio=filtros.data_inicio,
-            data_fim=filtros.data_fim,
-            sta_tipo_data=filtros.sta_tipo_data,
-            id_unidade_geradora=filtros.id_unidade_geradora,
-            id_assunto=filtros.id_assunto,
-            grupo=filtros.grupo,
-            limit=filtros.limit,
-            start=filtros.pagina,
-        )
+        return await self._rest.pesquisar_processos(filtros)
 
     async def listar_atividades(self, processo: str) -> dict:
         """Lista o histórico de andamentos de um processo."""
@@ -94,15 +84,7 @@ class ProcessosRest(_RestMixin):
 
     async def criar_processo(self, dados: NovoProcesso) -> dict:
         """Cria um novo processo."""
-        return await self._rest.criar_processo(
-            tipo_processo=dados.tipo_processo,
-            especificacao=dados.especificacao,
-            assuntos=dados.assuntos,
-            interessados=dados.interessados,
-            observacoes=dados.observacoes,
-            nivel_acesso=dados.nivel_acesso,
-            hipotese_legal=dados.hipotese_legal,
-        )
+        return await self._rest.criar_processo(dados)
 
     async def alterar_processo(
         self,
@@ -147,15 +129,17 @@ class ProcessosRest(_RestMixin):
                 )
                 raise SEIValidationError(msg)
             ids_resolvidos.append(str(exact.get("id", "")))
-        return await self._rest.enviar_processo(
-            numero_processo=processo,
+        resolved = EnvioProcesso(
             unidades_destino=",".join(ids_resolvidos),
             manter_aberto=dados.manter_aberto,
             remover_anotacao=dados.remover_anotacao,
             enviar_email=dados.enviar_email,
             data_retorno=dados.data_retorno,
             dias_retorno=dados.dias_retorno,
+            dias_uteis_retorno=dados.dias_uteis_retorno,
+            reabrir=dados.reabrir,
         )
+        return await self._rest.enviar_processo(processo, resolved)
 
     async def concluir_processo(self, processo: str) -> dict:
         """Conclui (encerra) um processo na unidade atual."""
