@@ -754,3 +754,65 @@ def test_all_routed_tools_exist_in_mcp() -> None:
 
     unknown = sorted(routed - registered)
     assert not unknown, f"_ROUTES references tool names not registered in the MCP server: {unknown}"
+
+
+# Tools intentionally absent from _ROUTES because they are covered by explicit
+# hand-written tests above or have bespoke multi-op orchestration that makes
+# the single-op routing table inapplicable.  Every tool not in _ROUTES MUST be
+# listed here with a short explanation; the test below enforces this invariant.
+_TOOLS_WITHOUT_ROUTING: frozenset[str] = frozenset(
+    {
+        # --- hand-written tests in this file (multi-op or stateful) ---
+        "sei_consultar_processo",  # test_consultar_processo_routes_and_keeps_public_payload
+        "sei_editar_secao",  # test_editar_secao_reads_then_writes_via_composite
+        "sei_criar_documento",  # test_criar_documento_routes_to_composite
+        "sei_ler_documento",  # test_ler_documento_gates_then_reads_via_composite
+        "sei_baixar_anexo",  # test_baixar_anexo_gates_then_downloads_via_composite
+        "sei_executar_acao",  # test_executar_acao_dry_run_does_not_touch_backend
+        # --- multi-op orchestration (compose several backend ops) ---
+        "sei_cancelar_assinatura",  # compõe listar_secoes + alterar_secoes
+        "sei_marcar_nao_lido",  # compõe unidade_atual + enviar_processo
+        "sei_criar_processo",  # compõe pesquisar_tipos + criar_processo + escolher_tipo
+        "sei_alterar_processo",  # lê dados atuais depois altera (multi-step)
+        "sei_gerar_pdf_processo",  # gerar_pdf_processo com streaming de progresso
+        "sei_gerar_zip_processo",  # gerar_zip_processo com streaming de progresso
+        "sei_gerar_referencia",  # orquestra resolução de doc + gera HTML âncora
+        # --- utility: no backend routing (pure static data) ---
+        "sei_estilos",  # retorna SEI_STYLES de memória, sem backend
+        # --- parameterless / pagination-only delegates ---
+        # (nenhum sentinel identificável; a single-arg sentinel check seria vazia)
+        "sei_unidade_atual",  # backend.unidade_atual() sem args obrigatórios
+        "sei_listar_unidades",  # backend.listar_unidades() sem args obrigatórios
+        "sei_trocar_unidade",  # tem rota no composite (sessão + sync) — teste unitário próprio
+        "sei_versao",  # backend.versao() sem args obrigatórios
+        "sei_listar_orgaos",  # backend.listar_orgaos() sem args obrigatórios
+        "sei_listar_assinantes",  # backend.listar_assinantes() sem args obrigatórios
+        "sei_listar_orgaos_assinante",  # backend.listar_orgaos_assinante() sem args
+        "sei_parametros_upload",  # backend.parametros_upload() sem args obrigatórios
+        "sei_listar_processos",  # backend.listar_processos(pagina=, ...) — args opcionais
+        "sei_listar_meus_acompanhamentos",  # backend.listar_meus_acompanhamentos(...)
+        "sei_listar_acompanhamentos_unidade",  # backend.listar_acompanhamentos_unidade(...)
+        "sei_listar_usuarios",  # backend.listar_usuarios(filtro=, ...) — args opcionais
+        "sei_listar_grupos_modelos",  # backend.listar_grupos_modelos() sem args
+        "sei_listar_modelos",  # backend.listar_modelos(id_grupo=) — ver catalogos.py
+    }
+)
+
+
+def test_all_mcp_tools_have_routing_entry() -> None:
+    """Every registered MCP tool must appear in _ROUTES or _TOOLS_WITHOUT_ROUTING.
+
+    This is the inverse of ``test_all_routed_tools_exist_in_mcp``: it prevents
+    a developer from adding a new tool without either adding a routing entry in
+    ``_ROUTES`` or explicitly listing it in ``_TOOLS_WITHOUT_ROUTING`` with a
+    comment explaining why routing validation does not apply.
+    """
+    registered = {t.name for t in asyncio.run(mcp.list_tools())}
+    routed = {tool_name for _, tool_name, *_ in _ROUTES}
+
+    missing = sorted(registered - routed - _TOOLS_WITHOUT_ROUTING)
+    assert not missing, (
+        f"Ferramentas sem entrada em _ROUTES nem em _TOOLS_WITHOUT_ROUTING: {missing}\n"
+        "Adicione uma rota em _ROUTES ou registre a ferramenta em _TOOLS_WITHOUT_ROUTING "
+        "com um comentário explicando por que a validação de roteamento não se aplica."
+    )

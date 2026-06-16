@@ -39,16 +39,14 @@ def html_to_text(raw: str) -> str:
         # Limpar linhas vazias e espaços excessivos
         lines = [line.strip() for line in text.split("\n") if line.strip()]
         return "\n".join(lines)
-    except (AttributeError, TypeError, ValueError, UnicodeDecodeError) as e:
-        logger.warning(
-            "html_to_text: parser falhou (%s: %s) — usando fallback regex; saída truncada a 10000 chars",
-            type(e).__name__,
-            e,
-        )
+    except (TypeError, ValueError, UnicodeDecodeError) as _html_err:
+        logger.warning("Falha ao converter HTML (fallback regex): %s", _html_err)
         # Fallback: regex brutal
         text = html_module.unescape(raw)
         text = re.sub(r"<[^>]+>", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > 10000:
+            logger.warning("Texto truncado de %d para 10000 caracteres após fallback", len(text))
         return text[:10000]
 
 
@@ -123,8 +121,19 @@ def html_to_markdown(raw: str) -> str:
         return html_to_text(raw)
 
 
-MAX_OCR_PAGES = 20  # Limite de páginas para OCR (evitar timeout)
 OCR_LANG = os.environ.get("SEI_OCR_LANG", "por")
+
+
+def _max_ocr_pages() -> int:
+    """Retorna MAX_OCR_PAGES do ambiente, com validação lazy (não trava o import)."""
+    raw = os.environ.get("MAX_OCR_PAGES", "")
+    if not raw:
+        return 20
+    try:
+        return int(raw)
+    except ValueError as exc:
+        _err = f"MAX_OCR_PAGES deve ser um inteiro; recebido: {raw!r}"
+        raise RuntimeError(_err) from exc
 
 
 def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
@@ -143,17 +152,18 @@ def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
     except (PDFInfoNotInstalledError, PDFPageCountError) as e:
         msg = f"poppler não instalado ou PDF inválido: {e}"
         raise OSError(msg) from e
+    max_pages = _max_ocr_pages()
     pages = []
-    limit = min(len(images), MAX_OCR_PAGES)
+    limit = min(len(images), max_pages)
     for i, img in enumerate(images[:limit], 1):
         text = pytesseract.image_to_string(img, lang=lang)
         if text and text.strip():
             pages.append((i, text.strip()))
-    if len(images) > MAX_OCR_PAGES:
+    if len(images) > max_pages:
         pages.append(
             (
-                MAX_OCR_PAGES + 1,
-                f"[OCR limitado a {MAX_OCR_PAGES} páginas. "
+                max_pages + 1,
+                f"[OCR limitado a {max_pages} páginas. "
                 f"O documento tem {len(images)} páginas no total. "
                 f"Use sei_baixar_anexo para obter o PDF completo.]",
             )
@@ -192,11 +202,12 @@ def _extract_pdf_pages(content: bytes) -> list[tuple[int, str]]:
     # Fallback: OCR para PDFs de imagem
     try:
         return _ocr_pdf(content)
-    except (ImportError, OSError, RuntimeError, ValueError) as e:
+    except (ImportError, OSError, RuntimeError, ValueError) as _ocr_err:
         logger.warning(
             "OCR falhou (%s: %s) — PDF retornado como sem texto",
-            type(e).__name__,
-            e,
+            type(_ocr_err).__name__,
+            _ocr_err,
+            exc_info=True,
         )
         return []
 

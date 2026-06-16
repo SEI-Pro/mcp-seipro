@@ -45,8 +45,23 @@ def _backend_source(name: str) -> str:
     return "\n".join(p.read_text(encoding="utf-8") for p in sorted((_SRC / name).glob("*.py")))
 
 
-def _async_defs(name: str) -> set[str]:
-    return set(re.findall(r"async def (\w+)\(", _backend_source(name)))
+def _mixin_async_ops(cls: type) -> set[str]:
+    """Return async methods actually implemented in *cls* or its mixins.
+
+    Walks the MRO, skipping `SEIBackend` (base stubs) and `object`.  Every
+    ``async def`` found in a concrete mixin is counted as an implementation,
+    regardless of whether it is exposed under a different name by the class.
+    This replaces the former regex approach (``_async_defs``) which was fragile
+    to refactoring and could silently miss methods defined across mixin files.
+    """
+    skip = {SEIBackend, object}
+    return {
+        name
+        for klass in cls.__mro__
+        if klass not in skip
+        for name, val in vars(klass).items()
+        if not name.startswith("_") and inspect.iscoroutinefunction(val)
+    }
 
 
 def _backend_op_calls(path: Path) -> set[str]:
@@ -131,11 +146,15 @@ def test_wrapped_client_calls_exist(name: str, attr: str, client: type) -> None:
 
 
 def _always_raise_ops() -> set[str]:
-    """Contract ops implemented by no backend (composite would always raise)."""
+    """Contract ops implemented by no backend (composite would always raise).
+
+    Uses live class introspection instead of regex over source files so that
+    renaming, moving, or decorating a method is detected immediately.
+    """
     base = {
         n for n, _ in inspect.getmembers(SEIBackend, inspect.isfunction) if not n.startswith("_")
     }
-    impl = _async_defs("rest") | _async_defs("web") | _async_defs("composite")
+    impl = _mixin_async_ops(SEIRestBackend) | _mixin_async_ops(SEIWebBackend)
     return base - impl
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
     from fastmcp.server.http import StarletteWithLifespan
     from starlette.requests import Request
+
+logger = logging.getLogger(__name__)
 
 
 def _icon_bytes() -> bytes:
@@ -68,7 +71,11 @@ def run_remote(mcp: FastMCP, *, port: int) -> None:
         raise RuntimeError(msg)
     base_url = os.environ.get("BASE_URL", f"http://localhost:{port}").rstrip("/")
     app = build_remote_app(mcp, base_url=base_url)
-    config = uvicorn.Config(
-        app, host=os.environ.get("MCP_HOST", "0.0.0.0"), port=port, log_level="info"
-    )
+    host = os.environ.get("MCP_HOST", "0.0.0.0")
+    if host == "0.0.0.0":
+        logger.warning(
+            "Servidor MCP vinculado a 0.0.0.0 (todas as interfaces). "
+            "Defina MCP_HOST=127.0.0.1 para restringir o acesso em ambientes locais."
+        )
+    config = uvicorn.Config(app, host=host, port=port, log_level="info")
     anyio.run(uvicorn.Server(config).serve)

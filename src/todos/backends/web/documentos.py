@@ -8,17 +8,36 @@ serve a operação (ex.: falta `processo`), levanta `SEINotImplementedError`.
 from __future__ import annotations
 
 import base64
+import logging
 from typing import TYPE_CHECKING
 
 from todos.backends.web._session import _WebMixin
 from todos.exceptions import SEINotImplementedError
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from todos.backends.base import NovoDocumentoExterno, NovoDocumentoInterno
 
 
 class DocumentosWeb(_WebMixin):
     """Operações web de documentos."""
+
+    async def _encontrar_em_processo(
+        self, proto_proc: str, _match: Callable[[str], bool]
+    ) -> dict | None:
+        """Busca um documento pelo número SEI dentro de um processo específico."""
+        result_web = await self._web.listar_documentos(proto_proc)
+        for d in result_web.get("documentos", []):
+            _num = d.get("numero_sei")
+            if _num is None:
+                logger.warning("Documento sem chave 'numero_sei' no resultado do scraper: %r", d)
+                continue
+            if _match(_num):
+                return {"encontrado": True, "processo": proto_proc, "documento": d}
+        return None
 
     async def buscar_documento(self, numero_sei: str, processo: str = "") -> dict:
         """Busca um documento pelo número SEI."""
@@ -28,10 +47,9 @@ class DocumentosWeb(_WebMixin):
             return proto == numero_sei or proto.lstrip("0") == numero_sei.lstrip("0")
 
         if processo:
-            result_web = await self._web.listar_documentos(processo)
-            for d in result_web.get("documentos", []):
-                if _match(d.get("numero_sei", "")):
-                    return {"encontrado": True, "processo": processo, "documento": d}
+            encontrado = await self._encontrar_em_processo(processo, _match)
+            if encontrado:
+                return encontrado
             return {
                 "encontrado": False,
                 "mensagem": (f"SEI {numero_sei} não encontrado na árvore do processo {processo}"),
@@ -43,10 +61,9 @@ class DocumentosWeb(_WebMixin):
             proto_proc = p.get("protocolo", "")
             if not proto_proc:
                 continue
-            result_web = await self._web.listar_documentos(proto_proc)
-            for d in result_web.get("documentos", []):
-                if _match(d.get("numero_sei", "")):
-                    return {"encontrado": True, "processo": proto_proc, "documento": d}
+            encontrado = await self._encontrar_em_processo(proto_proc, _match)
+            if encontrado:
+                return encontrado
         return {
             "encontrado": False,
             "processos_pesquisados": len(candidatos),

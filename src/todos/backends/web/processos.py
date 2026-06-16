@@ -6,10 +6,13 @@ mensagem do SEI) propaga sem reembrulho.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from todos.backends.web._session import _WebMixin
 from todos.exceptions import SEIValidationError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from todos.backends.base import EnvioProcesso, FiltrosPesquisaProcessos, NovoProcesso
@@ -173,7 +176,14 @@ class ProcessosWeb(_WebMixin):
     async def atribuir_processo(self, processo: str, usuario: str) -> dict:
         """Atribui um processo a um usuário da unidade."""
         form_info = await self._web.obter_form_acao(processo, "procedimento_atribuicao_cadastrar")
-        opcoes_usuario = form_info.get("selects", {}).get("selAtribuicao", [])
+        _selects = form_info.get("selects", {})
+        opcoes_usuario = _selects.get("selAtribuicao", [])
+        if not opcoes_usuario and "selAtribuicao" not in _selects:
+            logger.warning(
+                "Campo 'selAtribuicao' ausente no formulário de atribuição — "
+                "SEI pode ter renomeado o campo; selects disponíveis: %s",
+                list(_selects.keys()),
+            )
         if not opcoes_usuario:
             msg = "Nenhum usuário disponível para atribuição nesta unidade."
             raise SEIValidationError(msg)
