@@ -1619,7 +1619,8 @@ class SEIWebClient:
         await self.ensure_authenticated()
         alvo = marcador.strip().lower()
         tentados: dict[str, str] = {}  # mid -> nome (cada mid é tentado uma vez)
-        for _ in range(20):  # trava de segurança
+        max_iter_marcador = 20
+        for _iter in range(max_iter_marcador):  # trava de segurança
             body, soup, referer = await self._pagina_marcador(protocolo)
             aplicados = re.findall(r"acaoRemover\('(\d+)','([^']*)'\)", body)
             # Casa por id exato OU substring do NOME (sem a cor #rrggbb, que
@@ -1662,6 +1663,12 @@ class SEIWebClient:
                 raise SEIConnectionError(erro)
             tentados[mid] = self._split_marcador_desc(desc)[0]
             self._invalidar_arvore(protocolo)
+        else:
+            logger.warning(
+                "Loop de remoção de marcador atingiu o limite de %d iterações para processo %s",
+                max_iter_marcador,
+                protocolo,
+            )
         if not tentados:
             qual = f'"{marcador}" ' if marcador else ""
             raise SEINotFoundError(f"Marcador {qual}não está aplicado em {protocolo}.")
@@ -3849,7 +3856,8 @@ class SEIWebClient:
         await self.ensure_authenticated()
         sei_base = f"{self.sei_root}/sei/"
         removidos = 0
-        for _ in range(20):  # trava de segurança
+        max_iter_acompanhamento = 20
+        for _iter in range(max_iter_acompanhamento):  # trava de segurança
             html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
             m = re.search(
                 r"(controlador\.php\?acao=acompanhamento_gerenciar[^\"'\s]*infra_hash=[a-f0-9]+)",
@@ -3890,6 +3898,12 @@ class SEIWebClient:
                 raise SEIConnectionError(erro)
             removidos += 1
             self._invalidar_arvore(protocolo)
+        else:
+            logger.warning(
+                "Loop de remoção de acompanhamento atingiu o limite de %d iterações para processo %s",
+                max_iter_acompanhamento,
+                protocolo,
+            )
         if removidos == 0:
             raise SEINotFoundError(f"Nenhum acompanhamento especial aplicado em {protocolo}.")
         return {"ok": True, "removidos": removidos, "protocolo": protocolo}
