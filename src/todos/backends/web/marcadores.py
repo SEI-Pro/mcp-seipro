@@ -28,6 +28,13 @@ class MarcadoresWeb(_WebMixin):
         return await self._web.consultar_marcador_processo_web(processo)
 
     async def pesquisar_marcadores(self, filtro: str = "", limit: int = 50) -> dict:
-        """Lista marcadores disponíveis na unidade."""
-        del limit  # contrato exige o parâmetro; o scraper retorna todos os marcadores da unidade
-        return await self._web.pesquisar_marcadores_web(filtro=filtro)
+        """Lista marcadores disponíveis na unidade.
+
+        A interface web do SEI não suporta limitação server-side; o limite é
+        aplicado no cliente após obter a lista completa.
+        """
+        result = await self._web.pesquisar_marcadores_web(filtro=filtro)
+        if limit > 0 and len(result.get("marcadores", [])) > limit:
+            marcadores = result["marcadores"][:limit]
+            return {"marcadores": marcadores, "total_itens": len(marcadores)}
+        return result

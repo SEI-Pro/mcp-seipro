@@ -7,10 +7,11 @@ mensagem do SEI) propaga sem reembrulho.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from todos.backends.web._session import _WebMixin
-from todos.exceptions import SEIValidationError
+from todos.exceptions import SEIConnectionError, SEIValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,13 @@ class ProcessosWeb(_WebMixin):
         assuntos_ids = [a.strip() for a in dados.assuntos.split(",") if a.strip()]
         # Lista vazia é válida: _serializar_assuntos usa os assuntos pré-carregados
         # do tipo de processo como default (mesmo comportamento do form web).
+        _ids_invalidos = [aid for aid in assuntos_ids if not re.match(r"^\d+$", aid)]
+        if _ids_invalidos:
+            msg = (
+                f"assuntos_ids contém entradas não numéricas: {_ids_invalidos}. "
+                "Cada ID de assunto deve ser um número inteiro (ex: '876')."
+            )
+            raise SEIValidationError(msg)
         interessados_ids = [i.strip() for i in dados.interessados.split(",") if i.strip()]
         return await self._web.criar_processo_web(
             tipo_processo=dados.tipo_processo,
@@ -179,13 +187,13 @@ class ProcessosWeb(_WebMixin):
         """Atribui um processo a um usuário da unidade."""
         form_info = await self._web.obter_form_acao(processo, "procedimento_atribuicao_cadastrar")
         _selects = form_info.get("selects", {})
-        opcoes_usuario = _selects.get("selAtribuicao", [])
-        if not opcoes_usuario and "selAtribuicao" not in _selects:
-            logger.warning(
-                "Campo 'selAtribuicao' ausente no formulário de atribuição — "
-                "SEI pode ter renomeado o campo; selects disponíveis: %s",
-                list(_selects.keys()),
+        if "selAtribuicao" not in _selects:
+            msg = (
+                "Campo selAtribuicao ausente na resposta do SEI — layout alterado? "
+                f"Selects disponíveis: {list(_selects.keys())}"
             )
+            raise SEIConnectionError(msg)
+        opcoes_usuario = _selects.get("selAtribuicao", [])
         if not opcoes_usuario:
             msg = "Nenhum usuário disponível para atribuição nesta unidade."
             raise SEIValidationError(msg)

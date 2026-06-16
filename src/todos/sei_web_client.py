@@ -47,6 +47,23 @@ logger = logging.getLogger(__name__)
 _ARVORE_CACHE_TTL = 30.0
 SEI_WEB_PAGE_SIZE = 10
 
+# ---------------------------------------------------------------------------
+# Nomes de campos do form frmProcedimentoCadastro (criar/alterar processo).
+# O JS do SEI vira hdnFlag*Cadastro de '1'→'2' antes de submeter; com '1' o
+# servidor apenas re-exibe o form sem salvar (no-op silencioso). Se o SEI
+# renomear esses campos em versão futura, basta atualizar aqui.
+# ---------------------------------------------------------------------------
+_FIELD_FLAG_PROC_CADASTRO = "hdnFlagProcedimentoCadastro"  # JS: '1'→'2' obrigatório
+_FIELD_FLAG_DOC_CADASTRO = "hdnFlagDocumentoCadastro"  # idem para documentos
+_FIELD_ASSUNTOS = "hdnAssuntos"  # formato: id±texto separados por ¥ (U+00A5)
+_FIELD_NIVEL_ACESSO = "rdoNivelAcesso"  # 0=público, 1=restrito, 2=sigiloso
+_FIELD_NIVEL_ACESSO_GLOBAL = "hdnStaNivelAcessoGlobal"  # espelho do rdoNivelAcesso
+_FIELD_NIVEL_ACESSO_LOCAL = "hdnStaNivelAcessoLocal"  # idem, escopo documento
+_FIELD_DESCRICAO = "txtDescricao"  # especificação do processo (máx. 100 chars)
+_FIELD_INTERESSADOS = "hdnInteressadosProcedimento"  # mesmo formato de hdnAssuntos
+_FIELD_FILTRO_TIPO_PROC = "hdnFiltroTipoProcedimento"  # 'T'=todos, 'F'=favoritos
+_FIELD_ID_TIPO_PROC = "hdnIdTipoProcedimento"  # id do tipo selecionado no fluxo escolher_tipo
+
 
 def _decode_response(content: bytes, content_type: str) -> str:
     """Decode HTTP response bytes using charset from Content-Type, defaulting to iso-8859-1."""
@@ -3035,7 +3052,7 @@ class SEIWebClient:
             r = await self._post_form_preservando(
                 form,
                 str(r.url),
-                {"hdnFiltroTipoProcedimento": "T", "hdnIdTipoProcedimento": ""},
+                {_FIELD_FILTRO_TIPO_PROC: "T", _FIELD_ID_TIPO_PROC: ""},
                 str(r.url),
             )
             soup = BeautifulSoup(
@@ -3046,7 +3063,7 @@ class SEIWebClient:
                 raise SEIParseError("Form de escolha de tipo não recarregou.")
             # Seleciona o tipo desejado → recebe o form de cadastro.
             r = await self._post_form_preservando(
-                form, str(r.url), {"hdnIdTipoProcedimento": tipo_processo}, str(r.url)
+                form, str(r.url), {_FIELD_ID_TIPO_PROC: tipo_processo}, str(r.url)
             )
             soup = BeautifulSoup(
                 _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
@@ -3129,29 +3146,27 @@ class SEIWebClient:
         form, url_atual = await self._abrir_form_cadastro_processo(tipo_processo)
 
         overrides: dict[str, str] = {
-            "hdnFlagProcedimentoCadastro": "2",
-            "rdoNivelAcesso": nivel_acesso,
-            "hdnAssuntos": self._serializar_assuntos(form, assuntos_ids or []),
+            _FIELD_FLAG_PROC_CADASTRO: "2",
+            _FIELD_NIVEL_ACESSO: nivel_acesso,
+            _FIELD_ASSUNTOS: self._serializar_assuntos(form, assuntos_ids or []),
             # Comunica o tipo nos dois fluxos: no escolher_tipo o
-            # hdnIdTipoProcedimento já vem setado; no form direto
+            # _FIELD_ID_TIPO_PROC já vem setado; no form direto
             # (procedimento_cadastrar, instâncias antigas) o servidor lê
             # selTipoProcedimento. Setar ambos é inócuo no fluxo moderno.
             "selTipoProcedimento": tipo_processo,
-            "hdnIdTipoProcedimento": tipo_processo,
+            _FIELD_ID_TIPO_PROC: tipo_processo,
         }
         if especificacao:
-            overrides["txtDescricao"] = especificacao
+            overrides[_FIELD_DESCRICAO] = especificacao
         if hipotese_legal and nivel_acesso in ("1", "2"):
             overrides["selHipoteseLegal"] = hipotese_legal
         if interessados_ids:
             # Interessados usam o mesmo infraLupaSelect dos assuntos
-            # (selInteressadosProcedimento → hdnInteressadosProcedimento): itens
+            # (selInteressadosProcedimento → _FIELD_INTERESSADOS): itens
             # `id±rótulo` separados por `¥`. O servidor vincula pelo id (o rótulo
             # é re-derivado), então usamos o id como rótulo. Um POST malformado é
             # detectado abaixo (form re-exibido) — nunca é silencioso.
-            overrides["hdnInteressadosProcedimento"] = "¥".join(
-                f"{iid}±{iid}" for iid in interessados_ids
-            )
+            overrides[_FIELD_INTERESSADOS] = "¥".join(f"{iid}±{iid}" for iid in interessados_ids)
 
         sbm = next((b for b in form.find_all("button") if _tag_str(b, "name") == "btnSalvar"), None)
         if sbm is not None:
@@ -3244,17 +3259,17 @@ class SEIWebClient:
         overrides: dict[str, str] = {
             # O JS do SEI vira este flag de '1'→'2' ao submeter; sem '2' o servidor
             # apenas re-exibe o form (a alteração não é salva).
-            "hdnFlagProcedimentoCadastro": "2",
+            _FIELD_FLAG_PROC_CADASTRO: "2",
             # Assuntos são obrigatórios: re-serializa os já vinculados (senão o
             # servidor rejeita com "Informe os Assuntos").
-            "hdnAssuntos": self._serializar_assuntos(form, []),
+            _FIELD_ASSUNTOS: self._serializar_assuntos(form, []),
         }
         if especificacao:
-            overrides["txtDescricao"] = especificacao
+            overrides[_FIELD_DESCRICAO] = especificacao
         if nivel_acesso:
-            overrides["rdoNivelAcesso"] = nivel_acesso
+            overrides[_FIELD_NIVEL_ACESSO] = nivel_acesso
             # JS do SEI sincroniza este hidden ao mudar o rádio — replicamos.
-            overrides["hdnStaNivelAcessoGlobal"] = nivel_acesso
+            overrides[_FIELD_NIVEL_ACESSO_GLOBAL] = nivel_acesso
         if hipotese_legal:
             overrides["selHipoteseLegal"] = hipotese_legal
         if observacao:
@@ -3710,13 +3725,13 @@ class SEIWebClient:
         form4_data["hdnIdSerie"] = id_serie
         form4_data["selSerie"] = id_serie
         form4_data["txtDataElaboracao"] = data_elaboracao or _date.today().strftime("%d/%m/%Y")
-        form4_data["hdnStaNivelAcessoLocal"] = nivel_acesso
-        form4_data["rdoNivelAcesso"] = nivel_acesso
+        form4_data[_FIELD_NIVEL_ACESSO_LOCAL] = nivel_acesso
+        form4_data[_FIELD_NIVEL_ACESSO] = nivel_acesso
         if hipotese_legal and nivel_acesso in ("1", "2"):
             form4_data["selHipoteseLegal"] = hipotese_legal
         form4_data["rdoFormato"] = "N"  # nato-digital
         # JS submeter() altera de '1' → '2' antes do form.submit()
-        form4_data["hdnFlagDocumentoCadastro"] = "2"
+        form4_data[_FIELD_FLAG_DOC_CADASTRO] = "2"
 
         # Codifica todos os campos exceto hdnAnexos, depois concatena manualmente
         other_fields = {k: v for k, v in form4_data.items() if k != "hdnAnexos"}

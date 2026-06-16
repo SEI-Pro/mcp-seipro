@@ -633,7 +633,9 @@ class SEIBackend:
         """Lista os documentos de um bloco de assinatura."""
         raise NotImplementedError
 
-    async def retirar_documentos_bloco_assinatura(self, id_bloco: str, documentos: str) -> dict:
+    async def retirar_documentos_bloco_assinatura(
+        self, id_bloco: str, documentos: str
+    ) -> list[dict]:
         """Retira documentos de um bloco de assinatura."""
         raise NotImplementedError
 
@@ -641,11 +643,11 @@ class SEIBackend:
         """Altera a descrição de um bloco de assinatura."""
         raise NotImplementedError
 
-    async def excluir_blocos_assinatura(self, ids_blocos: str) -> dict:
+    async def excluir_blocos_assinatura(self, ids_blocos: str) -> list[dict]:
         """Exclui blocos de assinatura."""
         raise NotImplementedError
 
-    async def concluir_blocos_assinatura(self, ids_blocos: str) -> dict:
+    async def concluir_blocos_assinatura(self, ids_blocos: str) -> list[dict]:
         """Conclui blocos de assinatura."""
         raise NotImplementedError
 
