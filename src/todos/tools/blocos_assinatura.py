@@ -30,7 +30,7 @@ async def sei_criar_bloco_assinatura(
       Ignorado em modo web (bloco criado sem unidades pré-configuradas).
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.criar_bloco_assinatura(descricao, unidades)
     return _json(result)
 
@@ -46,7 +46,7 @@ async def sei_incluir_documento_bloco_assinatura(
     - id_bloco: ID do bloco de assinatura
     - documentos: ID(s) de documento(s) separados por vírgula
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.incluir_documento_bloco_assinatura(id_bloco, documentos)
     return _json(result)
 
@@ -61,7 +61,7 @@ async def sei_disponibilizar_bloco_assinatura(
     Após disponibilizar, os usuários das unidades podem assinar os documentos.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.disponibilizar_bloco_assinatura(id_bloco)
     return _json(result)
 
@@ -76,7 +76,7 @@ async def sei_cancelar_disponibilizacao_bloco(
     O bloco volta ao estado aberto e pode ser editado novamente.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.cancelar_disponibilizacao_bloco_assinatura(id_bloco)
     return _json(result)
 
@@ -88,7 +88,7 @@ async def sei_pesquisar_blocos_assinatura(
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa blocos de assinatura existentes."""
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.pesquisar_blocos_assinatura(filtro=filtro, limit=limit)
     return _json(result)
 
@@ -99,7 +99,7 @@ async def sei_listar_documentos_bloco_assinatura(
     ctx: Context | None = None,
 ) -> str:
     """Lista documentos de um bloco de assinatura."""
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_documentos_bloco_assinatura(id_bloco)
     return _json(result)
 
@@ -115,7 +115,7 @@ async def sei_retirar_documentos_bloco_assinatura(
     - documentos: ID(s) de documento(s) separados por vírgula
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.retirar_documentos_bloco_assinatura(id_bloco, documentos)
     return _json(result)
 
@@ -132,7 +132,7 @@ async def sei_alterar_bloco_assinatura(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.alterar_bloco_assinatura(id_bloco, descricao)
     return _json(result)
 
@@ -148,7 +148,7 @@ async def sei_excluir_bloco_assinatura(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.excluir_blocos_assinatura(ids_blocos)
     return _json(result)
 
@@ -164,7 +164,7 @@ async def sei_concluir_bloco_assinatura(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.concluir_blocos_assinatura(ids_blocos)
     return _json(result)
 
@@ -180,7 +180,7 @@ async def sei_reabrir_bloco_assinatura(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.reabrir_bloco_assinatura(id_bloco)
     return _json(result)
 
@@ -196,7 +196,7 @@ async def sei_retornar_bloco_assinatura(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.retornar_bloco_assinatura(id_bloco)
     return _json(result)
 
@@ -214,7 +214,7 @@ async def sei_anotar_documento_bloco_assinatura(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.anotar_documento_bloco_assinatura(id_bloco, documento, descricao)
     return _json(result)
 
@@ -232,6 +232,6 @@ async def sei_alterar_anotacao_bloco_assinatura(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.alterar_anotacao_bloco_assinatura(id_bloco, documento, descricao)
     return _json(result)

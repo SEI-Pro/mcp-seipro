@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from helpers import aconst
 
 from todos import access_control
 from todos.exceptions import SEIError, SEIValidationError
@@ -130,7 +131,7 @@ class _SecoesBackend:
 
 def test_editar_secao_builds_full_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = _SecoesBackend()
-    monkeypatch.setattr(d, "_backend", lambda _ctx: backend)
+    monkeypatch.setattr(d, "_backend", aconst(backend))
 
     asyncio.run(
         d.sei_editar_secao("D", [{"idSecaoModelo": "1", "conteudo": "<p>novo</p>"}], ctx=None)
@@ -174,7 +175,7 @@ class TestIncluirValidation:
 
 
 def test_criar_documento_requires_id_serie_in_rest(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(d, "_has_rest", lambda _ctx: True)
+    monkeypatch.setattr(d, "_has_rest", aconst(True))
     with pytest.raises(SEIValidationError, match="id_serie é obrigatório"):
         asyncio.run(d.sei_criar_documento("PF", id_serie="", ctx=None))
 
@@ -185,8 +186,8 @@ def test_criar_documento_requires_id_serie_in_rest(monkeypatch: pytest.MonkeyPat
 
 
 def test_ler_documento_web_only_requires_processo(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(d, "_backend", lambda _ctx: object())
-    monkeypatch.setattr(d, "_has_rest", lambda _ctx: False)
+    monkeypatch.setattr(d, "_backend", aconst(object()))
+    monkeypatch.setattr(d, "_has_rest", aconst(False))
     with pytest.raises(SEIValidationError, match="forneça o parâmetro 'processo'"):
         asyncio.run(d.sei_ler_documento("D", tipo_documento="I", processo=None, ctx=None))
 
@@ -205,8 +206,8 @@ class _GateErroBackend:
 
 
 def test_ler_documento_propagates_consult_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(d, "_backend", lambda _ctx: _GateErroBackend())
-    monkeypatch.setattr(d, "_has_rest", lambda _ctx: False)
+    monkeypatch.setattr(d, "_backend", aconst(_GateErroBackend()))
+    monkeypatch.setattr(d, "_has_rest", aconst(False))
     # Fail-closed by propagation: the gate's consult error propagates (the read
     # never runs); no tailored hint, no envelope.
     with pytest.raises(SEIError, match="não autorizado"):
@@ -228,8 +229,8 @@ class _AnexoBackend:
 
 
 def test_baixar_anexo_too_large_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(d, "_backend", lambda _ctx: _AnexoBackend())
-    monkeypatch.setattr(d, "_has_rest", lambda _ctx: False)
+    monkeypatch.setattr(d, "_backend", aconst(_AnexoBackend()))
+    monkeypatch.setattr(d, "_has_rest", aconst(False))
     monkeypatch.setattr(d, "MAX_BINARY_SIZE", 10)
     with pytest.raises(SEIValidationError, match="muito grande"):
         asyncio.run(d.sei_baixar_anexo("D", processo="PF", ctx=None))
@@ -248,7 +249,7 @@ class _RestritoBackend:
 def test_consultar_documento_externo_attaches_aviso_for_restricted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(d, "_backend", lambda _ctx: _RestritoBackend())
+    monkeypatch.setattr(d, "_backend", aconst(_RestritoBackend()))
     out = asyncio.run(d.sei_consultar_documento_externo("D", processo="PF", ctx=None))
     assert "_aviso_acesso" in out
 
@@ -269,7 +270,7 @@ def test_consultar_documento_externo_propagates_original_error(
 ) -> None:
     # No translation / no auto-recovery: the SEIError (a ToolError) propagates
     # with the SEI's own message.
-    monkeypatch.setattr(d, "_backend", lambda _ctx: _ConsultaErroBackend())
+    monkeypatch.setattr(d, "_backend", aconst(_ConsultaErroBackend()))
     with pytest.raises(SEIError, match="não autorizado"):
         asyncio.run(d.sei_consultar_documento_externo("D", processo="PF", ctx=None))
 
@@ -305,8 +306,8 @@ def _patch_cancelar(monkeypatch: pytest.MonkeyPatch, backend: _CancelarBackend) 
     async def _fake_resolver(_client: object, ref: str) -> tuple[str, str]:
         return ref, "I"
 
-    monkeypatch.setattr(a, "_backend", lambda _ctx: backend)
-    monkeypatch.setattr(a, "_get_client", lambda _ctx: object())
+    monkeypatch.setattr(a, "_backend", aconst(backend))
+    monkeypatch.setattr(a, "_get_client", aconst(object()))
     monkeypatch.setattr(a, "_resolver_documento", _fake_resolver)
 
 

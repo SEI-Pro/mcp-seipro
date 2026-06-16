@@ -33,6 +33,13 @@ from starlette.responses import HTMLResponse
 # ---------------------------------------------------------------------------
 
 _JWT_SECRET = os.environ.get("JWT_SECRET", "")
+if not _JWT_SECRET.strip():
+    _msg = (
+        "JWT_SECRET must be set as a non-empty environment variable. "
+        "HMAC with an empty key produces trivially forgeable tokens. "
+        'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+    )
+    raise RuntimeError(_msg)
 TOKEN_TTL = 86400 * 30  # 30 dias
 
 

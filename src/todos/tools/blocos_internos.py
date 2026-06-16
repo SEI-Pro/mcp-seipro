@@ -23,7 +23,7 @@ async def sei_criar_bloco_interno(
 
     Blocos internos são usados para organizar processos em lotes.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.criar_bloco_interno(descricao)
     return _json(result)
 
@@ -39,7 +39,7 @@ async def sei_incluir_processo_bloco_interno(
     - id_bloco: ID do bloco
     - processos: IdProcedimento(s) separados por vírgula
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.incluir_processo_bloco_interno(id_bloco, processos)
     return _json(result)
 
@@ -55,7 +55,7 @@ async def sei_retirar_processo_bloco_interno(
     - id_bloco: ID do bloco
     - processos: IdProcedimento(s) separados por vírgula
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.retirar_processo_bloco_interno(id_bloco, processos)
     return _json(result)
 
@@ -70,7 +70,7 @@ async def sei_listar_processos_bloco_interno(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_processos_bloco_interno(id_bloco)
     return _json(result)
 
@@ -86,7 +86,7 @@ async def sei_alterar_bloco_interno(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.alterar_bloco_interno(id_bloco, descricao)
     return _json(result)
 
@@ -101,7 +101,7 @@ async def sei_excluir_bloco_interno(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.excluir_blocos_internos(ids_blocos)
     return _json(result)
 
@@ -116,7 +116,7 @@ async def sei_concluir_bloco_interno(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.concluir_blocos_internos(ids_blocos)
     return _json(result)
 
@@ -131,7 +131,7 @@ async def sei_reabrir_bloco_interno(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.reabrir_bloco_interno(id_bloco)
     return _json(result)
 
@@ -148,7 +148,7 @@ async def sei_anotar_processo_bloco_interno(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.anotar_processo_bloco_interno(id_bloco, processo, descricao)
     return _json(result)
 
@@ -165,6 +165,6 @@ async def sei_alterar_anotacao_bloco_interno(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.alterar_anotacao_bloco_interno(id_bloco, processo, descricao)
     return _json(result)

@@ -37,7 +37,7 @@ async def sei_acompanhar_processo(
     - observacao: observação/anotação do acompanhamento
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     if grupo == "?":
         result = await backend.listar_grupos_acompanhamento(filtro="")
         return _json({"grupos_disponiveis": result})
@@ -51,7 +51,7 @@ async def sei_remover_acompanhamento(
     ctx: Context | None = None,
 ) -> str:
     """Remove acompanhamento especial de um processo."""
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.remover_acompanhamento(processo)
     return _json(result)
 
@@ -62,7 +62,7 @@ async def sei_criar_grupo_acompanhamento(
     ctx: Context | None = None,
 ) -> str:
     """Cria um grupo de acompanhamento especial no SEI."""
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.criar_grupo_acompanhamento(nome)
     return _json(result)
 
@@ -73,7 +73,7 @@ async def sei_excluir_grupo_acompanhamento(
     ctx: Context | None = None,
 ) -> str:
     """Exclui grupo(s) de acompanhamento especial. IDs separados por vírgula."""
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.excluir_grupo_acompanhamento(ids_grupos)
     return _json(result)
 
@@ -88,7 +88,7 @@ async def sei_listar_grupos_acompanhamento(
     Em instâncias sem mod-wssei, extrai os grupos do formulário de acompanhamento
     via web scraper (requer ao menos um processo aberto na caixa da unidade).
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_grupos_acompanhamento(filtro=filtro)
     return _json(result)
 
@@ -105,7 +105,7 @@ async def sei_listar_meus_acompanhamentos(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_meus_acompanhamentos(limit=limit, pagina=pagina)
     return _json(result)
 
@@ -122,7 +122,7 @@ async def sei_listar_acompanhamentos_unidade(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.listar_acompanhamentos_unidade(limit=limit, pagina=pagina)
     return _json(result)
 
@@ -144,6 +144,6 @@ async def sei_alterar_acompanhamento(
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
-    backend = _backend(ctx)
+    backend = await _backend(ctx)
     result = await backend.alterar_acompanhamento(processo, grupo, observacao)
     return _json(result)

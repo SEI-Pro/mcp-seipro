@@ -1,11 +1,14 @@
 """Utilitários para manipulação de HTML do SEI."""
 
 import html as html_module
+import logging
 import os
 import re
 
 from bs4 import BeautifulSoup
 from markdownify import markdownify
+
+logger = logging.getLogger(__name__)
 
 
 def html_to_text(raw: str) -> str:
@@ -36,7 +39,12 @@ def html_to_text(raw: str) -> str:
         # Limpar linhas vazias e espaços excessivos
         lines = [line.strip() for line in text.split("\n") if line.strip()]
         return "\n".join(lines)
-    except (AttributeError, TypeError, ValueError, UnicodeDecodeError):
+    except (AttributeError, TypeError, ValueError, UnicodeDecodeError) as e:
+        logger.warning(
+            "html_to_text: parser falhou (%s: %s) — usando fallback regex; saída truncada a 10000 chars",
+            type(e).__name__,
+            e,
+        )
         # Fallback: regex brutal
         text = html_module.unescape(raw)
         text = re.sub(r"<[^>]+>", " ", text)
@@ -170,7 +178,12 @@ def _extract_pdf_pages(content: bytes) -> list[tuple[int, str]]:
     # Fallback: OCR para PDFs de imagem
     try:
         return _ocr_pdf(content)
-    except (ImportError, OSError, RuntimeError, ValueError):
+    except (ImportError, OSError, RuntimeError, ValueError) as e:
+        logger.warning(
+            "OCR falhou (%s: %s) — PDF retornado como sem texto",
+            type(e).__name__,
+            e,
+        )
         return []
 
 

@@ -47,8 +47,13 @@ async def lifespan(_server: FastMCP):
         if _http_mode:
             clients: dict[str, SEIClient] = {}
             web_clients: dict[str, SEIWebClient] = {}
+            sei_lock: asyncio.Lock = asyncio.Lock()
             try:
-                yield {"sei_by_session": clients, "sei_web_by_session": web_clients}
+                yield {
+                    "sei_by_session": clients,
+                    "sei_web_by_session": web_clients,
+                    "sei_lock": sei_lock,
+                }
             finally:
                 await asyncio.gather(
                     *(client.close() for client in clients.values()),
@@ -72,19 +77,17 @@ async def lifespan(_server: FastMCP):
         await get_catalog_cache().close()
 
 
-def _store_session_client(clients: dict, session_id: str, client: object) -> None:
-    """Store a session-scoped client, evicting the oldest entry if the pool is full."""
-    if session_id in clients:
-        return
-    max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
-    if len(clients) >= max_sessions:
-        oldest = next(iter(clients))
-        clients.pop(oldest)
-        logger.warning("session pool at limit (%d); evicted oldest session", max_sessions)
-    clients[session_id] = client
+def _evict_oldest(clients: dict, max_sessions: int) -> SEIClient | SEIWebClient | None:
+    """Pop the oldest client from the pool if at capacity; return it for the caller to close."""
+    if len(clients) < max_sessions:
+        return None
+    oldest_id = next(iter(clients))
+    evicted = clients.pop(oldest_id)
+    logger.warning("session pool at limit (%d); evicted oldest session", max_sessions)
+    return evicted
 
 
-def _get_client(ctx: Context | None) -> SEIClient:
+async def _get_client(ctx: Context | None) -> SEIClient:
     """Obtém o SEIClient REST, criando sob demanda em modo HTTP."""
     if ctx is None:
         raise ValueError("Contexto MCP nao disponivel.")
@@ -101,12 +104,20 @@ def _get_client(ctx: Context | None) -> SEIClient:
         if not creds:
             raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
 
-        clients = ctx.lifespan_context["sei_by_session"]
-        client = clients.get(ctx.session_id)
-        if client is not None:
-            return client
-        client = SEIClient(**creds)
-        _store_session_client(clients, ctx.session_id, client)
+        max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
+        lock: asyncio.Lock = ctx.lifespan_context["sei_lock"]
+        async with lock:
+            clients = ctx.lifespan_context["sei_by_session"]
+            client = clients.get(ctx.session_id)
+            if client is not None:
+                return client
+            evicted = _evict_oldest(clients, max_sessions)
+            client = SEIClient(**creds)
+            clients[ctx.session_id] = client
+
+        if evicted is not None:
+            with suppress(OSError, httpx.HTTPError):
+                await evicted.close()
         return client
 
     client = ctx.lifespan_context.get("sei")
@@ -115,7 +126,7 @@ def _get_client(ctx: Context | None) -> SEIClient:
     raise ValueError("SEIClient nao configurado. Verifique as variaveis de ambiente.")
 
 
-def _get_web_client(ctx: Context | None) -> SEIWebClient:
+async def _get_web_client(ctx: Context | None) -> SEIWebClient:
     """Obtém o SEIWebClient (scraper), criando sob demanda em modo HTTP.
 
     O scraper mantém estado de sessão (cookies + infra_hash) e por isso é
@@ -136,12 +147,20 @@ def _get_web_client(ctx: Context | None) -> SEIWebClient:
         if not creds:
             raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
 
-        clients = ctx.lifespan_context["sei_web_by_session"]
-        client = clients.get(ctx.session_id)
-        if client is not None:
-            return client
-        client = SEIWebClient(**creds)
-        _store_session_client(clients, ctx.session_id, client)
+        max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
+        lock: asyncio.Lock = ctx.lifespan_context["sei_lock"]
+        async with lock:
+            clients = ctx.lifespan_context["sei_web_by_session"]
+            client = clients.get(ctx.session_id)
+            if client is not None:
+                return client
+            evicted = _evict_oldest(clients, max_sessions)
+            client = SEIWebClient(**creds)
+            clients[ctx.session_id] = client
+
+        if evicted is not None:
+            with suppress(OSError, httpx.HTTPError):
+                await evicted.close()
         return client
 
     client = ctx.lifespan_context.get("sei_web")
@@ -150,12 +169,12 @@ def _get_web_client(ctx: Context | None) -> SEIWebClient:
     raise ValueError("SEIWebClient nao configurado.")
 
 
-def _has_rest(ctx: Context | None) -> bool:
+async def _has_rest(ctx: Context | None) -> bool:
     """Retorna True se o mod-wssei REST está configurado (SEI_URL presente)."""
-    return bool(_get_client(ctx).base_url)
+    return bool((await _get_client(ctx)).base_url)
 
 
-def _backend(ctx: Context | None) -> _SEIBackendV2:
+async def _backend(ctx: Context | None) -> _SEIBackendV2:
     """Retorna o backend composto (REST-first com fallback web) do contrato unificado.
 
     É o único acessor de backend: as tools chamam operações planas
@@ -163,11 +182,13 @@ def _backend(ctx: Context | None) -> _SEIBackendV2:
     `_has_rest`/`_get_client`/`_get_web_client` continuam para as poucas tools de
     orquestração REST-only que compõem primitivas do cliente diretamente.
     """
-    rest = _get_client(ctx)
+    rest = await _get_client(ctx)
     try:
-        web = _get_web_client(ctx)
+        web = await _get_web_client(ctx)
     except ValueError:
-        web = SEIWebClient()  # instância vazia; usada só quando não há REST
+        if _http_mode:
+            raise
+        web = SEIWebClient()  # stdio fallback: web client not configured
     return build_backend(rest, web)
 
 
@@ -285,7 +306,7 @@ mcp = FastMCP(
 @mcp.resource("sei://status")
 async def sei_status_resource(ctx: Context) -> str:
     """Unidade SEI ativa, usuário logado, instância e unidades disponíveis. Leia ao iniciar."""
-    web = _get_web_client(ctx)
+    web = await _get_web_client(ctx)
     try:
         unidade, unidades = await asyncio.gather(
             web.unidade_atual(),
@@ -357,7 +378,7 @@ async def sei_hipoteses_resource(ctx: Context) -> str:
     OBRIGATÓRIA ao criar ou alterar processo com nível de acesso 1 ou 2.
     Evita uma chamada de tool para sei_pesquisar_hipoteses_legais.
     """
-    result = await _backend(ctx).pesquisar_hipoteses_legais()
+    result = await (await _backend(ctx)).pesquisar_hipoteses_legais()
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 

@@ -163,10 +163,11 @@ ignore = [
 # signature constraint — tools need ctx + ≥4 business params, and grouping into
 # dataclasses hides the MCP schema.
 "src/todos/tools/*.py" = ["PLR0913"]
-"tests/**" = ["S101", "ANN", "D", "PLR2004", "SLF001"]  # assert/no-annot/no-docstring/magic-vals ok in tests
+"tests/**" = ["S101", "ANN", "D", "PLR2004", "SLF001", "FBT003"]  # assert/no-annot/no-docstring/magic-vals/bool-args ok in tests
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 
 [tool.vulture]
 min_confidence = 80
