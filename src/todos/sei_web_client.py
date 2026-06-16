@@ -279,6 +279,9 @@ class SEIWebClient:
         # quando várias ações usam a mesma árvore em sequência (ex: ler vários
         # documentos do mesmo processo, ou fallback interno→externo)
         self._arvore_cache: dict[str, tuple[float, tuple[str, str]]] = {}
+        # serializa leituras/escritas nos caches mutáveis — previne check-then-set
+        # concorrente entre coroutines chamando os mesmos métodos em paralelo
+        self._cache_lock = asyncio.Lock()
 
     @property
     def nome_usuario(self) -> str:
@@ -476,15 +479,16 @@ class SEIWebClient:
                 )
             raise SEIParseError(f"URL inesperada após login: {final_url}")
 
-        self._inbox_url = final_url
-        self._arvore_cache.clear()
-        # popula cache do form principal e dos links de processos a partir
-        # da própria resposta do post-login (já contém o HTML da inbox)
         _soup = BeautifulSoup(post_resp.text, "html.parser")
-        self._extract_main_form(post_resp.text, _soup)
-        self._extract_pesquisa_rapida(post_resp.text, _soup)
-        self._populate_trabalhar_links(post_resp.text, _soup)
-        self._extract_unidade_atual(post_resp.text, _soup)
+        async with self._cache_lock:
+            self._inbox_url = final_url
+            self._arvore_cache.clear()
+            # popula cache do form principal e dos links de processos a partir
+            # da própria resposta do post-login (já contém o HTML da inbox)
+            self._extract_main_form(post_resp.text, _soup)
+            self._extract_pesquisa_rapida(post_resp.text, _soup)
+            self._populate_trabalhar_links(post_resp.text, _soup)
+            self._extract_unidade_atual(post_resp.text, _soup)
         logger.info("SEI web login bem-sucedido — inbox capturada")
 
     def _descobrir_sel_orgao(self, login_form: Tag, soup: BeautifulSoup) -> str:

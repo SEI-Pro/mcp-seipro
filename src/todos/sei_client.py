@@ -222,8 +222,15 @@ class SEIClient:
         data = resp.json()
         if not data.get("sucesso"):
             raise SEIAuthError(f"Falha na autenticação SEI: {data.get('mensagem')}")
-        payload = data["data"]
-        self._token = payload["token"]
+        try:
+            payload = data["data"]
+            self._token = payload["token"]
+        except KeyError as exc:
+            msg = (
+                "Resposta de autenticação SEI com formato inesperado "
+                f"(chaves presentes: {list(data.keys())}): {exc}"
+            )
+            raise RuntimeError(msg) from exc
         login_data = payload.get("loginData") or {}
         id_usuario = login_data.get("IdUsuario") or login_data.get("idUsuario")
         if id_usuario is not None:
