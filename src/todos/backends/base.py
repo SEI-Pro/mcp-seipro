@@ -87,11 +87,11 @@ class SEIBackend:
         """Pesquisa usuários no órgão por nome ou sigla."""
         raise NotImplementedError
 
-    async def listar_orgaos(self) -> dict | list[dict]:
+    async def listar_orgaos(self) -> list[dict]:
         """Lista os órgãos cadastrados na instalação do SEI."""
         raise NotImplementedError
 
-    async def listar_contextos(self, id_orgao: str) -> dict | list[dict]:
+    async def listar_contextos(self, id_orgao: str) -> list[dict]:
         """Lista os contextos disponíveis para um órgão."""
         raise NotImplementedError
 
@@ -99,11 +99,11 @@ class SEIBackend:
         """Retorna a versão do SEI e do mod-wssei instalado."""
         raise NotImplementedError
 
-    async def listar_assinantes(self) -> dict | list[dict]:
+    async def listar_assinantes(self) -> list[dict]:
         """Lista os cargos/funções de assinatura da unidade atual."""
         raise NotImplementedError
 
-    async def listar_orgaos_assinante(self) -> dict | list[dict]:
+    async def listar_orgaos_assinante(self) -> list[dict]:
         """Lista os órgãos disponíveis para assinatura."""
         raise NotImplementedError
 
@@ -268,7 +268,7 @@ class SEIBackend:
         """Gera o ZIP com os documentos de um processo."""
         raise NotImplementedError
 
-    async def sugestao_assuntos_processo(self, id_tipo_processo: str) -> dict | list[dict]:
+    async def sugestao_assuntos_processo(self, id_tipo_processo: str) -> list[dict]:
         """Sugere assuntos para um tipo de processo."""
         raise NotImplementedError
 
@@ -343,11 +343,11 @@ class SEIBackend:
         """Gera o HTML de referência (link dinâmico) para um documento."""
         raise NotImplementedError
 
-    async def sugestao_assuntos_documento(self, id_serie: str) -> dict | list[dict]:
+    async def sugestao_assuntos_documento(self, id_serie: str) -> list[dict]:
         """Sugere assuntos para um tipo de documento."""
         raise NotImplementedError
 
-    async def listar_blocos_documento(self, id_documento: str) -> dict | list[dict]:
+    async def listar_blocos_documento(self, id_documento: str) -> list[dict]:
         """Lista os blocos que contêm um documento."""
         raise NotImplementedError
 
@@ -371,7 +371,7 @@ class SEIBackend:
 
     async def listar_ciencias(
         self, referencia: str, tipo: str = "documento", processo: str | None = None
-    ) -> dict | list[dict]:
+    ) -> list[dict]:
         """Lista as ciências de um documento ou processo."""
         raise NotImplementedError
 
@@ -480,11 +480,11 @@ class SEIBackend:
         """Consulta os marcadores ativos de um processo."""
         raise NotImplementedError
 
-    async def historico_marcador_processo(self, processo: str) -> dict | list[dict]:
+    async def historico_marcador_processo(self, processo: str) -> list[dict]:
         """Lista o histórico de marcadores de um processo."""
         raise NotImplementedError
 
-    async def listar_cores_marcador(self) -> dict | list[dict]:
+    async def listar_cores_marcador(self) -> list[dict]:
         """Lista as cores disponíveis para marcadores."""
         raise NotImplementedError
 
@@ -544,7 +544,7 @@ class SEIBackend:
         """Retira processos de um bloco interno."""
         raise NotImplementedError
 
-    async def listar_processos_bloco_interno(self, id_bloco: str) -> dict | list[dict]:
+    async def listar_processos_bloco_interno(self, id_bloco: str) -> list[dict]:
         """Lista os processos de um bloco interno."""
         raise NotImplementedError
 
@@ -600,7 +600,7 @@ class SEIBackend:
         """Pesquisa blocos de assinatura existentes."""
         raise NotImplementedError
 
-    async def listar_documentos_bloco_assinatura(self, id_bloco: str) -> dict | list[dict]:
+    async def listar_documentos_bloco_assinatura(self, id_bloco: str) -> list[dict]:
         """Lista os documentos de um bloco de assinatura."""
         raise NotImplementedError
 
@@ -652,7 +652,7 @@ class SEIBackend:
     # Credenciamento
     # ------------------------------------------------------------------
 
-    async def listar_credenciamentos(self, processo: str) -> dict | list[dict]:
+    async def listar_credenciamentos(self, processo: str) -> list[dict]:
         """Lista os credenciamentos de um processo sigiloso."""
         raise NotImplementedError
 
