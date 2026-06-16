@@ -12,7 +12,7 @@ import uvicorn
 from starlette.responses import HTMLResponse, Response
 from starlette.routing import Route
 
-from todos.auth import SEIProOAuthProvider, login_page, login_submit
+from todos.auth import SEIProOAuthProvider, login_page, login_submit, validate_jwt_secret
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -79,9 +79,7 @@ def build_remote_app(mcp: FastMCP, *, base_url: str) -> StarletteWithLifespan:
 
 def run_remote(mcp: FastMCP, *, port: int) -> None:
     """Executa o app HTTP remoto."""
-    if not os.environ.get("JWT_SECRET"):
-        msg = "JWT_SECRET e obrigatorio no modo HTTP."
-        raise RuntimeError(msg)
+    validate_jwt_secret()
     base_url = os.environ.get("BASE_URL", f"http://localhost:{port}").rstrip("/")
     app = build_remote_app(mcp, base_url=base_url)
     # §34.1 — Default to 127.0.0.1 (loopback only). Cloud/Railway deployments that

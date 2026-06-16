@@ -59,6 +59,17 @@ TOKEN_TTL = 86400 * 30  # 30 dias
 _JWT_PARTS = 2  # JWT tokens have exactly 2 parts: payload.signature
 _BEARER_SCHEME = "Bearer"  # RFC 6750 §6.1.1 token type string
 
+
+def validate_jwt_secret() -> None:
+    """Raise RuntimeError if JWT_SECRET is absent or shorter than the minimum.
+
+    Call this at HTTP server startup (run_remote) for fail-fast behaviour.
+    Not called at import time so the module stays importable in test environments.
+    """
+    if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+        raise RuntimeError(_JWT_CONFIG_ERR)
+
+
 # ---------------------------------------------------------------------------
 # Auth code persistence (§31.3 — persiste no SQLite para sobreviver restarts)
 # ---------------------------------------------------------------------------
