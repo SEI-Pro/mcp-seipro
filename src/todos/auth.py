@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 logger = logging.getLogger(__name__)
 
 _JWT_SECRET_MIN_LEN = 32
+_JWT_CONFIG_ERR = (
+    "JWT_SECRET não configurado ou muito curto — "
+    "defina JWT_SECRET com pelo menos 32 caracteres antes de iniciar o servidor HTTP."
+)
 
 _JWT_SECRET = os.environ.get("JWT_SECRET", "")
 if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
@@ -52,6 +56,8 @@ def _sign(payload: dict) -> str:
     """Cria um token JWT-like: base64(payload).base64(signature)."""
     import base64
 
+    if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+        raise RuntimeError(_JWT_CONFIG_ERR)
     raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     sig = hmac.new(_JWT_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
     return f"{raw}.{sig}"
@@ -61,6 +67,8 @@ def _verify(token: str) -> dict | None:
     """Verifica e decodifica um token. Retorna None se invalido."""
     import base64
 
+    if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+        raise RuntimeError(_JWT_CONFIG_ERR)
     parts = token.split(".")
     if len(parts) != 2:
         return None
