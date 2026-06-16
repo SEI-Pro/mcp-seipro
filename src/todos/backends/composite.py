@@ -151,12 +151,24 @@ _FALLBACK_EXCS = (
 def _prioridade_erro(exc: Exception) -> int:
     """Prioridade de um erro de fallback (maior = mais informativo, prevalece).
 
-    Um erro real de "este backend tentou e não conseguiu" (rede/404/HTML) deve
-    prevalecer sobre um "este backend não serve esta op" (SEINotImplementedError),
-    que por sua vez prevalece sobre o stub genérico (`NotImplementedError`).
+    Quando ambos os backends falham, reportamos o erro *mais informativo* ao
+    chamador — o que melhor descreve o que de fato deu errado. A escala é:
 
-    Lista fechada: adicione novos subtipos de SEIError aqui para que recebam
-    a prioridade correta; subtipos não listados caem no bucket padrão (SEIError = 2).
+    - 3 (mais informativo): backend *tentou* a operação e falhou por razão
+      concreta — rede indisponível (`SEIConnectionError`), recurso ausente
+      (`SEINotFoundError`) ou HTML inesperado (`SEIParseError`). A mensagem
+      inclui detalhes acionáveis do SEI/HTTP.
+    - 2: backend SEI conhece a operação mas não pôde executá-la por restrição
+      de domínio (`SEIError` genérico, `SEINotImplementedError`). Ainda carrega
+      orientação útil ao usuário.
+    - 1 (menos informativo): backend *nem tentou* — o método não está
+      implementado no stub da base (`NotImplementedError` puro, sem mensagem
+      acionável).
+
+    Lista intencionalmente fechada: os três buckets cobrem toda a hierarquia de
+    `_FALLBACK_EXCS`. Se um novo subtipo de `SEIError` precisar de tratamento
+    diferenciado, adicione-o aqui com a prioridade correta — subtipos não
+    listados explicitamente caem no bucket padrão de `SEIError` (prioridade 2).
     """
     if isinstance(exc, (SEINotFoundError, SEIParseError, SEIConnectionError)):
         return 3

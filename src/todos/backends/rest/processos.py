@@ -177,8 +177,14 @@ class ProcessosRest(_RestMixin):
             raise SEINotFoundError(msg)
         erros: list[str] = []
         for u in candidatos:
+            id_usuario = u.get("id_usuario")
+            if id_usuario is None:
+                erros.append(
+                    f"{u.get('nome', '')} ({u.get('sigla', '')}): id_usuario ausente na resposta"
+                )
+                continue
             try:
-                return await self._rest.atribuir_processo(processo, u.get("id_usuario", ""))
+                return await self._rest.atribuir_processo(processo, str(id_usuario))
             except (SEIError, httpx.HTTPError) as e:
                 erros.append(f"{u.get('nome', '')} ({u.get('sigla', '')}): {e}")
         tentativas_str = "; ".join(erros)
