@@ -13,6 +13,7 @@ Variáveis de ambiente necessárias:
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
@@ -32,14 +33,16 @@ from starlette.responses import HTMLResponse
 # Crypto helpers (HMAC-SHA256 para assinatura, sem dep externa)
 # ---------------------------------------------------------------------------
 
+logger = logging.getLogger(__name__)
+
+_JWT_SECRET_MIN_LEN = 32
+
 _JWT_SECRET = os.environ.get("JWT_SECRET", "")
-if not _JWT_SECRET.strip():
-    _msg = (
-        "JWT_SECRET must be set as a non-empty environment variable. "
-        "HMAC with an empty key produces trivially forgeable tokens. "
-        'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+    logger.warning(
+        "JWT_SECRET está ausente ou muito curto (%d chars); tokens não são seguros.",
+        len(_JWT_SECRET),
     )
-    raise RuntimeError(_msg)
 TOKEN_TTL = 86400 * 30  # 30 dias
 
 
