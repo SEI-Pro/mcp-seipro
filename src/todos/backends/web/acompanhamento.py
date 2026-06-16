@@ -1,12 +1,26 @@
-"""Mixin web: acompanhamento especial."""
+"""Mixin web: acompanhamento especial.
+
+Sem camada de tradução de erros: exceções do scraper (httpx.HTTPError,
+SEIError e subclasses) propagam diretamente para o chamador.
+httpx.HTTPError sinaliza falha de conectividade/autenticação; SEIError
+indica erro retornado pelo próprio SEI (processo inexistente, sem permissão etc.).
+"""
 
 from __future__ import annotations
 
+import httpx
+
 from todos.backends.web._session import _WebMixin
+from todos.exceptions import SEIConnectionError
 
 
 class AcompanhamentoWeb(_WebMixin):
-    """Operações web de acompanhamento especial."""
+    """Operações web de acompanhamento especial.
+
+    Exceções do scraper (httpx.HTTPError, SEIError) propagam sem reembrulho,
+    exceto em acompanhar_processo onde httpx.HTTPError é convertido em
+    SEIConnectionError para consistência com o contrato público.
+    """
 
     async def acompanhar_processo(
         self, processo: str, grupo: str = "", observacao: str = ""
@@ -20,7 +34,13 @@ class AcompanhamentoWeb(_WebMixin):
             campos["selGrupoAcompanhamento"] = grupo
         if observacao:
             campos["txaObservacao"] = observacao
-        return await self._web.executar_acao_processo(processo, "acompanhamento_gerenciar", campos)
+        try:
+            return await self._web.executar_acao_processo(
+                processo, "acompanhamento_gerenciar", campos
+            )
+        except httpx.HTTPError as exc:
+            msg = f"Falha de conectividade ao adicionar acompanhamento em '{processo}': {exc}"
+            raise SEIConnectionError(msg) from exc
 
     async def remover_acompanhamento(self, processo: str) -> dict:
         """Remove o acompanhamento especial de um processo."""

@@ -6,7 +6,16 @@ from todos.backends.web._session import _WebMixin
 
 
 class CatalogosWeb(_WebMixin):
-    """Operações web de catálogos de tipos, assuntos, contatos e modelos."""
+    """Operações web de catálogos de tipos, assuntos, contatos e modelos.
+
+    Parâmetros de paginação (``pagina``) e filtros REST-only (``favoritos``,
+    ``aplicabilidade``) são aceitos no contrato público mas ignorados: o
+    scraper retorna resultados completos sem paginação por offset.
+    ``limit`` é repassado apenas quando o endpoint web suporta truncagem
+    (autocomplete de assuntos, contatos e textos padrão); para catálogos
+    que retornam lista completa, ``limit`` também é descartado.
+    Cada ``del`` documenta o motivo inline.
+    """
 
     async def pesquisar_tipos_processo(
         self, filtro: str = "", favoritos: str = "", limit: int = 50, pagina: int = 0
