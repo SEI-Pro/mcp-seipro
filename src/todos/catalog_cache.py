@@ -105,7 +105,7 @@ class CatalogCache:
                 """,
                 (db_key, val_str, expires_at),
             )
-            # Probabilistic sweep: purge all expired rows ~5% of writes
+            # Probabilistic sweep (5%) — full cleanup available via cleanup()
             if random.random() < _SWEEP_PROBABILITY:
                 conn.execute("DELETE FROM catalogs WHERE expires_at < ?", (now,))
 
@@ -142,6 +142,16 @@ class CatalogCache:
                 expires_at = row[0]
                 return max(0.0, expires_at - now)
         return None
+
+    async def cleanup(self) -> int:
+        """Remove expired entries. Returns count of deleted rows."""
+        return await asyncio.to_thread(self._cleanup_sync)
+
+    def _cleanup_sync(self) -> int:
+        now = time.time()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM catalogs WHERE expires_at < ?", (now,))
+            return cursor.rowcount
 
     async def close(self) -> None:
         """Feche o armazenamento em disco."""
