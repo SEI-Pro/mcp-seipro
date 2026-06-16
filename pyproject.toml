@@ -74,11 +74,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "bootstrap.py" = ["S603", "S606"]  # subprocess with controlled inputs (sys.executable, Path objects)
 "setup_claude.py" = ["S603"]  # legitimate subprocess calls with trusted input
-"scripts/smoke_web.py" = ["D103", "PLR0915", "T201"]
-# TRY002/TRY003/EM101/EM102: raise RuntimeError/SEIError with inline messages is idiomatic
-# in these files; scoped here (not global) so new files are still checked
-"scripts/bench_consultar_processo.py" = ["S603", "S606", "TRY002", "TRY003", "EM101", "EM102"]
-"scripts/bench_listar_processos.py" = ["S603", "S606", "E402", "TRY002", "TRY003", "EM101", "EM102"]
 "src/todos/html_utils.py" = [
     # pytesseract/pdf2image/pdfplumber/io must be deferred — heavy optional deps
     "PLC0415",
