@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -167,10 +168,11 @@ class SEIClient:
     ) -> httpx.Response:
         """Faz request com re-autenticação automática em caso de 401/403."""
         if not self.base_url:
-            raise SEIConnectionError(
+            msg = (
                 "mod-wssei não configurado. Configure a variável de ambiente SEI_URL "
                 "com o endpoint REST da sua instância SEI."
             )
+            raise SEIConnectionError(msg)
         headers = await self._get_headers()
         try:
             resp = await self._client.request(
@@ -192,12 +194,15 @@ class SEIClient:
                     headers=headers,
                 )
             if resp.status_code in (401, 403):
-                raise SEIAuthError("Sessão SEI expirada ou inválida após re-autenticação.")
+                msg = "Sessão SEI expirada ou inválida após re-autenticação."
+                raise SEIAuthError(msg)
             if resp.status_code == httpx.codes.NOT_FOUND:
-                raise SEINotFoundError(f"Recurso não encontrado: {method} {path}")
+                msg = f"Recurso não encontrado: {method} {path}"
+                raise SEINotFoundError(msg)
             resp.raise_for_status()
         except (httpx.TimeoutException, httpx.ConnectError) as e:
-            raise SEIConnectionError(f"SEI inacessível: {e}") from e
+            msg = f"SEI inacessível: {e}"
+            raise SEIConnectionError(msg) from e
         except SEIError:
             raise
         except httpx.HTTPStatusError as e:
@@ -240,7 +245,8 @@ class SEIClient:
         resp.raise_for_status()
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIAuthError(f"Falha na autenticação SEI: {data.get('mensagem')}")
+            msg = f"Falha na autenticação SEI: {data.get('mensagem')}"
+            raise SEIAuthError(msg)
         if "data" not in data:
             logger.error("Resposta de autenticação sem campo 'data': %r", data)
             msg = "Resposta de autenticação inesperada do SEI (sem campo 'data')"
@@ -272,7 +278,8 @@ class SEIClient:
         resp = await self._request("GET", "/versao")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao obter versão: {data.get('mensagem')}")
+            msg = f"Erro ao obter versão: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {})
 
     async def listar_orgaos(self) -> list[dict]:
@@ -280,7 +287,8 @@ class SEIClient:
         resp = await self._request("GET", "/orgao/listar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar órgãos: {data.get('mensagem')}")
+            msg = f"Erro ao listar órgãos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def listar_contextos(self, id_orgao: str) -> list[dict]:
@@ -288,7 +296,8 @@ class SEIClient:
         resp = await self._request("GET", f"/contexto/listar/{id_orgao}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar contextos: {data.get('mensagem')}")
+            msg = f"Erro ao listar contextos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def consultar_processo(self, protocolo_formatado: str) -> dict:
@@ -308,7 +317,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao consultar processo: {data.get('mensagem')}")
+            msg = f"Erro ao consultar processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data["data"]
 
     async def consultar_processo_completo(self, protocolo_formatado: str) -> dict:
@@ -334,7 +344,8 @@ class SEIClient:
         )
         j1 = resp1.json()
         if not j1.get("sucesso"):
-            raise SEIError(f"Erro ao consultar processo: {j1.get('mensagem')}")
+            msg = f"Erro ao consultar processo: {j1.get('mensagem')}"
+            raise SEIError(msg)
         d1 = j1["data"]
 
         id_proc = d1.get("IdProcedimento")
@@ -357,6 +368,7 @@ class SEIClient:
         self, id_procedimento: str, limit: int = 200, start: int = 0
     ) -> list[dict]:
         """Lista documentos de um processo.
+
         Retorna array de: {id, atributos: {tipoDocumento, tipo, protocoloFormatado, ...}}
         """
         resp = await self._request(
@@ -366,29 +378,32 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar documentos: {data.get('mensagem')}")
+            msg = f"Erro ao listar documentos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def consultar_documento_interno(self, id_documento: str) -> dict:
         """Consulta metadados de um documento interno pelo id.
+
         Retorna: id, tipo, unidade geradora, assinaturas, etc.
         """
         resp = await self._request("GET", f"/documento/interno/consultar/{id_documento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise erro_do_sei(f"Erro ao consultar documento {id_documento}", data.get("mensagem"))
+            msg = f"Erro ao consultar documento {id_documento}"
+            raise erro_do_sei(msg, data.get("mensagem"))
         return data["data"]
 
     async def consultar_documento_externo(self, id_documento: str) -> dict:
         """Consulta metadados de um documento externo pelo id.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("GET", f"/documento/externo/consultar/{id_documento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise erro_do_sei(
-                f"Erro ao consultar documento externo {id_documento}", data.get("mensagem")
-            )
+            msg = f"Erro ao consultar documento externo {id_documento}"
+            raise erro_do_sei(msg, data.get("mensagem"))
         return data["data"]
 
     async def alterar_documento_interno(
@@ -399,6 +414,7 @@ class SEIClient:
         id_hipotese_legal: str = "",
     ) -> dict:
         """Altera metadados de um documento interno (não o conteúdo).
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         payload: dict = {}
@@ -413,7 +429,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise erro_do_sei("Erro ao alterar documento interno", data.get("mensagem"))
+            msg = "Erro ao alterar documento interno"
+            raise erro_do_sei(msg, data.get("mensagem"))
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def alterar_documento_externo(
@@ -425,6 +442,7 @@ class SEIClient:
         arquivo_path: str = "",
     ) -> dict:
         """Altera metadados de um documento externo (e opcionalmente substitui o arquivo).
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         payload: dict = {}
@@ -437,12 +455,12 @@ class SEIClient:
 
         if arquivo_path:
             headers = await self._get_headers()
-            with open(arquivo_path, "rb") as f:
+            with Path(arquivo_path).open("rb") as f:
                 resp = await self._client.post(
                     f"{self.base_url}/documento/externo/{id_documento}/alterar",
                     headers=headers,
                     data=payload,
-                    files={"anexo": (os.path.basename(arquivo_path), f)},
+                    files={"anexo": (Path(arquivo_path).name, f)},
                 )
         else:
             resp = await self._request(
@@ -450,13 +468,15 @@ class SEIClient:
             )
         data = resp.json()
         if not data.get("sucesso"):
-            raise erro_do_sei("Erro ao alterar documento externo", data.get("mensagem"))
+            msg = "Erro ao alterar documento externo"
+            raise erro_do_sei(msg, data.get("mensagem"))
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def pesquisar_tipos_conferencia(
         self, filtro: str = "", limit: int = 50, start: int = 0
     ) -> dict:
         """Pesquisa tipos de conferência para documentos externos.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         params: dict = {"limit": limit, "start": start}
@@ -465,33 +485,39 @@ class SEIClient:
         resp = await self._request("GET", "/documento/tipoconferencia/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar tipos de conferência: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar tipos de conferência: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "tipos", data.get("data", []), start, limit)
 
     async def sugestao_assuntos_documento(self, id_serie: str) -> list[dict]:
         """Lista sugestões de assuntos para um tipo de documento (série).
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("GET", f"/documento/assunto/sugestao/{id_serie}/listar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar sugestões de assunto: {data.get('mensagem')}")
+            msg = f"Erro ao listar sugestões de assunto: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def listar_blocos_documento(self, id_documento: str) -> list[dict]:
         """Lista blocos de assinatura em que um documento está incluído.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("GET", f"/documento/{id_documento}/bloco/assinatura/listar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar blocos do documento: {data.get('mensagem')}")
+            msg = f"Erro ao listar blocos do documento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def pesquisar_tipos_documento_externo(
         self, filtro: str = "", limit: int = 50, start: int = 0
     ) -> dict:
         """Pesquisa tipos de documento para documentos externos (séries externas).
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         params: dict = {"limit": limit, "start": start}
@@ -500,17 +526,20 @@ class SEIClient:
         resp = await self._request("GET", "/serie/externo/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar tipos de doc externo: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar tipos de doc externo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "tipos", data.get("data", []), start, limit)
 
     async def parametros_upload(self) -> dict:
         """Retorna parâmetros de upload (extensões permitidas, tamanhos máximos).
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("GET", "/upload/parametros")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao obter parâmetros de upload: {data.get('mensagem')}")
+            msg = f"Erro ao obter parâmetros de upload: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {})
 
     async def listar_assinaturas(self, id_documento: str) -> list[dict]:
@@ -518,7 +547,8 @@ class SEIClient:
         resp = await self._request("GET", f"/documento/listar/assinaturas/{id_documento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar assinaturas: {data.get('mensagem')}")
+            msg = f"Erro ao listar assinaturas: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def visualizar_documento_interno(self, id_documento: str) -> str:
@@ -526,7 +556,8 @@ class SEIClient:
         resp = await self._request("GET", f"/documento/{id_documento}/interno/visualizar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise erro_do_sei(f"Erro ao visualizar documento {id_documento}", data.get("mensagem"))
+            msg = f"Erro ao visualizar documento {id_documento}"
+            raise erro_do_sei(msg, data.get("mensagem"))
         return data["data"]
 
     async def baixar_anexo(self, id_documento: str) -> bytes:
@@ -536,7 +567,8 @@ class SEIClient:
         if "json" in content_type:
             data = resp.json()
             if not data.get("sucesso"):
-                raise erro_do_sei(f"Erro ao baixar anexo {id_documento}", data.get("mensagem"))
+                msg = f"Erro ao baixar anexo {id_documento}"
+                raise erro_do_sei(msg, data.get("mensagem"))
             return base64.b64decode(data["data"])
         return resp.content
 
@@ -550,6 +582,7 @@ class SEIClient:
         id_unidade: str = "",
     ) -> dict:
         """Cria documento interno (nativo) em um processo SEI.
+
         Retorna: {idDocumento, protocoloDocumentoFormatado}
         """
         resp = await self._request(
@@ -576,11 +609,13 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao criar documento interno: {data.get('mensagem')}")
+            msg = f"Erro ao criar documento interno: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data["data"]
 
     async def listar_secao_documento(self, id_documento: str) -> dict:
         """Lista seções de um documento interno.
+
         Retorna: {secoes: [{id, idSecaoModelo, conteudo, ...}], ultimaVersaoDocumento: N}
         """
         resp = await self._request(
@@ -590,9 +625,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(
-                f"Erro ao listar seções do documento {id_documento}: {data.get('mensagem')}"
-            )
+            msg = f"Erro ao listar seções do documento {id_documento}: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {})
 
     async def alterar_secao_documento(
@@ -602,6 +636,7 @@ class SEIClient:
         versao: str = "1",
     ) -> dict:
         """Altera conteúdo HTML das seções de um documento interno.
+
         secoes: [{id, idSecaoModelo, conteudo}, ...]
         """
         secoes_json = json.dumps(secoes)
@@ -616,9 +651,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise erro_do_sei(
-                f"Erro ao alterar seção do documento {id_documento}", data.get("mensagem")
-            )
+            msg = f"Erro ao alterar seção do documento {id_documento}"
+            raise erro_do_sei(msg, data.get("mensagem"))
         return data.get("data", {})
 
     # ------------------------------------------------------------------
@@ -627,14 +661,17 @@ class SEIClient:
 
     async def listar_unidades_usuario(self) -> list[dict]:
         """Lista unidades às quais o usuário autenticado tem acesso.
-        Resultado cacheado por 24 horas em disco (raramente muda)."""
+
+        Resultado cacheado por 24 horas em disco (raramente muda).
+        """
         cached = await self._cache_get("unidades_usuario")
         if cached is not None:
             return cached
         resp = await self._request("GET", "/usuario/unidades")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar unidades: {data.get('mensagem')}")
+            msg = f"Erro ao listar unidades: {data.get('mensagem')}"
+            raise SEIError(msg)
         result = data.get("data", [])
         await self._cache_set("unidades_usuario", result)
         return result
@@ -643,6 +680,7 @@ class SEIClient:
         self, filtro: str = "", id_orgao: str = "", limit: int = 50, start: int = 0
     ) -> dict:
         """Pesquisa usuários por palavra-chave no órgão.
+
         Diferente de listar_usuarios que filtra client-side — este usa
         o endpoint /usuario/pesquisar que busca no servidor.
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
@@ -655,7 +693,8 @@ class SEIClient:
         resp = await self._request("GET", "/usuario/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar usuários: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar usuários: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "usuarios", data.get("data", []), start, limit)
 
     async def trocar_unidade(self, id_unidade: str) -> dict:
@@ -663,7 +702,8 @@ class SEIClient:
         resp = await self._request("POST", "/usuario/alterar/unidade", data={"unidade": id_unidade})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao trocar unidade: {data.get('mensagem')}")
+            msg = f"Erro ao trocar unidade: {data.get('mensagem')}"
+            raise SEIError(msg)
         self._unidade_ativa = id_unidade
         return {"mensagem": data.get("mensagem")}
 
@@ -675,13 +715,15 @@ class SEIClient:
         resp = await self._request("GET", "/unidade/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar unidades: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar unidades: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "unidades", data.get("data", []), start, limit)
 
     async def pesquisar_outras_unidades(
         self, filtro: str = "", limit: int = 50, start: int = 0
     ) -> dict:
         """Pesquisa unidades excluindo a unidade atual.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         params: dict = {"limit": limit, "start": start}
@@ -690,13 +732,15 @@ class SEIClient:
         resp = await self._request("GET", "/unidade/outras/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar outras unidades: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar outras unidades: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "unidades", data.get("data", []), start, limit)
 
     async def pesquisar_textos_padrao(
         self, filtro: str = "", limit: int = 50, start: int = 0
     ) -> dict:
         """Pesquisa textos padrão internos disponíveis na unidade.
+
         Textos padrão são modelos reutilizáveis para preencher documentos.
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
@@ -706,7 +750,8 @@ class SEIClient:
         resp = await self._request("GET", "/unidade/textopadrao/interno/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar textos padrão: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar textos padrão: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "textos", data.get("data", []), start, limit)
 
     async def listar_usuarios(
@@ -732,7 +777,8 @@ class SEIClient:
         resp = await self._request("GET", "/usuario/listar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar usuários: {data.get('mensagem')}")
+            msg = f"Erro ao listar usuários: {data.get('mensagem')}"
+            raise SEIError(msg)
 
         usuarios = data.get("data", [])
 
@@ -764,6 +810,7 @@ class SEIClient:
         filtro: str = "",
     ) -> dict:
         """Lista processos da caixa da unidade atual.
+
         Retorna: {data: [...], total: N}
         """
         params: dict = {"limit": limit, "start": start}
@@ -778,7 +825,8 @@ class SEIClient:
         resp = await self._request("GET", "/processo/listar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar processos: {data.get('mensagem')}")
+            msg = f"Erro ao listar processos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "processos", data.get("data", []), start, limit)
 
     async def pesquisar_processos(
@@ -796,6 +844,7 @@ class SEIClient:
         start: int = 0,
     ) -> dict:
         """Pesquisa processos via busca textual (Solr).
+
         Retorna: {data: [...], total: N}
         """
         params: dict = {"limit": limit, "start": start}
@@ -820,7 +869,8 @@ class SEIClient:
         resp = await self._request("GET", "/processo/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar processos: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar processos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "processos", data.get("data", []), start, limit)
 
     async def alterar_processo(
@@ -832,6 +882,7 @@ class SEIClient:
         observacao: str | None = None,
     ) -> dict:
         """Altera metadados de um processo (especificação, nível de acesso, etc.).
+
         A API exige todos os campos — busca os atuais e sobrescreve os alterados.
         """
         # Buscar dados atuais do processo
@@ -865,7 +916,8 @@ class SEIClient:
         resp = await self._request("POST", f"/processo/{id_procedimento}/alterar", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
-            raise erro_do_sei("Erro ao alterar processo", data.get("mensagem"))
+            msg = "Erro ao alterar processo"
+            raise erro_do_sei(msg, data.get("mensagem"))
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def consultar_processo_por_id(self, id_procedimento: str) -> dict:
@@ -873,7 +925,8 @@ class SEIClient:
         resp = await self._request("GET", f"/processo/consultar/{id_procedimento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao consultar processo: {data.get('mensagem')}")
+            msg = f"Erro ao consultar processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data["data"]
 
     async def pesquisar_hipoteses_legais(
@@ -886,14 +939,17 @@ class SEIClient:
         resp = await self._request("GET", "/hipoteseLegal/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar hipóteses legais: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar hipóteses legais: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "hipoteses", data.get("data", []), start, limit)
 
     async def pesquisar_tipos_processo(
         self, filtro: str = "", favoritos: str = "", limit: int = 50, start: int = 0
     ) -> dict:
         """Pesquisa tipos de processo disponíveis.
-        Resultado cacheado por 24 horas em disco quando chamado sem filtros."""
+
+        Resultado cacheado por 24 horas em disco quando chamado sem filtros.
+        """
         cache_key = f"tipos_processo:{filtro}:{favoritos}:{limit}:{start}"
         if not filtro and not favoritos:
             cached = await self._cache_get(cache_key)
@@ -907,7 +963,8 @@ class SEIClient:
         resp = await self._request("GET", "/processo/tipo/listar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar tipos de processo: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar tipos de processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         result = self._paginated(data, "tipos", data.get("data", []), start, limit)
         if not filtro and not favoritos:
             await self._cache_set(cache_key, result)
@@ -924,6 +981,7 @@ class SEIClient:
         hipotese_legal: str = "",
     ) -> dict:
         """Cria novo processo no SEI.
+
         assuntos e interessados devem ser JSON arrays de objetos com campo "id".
         Ex: '[{"id":"876"}]'
         Retorna: {IdProcedimento, ProtocoloFormatado}
@@ -952,7 +1010,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao criar processo: {data.get('mensagem')}")
+            msg = f"Erro ao criar processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data["data"]
 
     async def enviar_processo(
@@ -984,7 +1043,8 @@ class SEIClient:
         resp = await self._request("POST", "/processo/enviar", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao enviar processo: {data.get('mensagem')}")
+            msg = f"Erro ao enviar processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def concluir_processo(self, numero_processo: str) -> dict:
@@ -994,7 +1054,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise erro_do_sei("Erro ao concluir processo", data.get("mensagem"))
+            msg = "Erro ao concluir processo"
+            raise erro_do_sei(msg, data.get("mensagem"))
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def reabrir_processo(self, id_procedimento: str) -> dict:
@@ -1002,7 +1063,8 @@ class SEIClient:
         resp = await self._request("POST", f"/processo/reabrir/{id_procedimento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao reabrir processo: {data.get('mensagem')}")
+            msg = f"Erro ao reabrir processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def atribuir_processo(self, numero_processo: str, id_usuario: str) -> dict:
@@ -1014,7 +1076,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao atribuir processo: {data.get('mensagem')}")
+            msg = f"Erro ao atribuir processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -1047,7 +1110,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao assinar documento: {data.get('mensagem')}")
+            msg = f"Erro ao assinar documento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def pesquisar_tipos_documento(
@@ -1059,6 +1123,7 @@ class SEIClient:
         start: int = 0,
     ) -> dict:
         """Pesquisa tipos de documento (séries) disponíveis.
+
         Retorna: {data: [{id, nome}, ...], total: N}
         """
         cache_key = f"tipos_documento:{filtro}:{favoritos}:{aplicabilidade}:{limit}:{start}"
@@ -1076,7 +1141,8 @@ class SEIClient:
         resp = await self._request("GET", "/documento/tipo/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar tipos de documento: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar tipos de documento: {data.get('mensagem')}"
+            raise SEIError(msg)
         result = self._paginated(data, "tipos", data.get("data", []), start, limit)
         if not filtro and not favoritos:
             await self._cache_set(cache_key, result)
@@ -1102,7 +1168,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise erro_do_sei("Erro ao sobrestar processo", data.get("mensagem"))
+            msg = "Erro ao sobrestar processo"
+            raise erro_do_sei(msg, data.get("mensagem"))
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def remover_sobrestamento(self, id_procedimento: str) -> dict:
@@ -1110,7 +1177,8 @@ class SEIClient:
         resp = await self._request("POST", f"/processo/{id_procedimento}/cancelar/sobrestamento")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao remover sobrestamento: {data.get('mensagem')}")
+            msg = f"Erro ao remover sobrestamento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -1122,7 +1190,8 @@ class SEIClient:
         resp = await self._request("POST", "/documento/ciencia", data={"documento": id_documento})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao dar ciência no documento: {data.get('mensagem')}")
+            msg = f"Erro ao dar ciência no documento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def dar_ciencia_processo(self, id_procedimento: str) -> dict:
@@ -1130,7 +1199,8 @@ class SEIClient:
         resp = await self._request("POST", f"/processo/{id_procedimento}/ciencia")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao dar ciência no processo: {data.get('mensagem')}")
+            msg = f"Erro ao dar ciência no processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def listar_ciencias_documento(self, id_documento: str) -> list[dict]:
@@ -1138,7 +1208,8 @@ class SEIClient:
         resp = await self._request("GET", f"/documento/listar/ciencia/{id_documento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar ciências do documento: {data.get('mensagem')}")
+            msg = f"Erro ao listar ciências do documento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def listar_ciencias_processo(self, id_procedimento: str) -> list[dict]:
@@ -1146,7 +1217,8 @@ class SEIClient:
         resp = await self._request("GET", f"/processo/{id_procedimento}/ciencia/listar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar ciências do processo: {data.get('mensagem')}")
+            msg = f"Erro ao listar ciências do processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     # ------------------------------------------------------------------
@@ -1171,7 +1243,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao criar anotação: {data.get('mensagem')}")
+            msg = f"Erro ao criar anotação: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     @staticmethod
@@ -1198,7 +1271,8 @@ class SEIClient:
         resp = await self._request("GET", "/marcador/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar marcadores: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar marcadores: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "marcadores", data.get("data", []), start, limit)
 
     async def listar_cores_marcador(self) -> list[dict]:
@@ -1206,7 +1280,8 @@ class SEIClient:
         resp = await self._request("GET", "/marcador/cores/listar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar cores: {data.get('mensagem')}")
+            msg = f"Erro ao listar cores: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def criar_marcador(self, nome: str, id_cor: str) -> dict:
@@ -1214,7 +1289,8 @@ class SEIClient:
         resp = await self._request("POST", "/marcador/criar", data={"nome": nome, "idCor": id_cor})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao criar marcador: {data.get('mensagem')}")
+            msg = f"Erro ao criar marcador: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def alterar_marcador(self, id_marcador: str, nome: str, id_cor: str) -> dict:
@@ -1226,7 +1302,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao alterar marcador: {data.get('mensagem')}")
+            msg = f"Erro ao alterar marcador: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def excluir_marcadores(self, ids: str) -> dict:
@@ -1234,7 +1311,8 @@ class SEIClient:
         resp = await self._request("POST", "/marcador/excluir", data={"marcadores": ids})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao excluir marcadores: {data.get('mensagem')}")
+            msg = f"Erro ao excluir marcadores: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def desativar_marcadores(self, ids: str) -> dict:
@@ -1242,7 +1320,8 @@ class SEIClient:
         resp = await self._request("POST", "/marcador/desativar", data={"marcadores": ids})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao desativar marcadores: {data.get('mensagem')}")
+            msg = f"Erro ao desativar marcadores: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def reativar_marcadores(self, ids: str) -> dict:
@@ -1250,7 +1329,8 @@ class SEIClient:
         resp = await self._request("POST", "/marcador/reativar", data={"marcadores": ids})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao reativar marcadores: {data.get('mensagem')}")
+            msg = f"Erro ao reativar marcadores: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def marcar_processo(
@@ -1264,7 +1344,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao marcar processo: {data.get('mensagem')}")
+            msg = f"Erro ao marcar processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def consultar_marcador_processo(self, id_procedimento: str) -> list[dict]:
@@ -1272,7 +1353,8 @@ class SEIClient:
         resp = await self._request("GET", f"/marcador/processo/{id_procedimento}/consultar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao consultar marcador: {data.get('mensagem')}")
+            msg = f"Erro ao consultar marcador: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     # ------------------------------------------------------------------
@@ -1291,7 +1373,8 @@ class SEIClient:
         resp = await self._request("POST", "/processo/acompanhar", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao acompanhar processo: {data.get('mensagem')}")
+            msg = f"Erro ao acompanhar processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def consultar_acompanhamento(self, id_procedimento: str) -> dict:
@@ -1303,7 +1386,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao consultar acompanhamento: {data.get('mensagem')}")
+            msg = f"Erro ao consultar acompanhamento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {})
 
     async def excluir_acompanhamento(self, id_acompanhamento: str) -> dict:
@@ -1311,7 +1395,8 @@ class SEIClient:
         resp = await self._request("POST", f"/processo/acompanhamento/{id_acompanhamento}/excluir")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao excluir acompanhamento: {data.get('mensagem')}")
+            msg = f"Erro ao excluir acompanhamento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def criar_grupo_acompanhamento(self, nome: str) -> dict:
@@ -1319,7 +1404,8 @@ class SEIClient:
         resp = await self._request("POST", "/grupoacompanhamento/cadastrar", data={"nome": nome})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao criar grupo: {data.get('mensagem')}")
+            msg = f"Erro ao criar grupo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def alterar_grupo_acompanhamento(self, id_grupo: str, nome: str) -> dict:
@@ -1329,7 +1415,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao alterar grupo: {data.get('mensagem')}")
+            msg = f"Erro ao alterar grupo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def excluir_grupo_acompanhamento(self, ids_grupos: str) -> dict:
@@ -1339,7 +1426,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao excluir grupo: {data.get('mensagem')}")
+            msg = f"Erro ao excluir grupo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def listar_grupos_acompanhamento(self, filtro: str = "", limit: int = 50) -> dict:
@@ -1350,7 +1438,8 @@ class SEIClient:
         resp = await self._request("GET", "/grupoacompanhamento/listar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar grupos: {data.get('mensagem')}")
+            msg = f"Erro ao listar grupos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return {"grupos": data.get("data", []), "total": data.get("total")}
 
     # ------------------------------------------------------------------
@@ -1362,7 +1451,8 @@ class SEIClient:
         resp = await self._request("POST", "/bloco/interno/criar", data={"descricao": descricao})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao criar bloco interno: {data.get('mensagem')}")
+            msg = f"Erro ao criar bloco interno: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {})
 
     async def incluir_processo_bloco_interno(self, id_bloco: str, protocolos: str) -> dict:
@@ -1374,7 +1464,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao incluir no bloco: {data.get('mensagem')}")
+            msg = f"Erro ao incluir no bloco: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def retirar_processo_bloco_interno(self, id_bloco: str, protocolos: str) -> dict:
@@ -1386,11 +1477,13 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao retirar do bloco: {data.get('mensagem')}")
+            msg = f"Erro ao retirar do bloco: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def listar_processos_bloco_interno(self, id_bloco: str, limit: int = 200) -> list[dict]:
         """Lista processos de um bloco interno.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request(
@@ -1400,11 +1493,13 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar processos do bloco: {data.get('mensagem')}")
+            msg = f"Erro ao listar processos do bloco: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def alterar_bloco_interno(self, id_bloco: str, descricao: str) -> dict:
         """Altera descrição de um bloco interno.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request(
@@ -1414,43 +1509,51 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao alterar bloco interno: {data.get('mensagem')}")
+            msg = f"Erro ao alterar bloco interno: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def excluir_blocos_internos(self, ids: str) -> dict:
         """Exclui bloco(s) interno(s). IDs separados por vírgula.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("POST", "/bloco/interno/excluir", data={"blocos": ids})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao excluir blocos internos: {data.get('mensagem')}")
+            msg = f"Erro ao excluir blocos internos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def concluir_blocos_internos(self, ids: str) -> dict:
         """Conclui bloco(s) interno(s). IDs separados por vírgula.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("POST", "/bloco/interno/concluir", data={"blocos": ids})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao concluir blocos internos: {data.get('mensagem')}")
+            msg = f"Erro ao concluir blocos internos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def reabrir_bloco_interno(self, id_bloco: str) -> dict:
         """Reabre bloco interno concluído.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("POST", f"/bloco/interno/{id_bloco}/reabrir")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao reabrir bloco interno: {data.get('mensagem')}")
+            msg = f"Erro ao reabrir bloco interno: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def anotar_processo_bloco_interno(
         self, id_bloco: str, protocolo: str, descricao: str
     ) -> dict:
         """Cria anotação em processo dentro de um bloco interno.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request(
@@ -1460,13 +1563,15 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao anotar no bloco interno: {data.get('mensagem')}")
+            msg = f"Erro ao anotar no bloco interno: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def alterar_anotacao_bloco_interno(
         self, id_bloco: str, protocolo: str, descricao: str
     ) -> dict:
         """Altera anotação de processo em um bloco interno.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request(
@@ -1476,7 +1581,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao alterar anotação do bloco interno: {data.get('mensagem')}")
+            msg = f"Erro ao alterar anotação do bloco interno: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def pesquisar_blocos_internos(
@@ -1489,7 +1595,8 @@ class SEIClient:
         resp = await self._request("GET", "/bloco/interno/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar blocos: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar blocos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "blocos", data.get("data", []), start, limit)
 
     # ------------------------------------------------------------------
@@ -1504,7 +1611,8 @@ class SEIClient:
         resp = await self._request("POST", "/bloco/assinatura/criar", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao criar bloco de assinatura: {data.get('mensagem')}")
+            msg = f"Erro ao criar bloco de assinatura: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {})
 
     async def incluir_documento_bloco_assinatura(self, id_bloco: str, documentos: str) -> dict:
@@ -1516,7 +1624,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao incluir no bloco: {data.get('mensagem')}")
+            msg = f"Erro ao incluir no bloco: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def disponibilizar_bloco_assinatura(self, id_bloco: str) -> dict:
@@ -1524,7 +1633,8 @@ class SEIClient:
         resp = await self._request("POST", f"/bloco/assinatura/{id_bloco}/disponibilizar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao disponibilizar bloco: {data.get('mensagem')}")
+            msg = f"Erro ao disponibilizar bloco: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def cancelar_disponibilizacao_bloco_assinatura(self, id_bloco: str) -> dict:
@@ -1534,7 +1644,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao cancelar disponibilização: {data.get('mensagem')}")
+            msg = f"Erro ao cancelar disponibilização: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def pesquisar_blocos_assinatura(
@@ -1547,7 +1658,8 @@ class SEIClient:
         resp = await self._request("GET", "/bloco/assinatura/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar blocos: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar blocos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "blocos", data.get("data", []), start, limit)
 
     async def listar_documentos_bloco_assinatura(
@@ -1561,7 +1673,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar documentos do bloco: {data.get('mensagem')}")
+            msg = f"Erro ao listar documentos do bloco: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def retirar_documento_bloco_assinatura(self, id_bloco: str, documentos: str) -> dict:
@@ -1573,11 +1686,13 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao retirar do bloco: {data.get('mensagem')}")
+            msg = f"Erro ao retirar do bloco: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def alterar_bloco_assinatura(self, id_bloco: str, descricao: str) -> dict:
         """Altera descrição de um bloco de assinatura.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request(
@@ -1587,53 +1702,63 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao alterar bloco de assinatura: {data.get('mensagem')}")
+            msg = f"Erro ao alterar bloco de assinatura: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def excluir_blocos_assinatura(self, ids: str) -> dict:
         """Exclui bloco(s) de assinatura. IDs separados por vírgula.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("POST", "/bloco/assinatura/excluir", data={"blocos": ids})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao excluir blocos de assinatura: {data.get('mensagem')}")
+            msg = f"Erro ao excluir blocos de assinatura: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def concluir_blocos_assinatura(self, ids: str) -> dict:
         """Conclui bloco(s) de assinatura. IDs separados por vírgula.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("POST", "/bloco/assinatura/concluir", data={"blocos": ids})
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao concluir blocos de assinatura: {data.get('mensagem')}")
+            msg = f"Erro ao concluir blocos de assinatura: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def reabrir_bloco_assinatura(self, id_bloco: str) -> dict:
         """Reabre bloco de assinatura concluído.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("POST", f"/bloco/assinatura/{id_bloco}/reabrir")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao reabrir bloco de assinatura: {data.get('mensagem')}")
+            msg = f"Erro ao reabrir bloco de assinatura: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def retornar_bloco_assinatura(self, id_bloco: str) -> dict:
         """Retorna bloco de assinatura para a unidade de origem.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("POST", f"/bloco/assinatura/{id_bloco}/retornar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao retornar bloco de assinatura: {data.get('mensagem')}")
+            msg = f"Erro ao retornar bloco de assinatura: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def anotar_documento_bloco_assinatura(
         self, id_bloco: str, documento: str, descricao: str
     ) -> dict:
         """Cria anotação em documento dentro de um bloco de assinatura.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request(
@@ -1643,13 +1768,15 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao anotar no bloco de assinatura: {data.get('mensagem')}")
+            msg = f"Erro ao anotar no bloco de assinatura: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def alterar_anotacao_bloco_assinatura(
         self, id_bloco: str, documento: str, descricao: str
     ) -> dict:
         """Altera anotação de documento em um bloco de assinatura.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request(
@@ -1659,7 +1786,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao alterar anotação do bloco: {data.get('mensagem')}")
+            msg = f"Erro ao alterar anotação do bloco: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -1671,7 +1799,8 @@ class SEIClient:
         resp = await self._request("POST", f"/processo/{id_procedimento}/remover/atribuicao")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao remover atribuição: {data.get('mensagem')}")
+            msg = f"Erro ao remover atribuição: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -1685,7 +1814,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao receber processo: {data.get('mensagem')}")
+            msg = f"Erro ao receber processo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -1705,7 +1835,7 @@ class SEIClient:
         duplicação e garantindo que o arquivo seja lido do início nas duas tentativas.
         """
         headers = await self._get_headers()
-        with open(arquivo_path, "rb") as f:
+        with Path(arquivo_path).open("rb") as f:
             resp = await self._client.post(
                 url,
                 headers=headers,
@@ -1716,7 +1846,7 @@ class SEIClient:
             logger.info("Token expirado durante upload, re-autenticando...")
             await self.autenticar()
             headers = {"token": self._token or ""}
-            with open(arquivo_path, "rb") as f:
+            with Path(arquivo_path).open("rb") as f:
                 resp = await self._client.post(
                     url,
                     headers=headers,
@@ -1735,13 +1865,15 @@ class SEIClient:
         id_unidade: str = "",
     ) -> dict:
         """Cria documento externo com upload de arquivo em um processo SEI.
+
         arquivo_path: caminho local do arquivo (PDF, imagem, etc.)
         Retorna: {idDocumento, protocoloDocumentoFormatado}
         """
-        if not os.path.exists(arquivo_path):
-            raise SEIError(f"Arquivo não encontrado: {arquivo_path}")
+        if not Path(arquivo_path).exists():
+            msg = f"Arquivo não encontrado: {arquivo_path}"
+            raise SEIError(msg)
 
-        nome_arquivo = os.path.basename(arquivo_path)
+        nome_arquivo = Path(arquivo_path).name
         data_hoje = datetime.now().strftime("%d/%m/%Y")
 
         resp = await self._post_with_file_reopen(
@@ -1771,7 +1903,8 @@ class SEIClient:
         resp.raise_for_status()
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao criar documento externo: {data.get('mensagem')}")
+            msg = f"Erro ao criar documento externo: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data["data"]
 
     # ------------------------------------------------------------------
@@ -1795,7 +1928,8 @@ class SEIClient:
         resp = await self._request("POST", "/processo/agendar/retorno/programado", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao agendar retorno: {data.get('mensagem')}")
+            msg = f"Erro ao agendar retorno: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -1807,7 +1941,8 @@ class SEIClient:
         resp = await self._request("GET", f"/processo/listar/sobrestamento/{id_procedimento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar sobrestamentos: {data.get('mensagem')}")
+            msg = f"Erro ao listar sobrestamentos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def listar_unidades_processo(self, id_procedimento: str) -> list[dict]:
@@ -1815,7 +1950,8 @@ class SEIClient:
         resp = await self._request("GET", f"/processo/listar/unidades/{id_procedimento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar unidades: {data.get('mensagem')}")
+            msg = f"Erro ao listar unidades: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def listar_interessados(self, id_procedimento: str) -> list[dict]:
@@ -1823,11 +1959,13 @@ class SEIClient:
         resp = await self._request("GET", f"/processo/{id_procedimento}/interessados/listar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar interessados: {data.get('mensagem')}")
+            msg = f"Erro ao listar interessados: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def pesquisar_assuntos(self, filtro: str = "", limit: int = 50, start: int = 0) -> dict:
         """Pesquisa assuntos disponíveis para processos.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         params: dict = {"limit": limit, "start": start}
@@ -1836,75 +1974,89 @@ class SEIClient:
         resp = await self._request("GET", "/processo/assunto/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar assuntos: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar assuntos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "assuntos", data.get("data", []), start, limit)
 
     async def sugestao_assuntos_processo(self, id_tipo_processo: str) -> list[dict]:
         """Lista sugestões de assuntos para um tipo de processo.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("GET", f"/processo/assunto/sugestao/{id_tipo_processo}/listar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar sugestões de assunto: {data.get('mensagem')}")
+            msg = f"Erro ao listar sugestões de assunto: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def consultar_atribuicao(self, id_procedimento: str) -> dict:
         """Consulta atribuição atual de um processo.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("GET", f"/processo/{id_procedimento}/consultar/atribuicao")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao consultar atribuição: {data.get('mensagem')}")
+            msg = f"Erro ao consultar atribuição: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {})
 
     async def verificar_acesso(self, id_procedimento: str) -> dict:
         """Verifica se o usuário tem acesso a um processo.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         resp = await self._request("GET", f"/processo/verifica/acesso/{id_procedimento}")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao verificar acesso: {data.get('mensagem')}")
+            msg = f"Erro ao verificar acesso: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {})
 
     async def listar_relacionamentos(self, id_procedimento: str) -> list[dict]:
         """Lista processos relacionados.
+
         REQUER mod-wssei 3.0.2+ (SEI 5.0.x). Não disponível em versões anteriores.
         """
         resp = await self._request("GET", f"/processo/{id_procedimento}/relacionamentos")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar relacionamentos: {data.get('mensagem')}")
+            msg = f"Erro ao listar relacionamentos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def listar_meus_acompanhamentos(self, limit: int = 50, start: int = 0) -> dict:
         """Lista processos acompanhados pelo usuário.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         params: dict = {"limit": limit, "start": start}
         resp = await self._request("GET", "/processo/listar/meus/acompanhamentos", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar acompanhamentos: {data.get('mensagem')}")
+            msg = f"Erro ao listar acompanhamentos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "acompanhamentos", data.get("data", []), start, limit)
 
     async def listar_acompanhamentos_unidade(self, limit: int = 50, start: int = 0) -> dict:
         """Lista processos acompanhados na unidade atual.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         params: dict = {"limit": limit, "start": start}
         resp = await self._request("GET", "/processo/listar/acompanhamentos", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar acompanhamentos da unidade: {data.get('mensagem')}")
+            msg = f"Erro ao listar acompanhamentos da unidade: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "acompanhamentos", data.get("data", []), start, limit)
 
     async def alterar_acompanhamento(
         self, id_procedimento: str, id_grupo: str = "", observacao: str = ""
     ) -> dict:
         """Altera acompanhamento especial de um processo.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         payload: dict = {"protocolo": id_procedimento}
@@ -1915,7 +2067,8 @@ class SEIClient:
         resp = await self._request("POST", "/processo/acompanhamento/alterar", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao alterar acompanhamento: {data.get('mensagem')}")
+            msg = f"Erro ao alterar acompanhamento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -1928,7 +2081,8 @@ class SEIClient:
         resp = await self._request("GET", f"/processo/{id_procedimento}/credenciamento/listar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar credenciamentos: {data.get('mensagem')}")
+            msg = f"Erro ao listar credenciamentos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def conceder_credenciamento(self, id_procedimento: str, id_usuario: str) -> dict:
@@ -1940,7 +2094,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao conceder credenciamento: {data.get('mensagem')}")
+            msg = f"Erro ao conceder credenciamento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def renunciar_credenciamento(self, id_procedimento: str) -> dict:
@@ -1948,7 +2103,8 @@ class SEIClient:
         resp = await self._request("POST", f"/processo/{id_procedimento}/credenciamento/renunciar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao renunciar credenciamento: {data.get('mensagem')}")
+            msg = f"Erro ao renunciar credenciamento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def cassar_credenciamento(self, id_procedimento: str, id_usuario: str) -> dict:
@@ -1960,7 +2116,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao cassar credenciamento: {data.get('mensagem')}")
+            msg = f"Erro ao cassar credenciamento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -1971,13 +2128,15 @@ class SEIClient:
         self, id_procedimento: str, limit: int = 50, start: int = 0
     ) -> dict:
         """Lista histórico de atividades/andamentos de um processo.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         params: dict = {"protocolo": id_procedimento, "limit": limit, "start": start}
         resp = await self._request("GET", "/atividade/listar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar atividades: {data.get('mensagem')}")
+            msg = f"Erro ao listar atividades: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "atividades", data.get("data", []), start, limit)
 
     async def registrar_andamento(self, id_procedimento: str, descricao: str) -> dict:
@@ -1989,7 +2148,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao registrar andamento: {data.get('mensagem')}")
+            msg = f"Erro ao registrar andamento: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -2004,13 +2164,15 @@ class SEIClient:
         resp = await self._request("GET", "/contato/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao pesquisar contatos: {data.get('mensagem')}")
+            msg = f"Erro ao pesquisar contatos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return {"contatos": data.get("data", []), "total": data.get("total")}
 
     async def criar_contato(
         self, nome: str, tipo: str = "", email: str = "", telefone: str = ""
     ) -> dict:
         """Cria novo contato no SEI.
+
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         payload: dict = {"nome": nome}
@@ -2023,7 +2185,8 @@ class SEIClient:
         resp = await self._request("POST", "/contato/criar", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao criar contato: {data.get('mensagem')}")
+            msg = f"Erro ao criar contato: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -2036,7 +2199,8 @@ class SEIClient:
         resp = await self._request("GET", "/assinante/listar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar assinantes: {data.get('mensagem')}")
+            msg = f"Erro ao listar assinantes: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     async def listar_orgaos_assinante(self) -> list[dict]:
@@ -2044,7 +2208,8 @@ class SEIClient:
         resp = await self._request("GET", "/assinante/orgao")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar órgãos para assinatura: {data.get('mensagem')}")
+            msg = f"Erro ao listar órgãos para assinatura: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     # ------------------------------------------------------------------
@@ -2054,6 +2219,7 @@ class SEIClient:
 
     async def criar_observacao(self, id_procedimento: str, descricao: str) -> dict:
         """Cria observação da unidade em um processo (diferente de anotação).
+
         Observação é visível apenas para a unidade, anotação é post-it individual.
         """
         resp = await self._request(
@@ -2063,7 +2229,8 @@ class SEIClient:
         )
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao criar observação: {data.get('mensagem')}")
+            msg = f"Erro ao criar observação: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     # ------------------------------------------------------------------
@@ -2077,7 +2244,8 @@ class SEIClient:
         resp = await self._request("GET", "/protocolomodelo/grupo/listar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar grupos de modelos: {data.get('mensagem')}")
+            msg = f"Erro ao listar grupos de modelos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "grupos", data.get("data", []), start, limit)
 
     async def listar_modelos(
@@ -2092,7 +2260,8 @@ class SEIClient:
         resp = await self._request("GET", "/protocolomodelo/listar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar modelos: {data.get('mensagem')}")
+            msg = f"Erro ao listar modelos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return self._paginated(data, "modelos", data.get("data", []), start, limit)
 
     # ------------------------------------------------------------------
@@ -2105,7 +2274,8 @@ class SEIClient:
         resp = await self._request("GET", f"/marcador/processo/{id_procedimento}/historico/listar")
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao listar histórico de marcadores: {data.get('mensagem')}")
+            msg = f"Erro ao listar histórico de marcadores: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", [])
 
     # ------------------------------------------------------------------
@@ -2133,7 +2303,8 @@ class SEIClient:
         resp = await self._request("POST", f"/bloco/assinatura/{id_bloco}/assinar", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao assinar bloco: {data.get('mensagem')}")
+            msg = f"Erro ao assinar bloco: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def assinar_documentos_bloco(
@@ -2158,7 +2329,8 @@ class SEIClient:
         resp = await self._request("POST", "/bloco/assinatura/assinar/documentos", data=payload)
         data = resp.json()
         if not data.get("sucesso"):
-            raise SEIError(f"Erro ao assinar documentos: {data.get('mensagem')}")
+            msg = f"Erro ao assinar documentos: {data.get('mensagem')}"
+            raise SEIError(msg)
         return data.get("data", {"mensagem": data.get("mensagem")})
 
     async def close(self) -> None:

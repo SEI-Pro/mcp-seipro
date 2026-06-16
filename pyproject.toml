@@ -92,19 +92,17 @@ ignore = [
     "S603",
 ]
 "src/todos/sei_client.py" = [
-    "TRY002", "TRY003", "EM101", "EM102",
-    # Docstring style — Portuguese multi-line summaries don't fit D205/D400/D415 rules
-    "D205", "D209", "D400", "D415",
     # REST API methods inherently have many parameters (one per API field)
-    "PLR0913", "C901",
-    # Optional heavy deps (keyring, os, datetime) must be deferred; moving to top-level would
-    # break environments without them and change import-time behaviour
+    "PLR0913",
+    # Complexity inherent in HTTP client retry/auth/cache logic
+    "C901",
+    # keyring import inside autenticar() is deferred — optional dep; moving to top-level
+    # would break environments without keyring installed
     "PLC0415",
     # Cache stores arbitrary API-returned values; Any is the correct type here
     "ANN401",
-    # Sync open()/os.path.* inside async — architectural constraint shared with sei_web_client;
-    # refactor to asyncio.to_thread / aiofiles is tracked separately (ASYNC230/240, PTH)
-    "ASYNC230", "ASYNC240", "PTH110", "PTH119", "PTH123",
+    # Sync file I/O inside async — architectural constraint; aiofiles refactor tracked separately
+    "ASYNC230", "ASYNC240",
     # datetime.now() without tz — local time intentional for BR gov document dates
     "DTZ005",
 ]
