@@ -1,649 +1,587 @@
-# RFC 0007 — Response shaping, paginação completa e eval harness
+# RFC 0007 — Response shaping, paginação por cursor, erros recuperáveis e eval harness
 
 **Status**: Proposta
 **Data**: 2026-06-17
 **Autores**: Franklin Baldo (com Claude Code)
 **Relacionado**: RFC 0006 (backend abstrato), RFC 0004 (exceções)
+**Baseado em**: skill `mcp-coding` (best practices de tool surface, schemas, token-economy, erros, evals)
 
 ---
 
 ## 0. Contexto e motivação
 
-Com a RFC 0006 concluída, o servidor tem arquitetura limpa (composite backend,
-módulos por domínio, 124 tools registradas) e suíte verde (219 testes). O
-próximo eixo de melhoria é a **qualidade das respostas** — o que cada tool
-devolve ao agente depois que o backend executa.
+A RFC 0006 entregou arquitetura limpa (composite backend, módulos por domínio,
+124 tools, suíte verde). O próximo eixo é a **qualidade da fronteira agente↔tool**:
+o que cada tool devolve e como o agente recupera quando algo falha.
 
-Três lacunas independentes, em ordem de impacto:
+A regra-mãe da skill `mcp-coding`: **o agente paga cada token duas vezes — uma
+para ler a tool, outra para raciocinar sobre o que ela retorna.** Tudo abaixo
+deriva disso. Auditamos as 124 tools contra a skill e encontramos cinco lacunas:
 
-| Lacuna | Impacto direto | Seção |
+| Lacuna | Regra da skill violada | Seção |
 |---|---|---|
-| **Response shaping incompleto** | Payload bruto pode ter centenas de itens; agente gasta contexto sem necessidade | §1 |
-| **Contrato de paginação incompleto** | Ferramentas de listagem sem `tem_proxima` enganam o agente sobre completude | §2 |
-| **Ausência de eval harness** | Com 124 tools, seleção errada é o maior risco real; sem evals, é invisível | §3 |
+| Payload bruto não-shaped em tools de leitura pesada | "Never return a raw upstream payload by default" | §1 |
+| Shapes são dicts ad-hoc, não schemas | "Design every shaped response as a real schema now" | §1.1 |
+| Truncamento sem continuação estruturada | "Every truncated response carries its own continuation" | §1.4 |
+| Paginação por número de página, `has_more` inferido sem marcar | "Prefer opaque cursor; keep `has_more` honest" | §2 |
+| Sem eval de seleção/sequência sob agente | "Evals — non-negotiable" | §4 |
 
-Uma lacuna menor mas concreta:
+E uma lacuna factual: documentação diz "121 tools", o código tem **124** (§6).
 
-| Lacuna | Impacto | Seção |
-|---|---|---|
-| **Drift de contagem de tools** | Documentação diz "121 tools", código tem 124 | §4 |
+O que **não** mudamos (a skill confirma que já está certo): hierarquia
+`SEIError(ToolError)` propagada sem rewrap (§3 só a *enriquece*); gate de acesso
+restrito/sigiloso com `elicit` que falha fechado; secrets via env/keyring;
+stdio→stderr; resources para catálogos estáticos (`sei://status`,
+`sei://estilos-css`, `sei://hipoteses-legais`).
 
 ---
 
 ## 1. Response shaping
 
-### 1.1 Estado atual
+### 1.1 Schemas Pydantic, não dicts ad-hoc
 
-`_json` já usa `separators=(",", ":")` — sem `indent=2`, sem overhead de
-whitespace. O gargalo é o **conteúdo**, não a formatação.
+> Skill: *"Define the shape as a Pydantic model / JSON Schema, not an ad-hoc
+> dict. Then adopting `outputSchema` + `structuredContent` later is wiring, not a
+> redesign."*
 
-`sei_consultar_processo` tem `_shape_consultar_processo` (trunca `documentos[]`
-para 30, adiciona `_documentos_truncados`). `sei_listar_processos` tem envelope
-com `total_itens`/`tem_proxima`/`total_filtrados`. `sei_resumo_processos`
-devolve envelope `{agrupamento, total_processos, grupos}`.
+Hoje os poucos shapers existentes (`_shape_consultar_processo`) retornam `dict`.
+A RFC anterior pôs `outputSchema` fora de escopo. **Revertemos essa decisão**: as
+respostas shaped passam a ser **modelos Pydantic** definidos em um módulo novo
+`src/todos/responses.py`. Continuamos serializando para string JSON via `_json`
+por compatibilidade — mas a partir de um modelo, não de um dict solto. Quando o
+FastMCP/cliente suportar `structuredContent` de forma estável, trocar
+`return _json(model.model_dump())` por `return model` é fiação, não redesenho.
 
-Todos os demais fazem `return _json(result)` com o dict bruto do backend.
-
-### 1.2 Problema
-
-| Tool | Risco | Payload típico |
-|---|---|---|
-| `sei_arvore_processo` | Processo com 200+ docs: lista bruta inteira | 30–150 KB |
-| `sei_listar_documentos` | Mesma lista, campos duplicados | 20–100 KB |
-| `sei_listar_atividades` | Histórico completo sem paginação | 5–60 KB |
-| `sei_pesquisar_processos` | Resultado Solr sem `tem_proxima` | 5–40 KB |
-| `sei_criar_processo` / `sei_criar_documento` | REST response completo; agente só precisa de id+protocolo | 1–5 KB |
-| `sei_listar_meus_acompanhamentos` | Lista raw; sem total | variável |
-| `sei_listar_blocos` / `sei_listar_blocos_assinatura` | Lista raw; sem total | variável |
-
-### 1.3 Proposta: camada de shaping por categoria
-
-#### 1.3.1 Listas de documentos / árvore (truncamento com sinal)
-
-**Princípio**: retornar os primeiros N itens, sempre com `total` no topo,
-e `_truncado` com instrução de refinamento se houver mais.
-
-Constante proposta: `_LISTA_DOCS_LIMIT = 50` (aumenta o `_DOCS_INLINE_LIMIT`
-atual de 30 para consistência com `listar_documentos`).
-
-`sei_arvore_processo` e `sei_listar_documentos` devem aplicar
-`_shape_lista_documentos(result, protocolo)`:
+**Importante** (invariante da RFC 0006): os modelos de *resposta* não afetam a
+introspecção de type hints de *entrada* do FastMCP — logo não conflitam com a
+regra "sem `from __future__ import annotations`" nos módulos de tools. Os modelos
+ficam isolados em `responses.py`.
 
 ```python
-def _shape_lista_documentos(result: dict | list, protocolo: str) -> dict:
-    docs: list = result if isinstance(result, list) else result.get("documentos", [])
+# src/todos/responses.py
+from pydantic import BaseModel, Field
+
+class NextAction(BaseModel):
+    """Próxima ação sugerida ao agente para continuar (paginação ou recuperação)."""
+    tool: str = Field(description="Nome da tool a chamar em seguida, ex: 'sei_arvore_processo'")
+    args: dict = Field(description="Argumentos para a tool, ex: {'cursor': 'eyJwIjoxfQ'}")
+    reason: str = Field(description="Por que esta ação, em uma linha")
+
+class DocumentoResumo(BaseModel):
+    """Documento na árvore de um processo (campos essenciais para chaining)."""
+    id: str = Field(description="idDocumento interno, ex: '2843449'")
+    numero_sei: str = Field(default="", description="Número visível, ex: '2843449'")
+    tipo_documento: str = Field(default="", description="ex: 'Despacho'")
+    nome_composto: str = Field(default="", description="ex: 'Despacho GPF 2874369'")
+    sigla_unidade: str = Field(default="", description="unidade geradora, ex: 'GPF'")
+    assinado: bool | None = None
+    cancelado: bool | None = None
+    volume: int | None = None
+
+class ListaDocumentos(BaseModel):
+    """Resposta de sei_arvore_processo / sei_listar_documentos."""
+    processo: str
+    total_documentos: int = Field(description="total real no servidor")
+    documentos: list[DocumentoResumo]
+    next_actions: list[NextAction] = Field(default_factory=list)
+
+class RespostaEscrita(BaseModel):
+    """Resposta enxuta de tools de criação/alteração."""
+    acao: str
+    status: str = "ok"
+    id_procedimento: str | None = None
+    protocolo: str | None = None
+    id_documento: str | None = None
+    numero_sei: str | None = None
+    mensagem: str | None = None
+```
+
+### 1.2 `summary` + `items`, IDs com nomes
+
+> Skill: *"Return `summary` + `items`. Preserve stable IDs. Put the
+> human-readable name next to the ID."*
+
+Cada lista shaped tem o agregado no topo (`total_*`) e os registros podados
+abaixo. Toda entidade carrega **id + nome juntos** — `{"id": "...", "nome": "..."}`,
+nunca id sem nome nem nome sem id. Isso já é parcialmente verdade
+(`DocumentoResumo.id` + `nome_composto`); a regra passa a valer para
+interessados, unidades, assuntos, signatários.
+
+### 1.3 Tools de leitura pesada — truncar com sinal
+
+`_LISTA_DOCS_LIMIT = 50`. Aplicado a `sei_arvore_processo` e
+`sei_listar_documentos` via shaper que produz `ListaDocumentos`:
+
+```python
+def _shape_lista_documentos(docs: list[dict], protocolo: str) -> ListaDocumentos:
     total = len(docs)
-    truncado = total > _LISTA_DOCS_LIMIT
-    campos_essenciais = {"id", "tipo_documento", "nome_composto", "sigla_unidade",
-                         "numero_sei", "assinado", "cancelado", "volume"}
-    shaped = [
-        {k: v for k, v in doc.items() if k in campos_essenciais}
-        for doc in docs[:_LISTA_DOCS_LIMIT]
-    ]
-    out: dict = {
-        "processo": protocolo,
-        "total_documentos": total,
-        "documentos": shaped,
-    }
-    if truncado:
-        out["_truncado"] = (
-            f"Exibindo {_LISTA_DOCS_LIMIT} de {total}. "
-            "Para a lista completa, use sei_arvore_processo com paginação futura "
-            "ou sei_listar_documentos."
-        )
-    return out
+    shaped = [DocumentoResumo(**_pick_doc(d)) for d in docs[:_LISTA_DOCS_LIMIT]]
+    actions: list[NextAction] = []
+    if total > _LISTA_DOCS_LIMIT:
+        actions.append(NextAction(
+            tool="sei_arvore_processo",
+            args={"protocolo_formatado": protocolo, "include_raw": True},
+            reason=f"Exibindo {_LISTA_DOCS_LIMIT} de {total} documentos; "
+                   "include_raw=True retorna a árvore completa.",
+        ))
+    return ListaDocumentos(
+        processo=protocolo, total_documentos=total,
+        documentos=shaped, next_actions=actions,
+    )
 ```
 
-**Nota de design**: `sei_arvore_processo` e `sei_listar_documentos` servem
-propósitos diferentes (visualização estrutural vs. enumeração plana) mas ambas
-retornam listas de documentos — o mesmo shaper serve os dois.
+`sei_listar_atividades`: shaper análogo, trunca para as 50 mais **recentes**
+(ordem cronológica inversa), com parâmetro `ordem: Literal["desc","asc"]="desc"`.
 
-#### 1.3.2 Histórico de atividades (truncamento por recência)
+`sei_consultar_processo`: o `_shape_consultar_processo` atual vira um modelo
+Pydantic `ProcessoDetalhe`; o `_documentos_truncados` (string) vira `next_actions`.
 
-`sei_listar_atividades` retorna o histórico completo de um processo (pode ter
-centenas de entradas). O agente quase sempre quer as entradas mais recentes.
+### 1.4 Continuação estruturada — `next_actions`, não strings
 
-Shaper `_shape_atividades(result, processo)`:
-- `total_atividades`: total real
-- `atividades`: últimas 50, ordem cronológica inversa (mais recente primeiro)
-- `_truncado`: instrução se `total > 50`
-- Campos por item: `data_hora`, `unidade`, `usuario`, `descricao` (podar
-  campos de metadata interna que o backend REST eventualmente inclui)
+> Skill: *"Don't just say 'truncated' — return the next action: the tool + args
+> to get more (`next_actions: [{tool, args, reason}]`)."*
 
-Parâmetro opcional `ordem: Literal["asc", "desc"] = "desc"` na tool
-(default desc = mais recente primeiro) — mudança de interface, documentada.
+Eliminamos as strings `_truncado` / `_documentos_truncados`. Toda resposta
+truncada carrega `next_actions: list[NextAction]` — o agente nunca precisa
+adivinhar como continuar. Mesma estrutura usada por paginação (§2) e por erros
+recuperáveis (§3), unificando o "como prosseguir".
 
-#### 1.3.3 Respostas de escrita (só o essencial)
+### 1.5 Gate do firehose — `include_raw: bool = False`
 
-Criação e alteração devolvem o id do recurso criado, protocolo, e confirmação.
-O payload REST completo vai para `backend.*`, não chega ao agente.
+> Skill: *"Gate the firehose behind `include_raw: false`. When the full payload
+> is genuinely needed, make the agent ask for it explicitly."*
 
-`_shape_resposta_escrita(result, acao)`:
+As tools de leitura pesada (`sei_arvore_processo`, `sei_listar_documentos`,
+`sei_consultar_processo`, `sei_listar_atividades`, `sei_pesquisar_processos`)
+ganham `include_raw: bool = False`. Com `True`, a tool pula o shaping/truncamento
+e devolve o payload completo do backend. Default `False`. As `next_actions` de
+truncamento já apontam `include_raw=True` como a continuação (§1.3), fechando o
+loop: o agente vê que foi truncado *e* como pegar tudo.
 
-```python
-def _shape_resposta_escrita(result: dict, acao: str) -> dict:
-    out: dict = {"acao": acao, "status": "ok"}
-    for campo in ("IdProcedimento", "id_procedimento", "id"):
-        if campo in result:
-            out["id_procedimento"] = result[campo]
-            break
-    for campo in ("ProtocoloProcedimentoFormatado", "protocolo"):
-        if campo in result:
-            out["protocolo"] = result[campo]
-            break
-    for campo in ("IdDocumento", "id_documento"):
-        if campo in result:
-            out["id_documento"] = result[campo]
-            break
-    for campo in ("ProtocoloDocumentoFormatado", "numero_sei"):
-        if campo in result:
-            out["numero_sei"] = result[campo]
-            break
-    if "mensagem" in result:
-        out["mensagem"] = result["mensagem"]
-    return out
-```
+### 1.6 Respostas de escrita — só o essencial
 
-Tools afetadas: `sei_criar_processo`, `sei_alterar_processo`,
-`sei_criar_documento`, `sei_criar_documento_externo`,
-`sei_alterar_documento_interno`.
+`_shape_resposta_escrita(result, acao) -> RespostaEscrita` aplicado a
+`sei_criar_processo`, `sei_alterar_processo`, `sei_criar_documento`,
+`sei_criar_documento_externo`, `sei_alterar_documento_interno`. **Invariante
+testado**: id e protocolo do recurso criado nunca se perdem no shaping.
 
-**Exceção importante**: `sei_criar_documento` já retorna o id do documento
-criado em `result["id_documento"]` (ou similar) — o shaper só precisa
-normalizar e prunear, não perder o id.
+### 1.7 `response_format` — onde ganha o custo
 
-#### 1.3.4 Pesquisa de processos (envelope + campos essenciais)
+> Skill: *"Offer `response_format: 'markdown' | 'json'` when both views earn
+> their keep."*
 
-`sei_pesquisar_processos` retorna um dict com chave `processos` (lista) mais
-metadados Solr. O shaper deve:
-- Preservar `total_resultados`, `pagina_atual`
-- Adicionar `tem_proxima` (ver §2)
-- Em cada item, preservar: `protocolo`, `tipo`, `especificacao`, `data_geracao`,
-  `id_procedimento`, `unidade_geradora` (se presente)
-- Podar campos Solr internos (`_version_`, `score`, etc.)
+Decisão deliberada de **não** adicionar `response_format` agora às tools de
+árvore/documentos: o agente **encadeia** essas respostas para `sei_ler_documento`
+via `id`, então precisa de JSON estruturado; a apresentação markdown ao humano já
+é instruída no bloco `instructions` ("use tabela markdown, 📄/📎…"), feita pelo
+agente. Adicionar o parâmetro aqui inflaria o schema sem ganho — a própria skill
+adverte contra over-augmentar. Reavaliar só se surgir uma tool de leitura cujo
+output o humano consome direto sem chaining.
 
-#### 1.3.5 Listas de acompanhamentos e blocos
+### 1.8 O que NÃO mudar
 
-`sei_listar_meus_acompanhamentos`, `sei_listar_acompanhamentos_processo`,
-`sei_listar_blocos`, `sei_listar_blocos_assinatura`: devem adicionar
-`total_itens` no envelope se ausente, e `tem_proxima` quando aplicável.
-
-### 1.4 O que NÃO mudar
-
-- `sei_ler_documento`: retorna conteúdo do documento (texto/markdown/HTML) —
-  já é o conteúdo útil, não um payload estruturado.
-- `sei_consultar_documento_interno` / `sei_consultar_documento_externo`: já
-  retornam um único objeto — shaping de objeto único não é necessário agora.
-- `sei_listar_sobrestamentos`, `sei_listar_interessados`,
-  `sei_listar_unidades_processo`: listas pequenas (< 20 itens em 99% dos
-  casos), risco de token baixo, sem mudança.
-- Todas as tools de escrita que já devolvem `{"mensagem": "..."}` ou shapes
-  manuais (ex: `sei_marcar_nao_lido`, `sei_executar_acao`).
-
-### 1.5 Onde o código fica
-
-Todos os shapers (`_shape_lista_documentos`, `_shape_atividades`,
-`_shape_resposta_escrita`, `_shape_pesquisa_processos`) ficam em
-`src/todos/tools/processos.py` e `documentos.py` ao lado dos tools que
-os chamam — **não** em `mcp_app.py` (que é camada de infra, não de domínio).
+`sei_ler_documento` (já devolve o conteúdo útil), `sei_consultar_documento_*`
+(objeto único), `sei_listar_sobrestamentos`/`interessados`/`unidades_processo`
+(listas < 20 itens) — apenas ganham `total_itens` e, quando entidades,
+id+nome juntos (§1.2).
 
 ---
 
-## 2. Contrato de paginação
+## 2. Paginação por cursor opaco
 
-### 2.1 Estado atual
+### 2.1 Estado atual e a regra
 
-| Sinal | Tools com | Tools sem |
-|---|---|---|
-| `total_itens` | `sei_listar_processos`, catalogs (web) | `sei_listar_atividades`, `sei_listar_relacionamentos`, `sei_arvore_processo` |
-| `tem_proxima` | `sei_listar_processos`, `sei_listar_blocos_assinatura` (web) | catalogs, `sei_pesquisar_processos`, blocos_internos |
-| `pagina_atual` | `sei_listar_processos` | todos os demais |
+O backend SEI é página-numerada (`start` = página 0-indexed). Hoje as tools
+expõem `pagina: int` na entrada e devolvem `tem_proxima` na saída — quando
+devolvem. A inferência `len(items) >= limit` aparece crua, sem marcar que é
+inferência.
 
-### 2.2 Problema
+> Skill: *"Prefer an opaque `next_cursor` rather than exposing the backend's page
+> numbers. If the backend only does numeric pages, hide that behind the cursor
+> (encode it). Keep `has_more` honest: if you only inferred it from
+> `len(items) == limit`, mark it (`has_more_inferred: true`)."*
 
-Sem `tem_proxima`, o agente não sabe se recebeu a lista completa ou uma fatia.
-Exemplos concretos:
+### 2.2 Proposta: cursor opaco que encapsula a página
 
-- `sei_pesquisar_tipos_processo(limit=50)`: retorna 50 tipos. Há 200? O agente
-  não sabe; pode tomar uma decisão errada usando um tipo que não é o correto.
-- `sei_listar_blocos(limit=20)`: retorna 20 blocos. Tem mais? Sem sinal, o
-  agente assume que é tudo.
-
-### 2.3 Proposta: contrato uniforme de listagem
-
-Todo `return _json(result)` de uma tool de listagem paginada deve garantir o
-envelope `ListagemEnvelope`:
-
-```
-{
-  "items_key": [...],        # chave existente (processos, tipos, blocos, etc.)
-  "total_itens": int | None, # total do servidor (None se desconhecido)
-  "pagina_atual": int,       # 0-indexed
-  "tem_proxima": bool,       # true se há mais páginas
-}
-```
-
-**Regra de inferência `tem_proxima`** quando o backend não informa o total:
-`len(items) >= limit` — se recebemos exatamente `limit` itens, pode haver mais.
-Quando o total é conhecido: `(pagina_atual + 1) * limit < total_itens`.
-
-**Implementação**: helper `_envelope_listagem` em `mcp_app.py`:
+Cursor = `base64url(json compacto {p: <pagina>, ...filtros})`. O agente trata
+**ausência de cursor como fim** e nunca assume tamanho de página. Helpers em
+`mcp_app.py`:
 
 ```python
-def _envelope_listagem(
-    result: dict,
-    chave: str,
-    limit: int,
-    pagina: int,
-) -> dict:
-    """Garante que result tem total_itens, pagina_atual e tem_proxima."""
-    items = result.get(chave, [])
-    total = result.get("total_itens")
-    tem_proxima = result.get("tem_proxima")
-    if tem_proxima is None:
-        if total is not None:
-            tem_proxima = (pagina + 1) * limit < total
-        else:
-            tem_proxima = len(items) >= limit
-    return {
-        chave: items,
-        "total_itens": total,
-        "pagina_atual": pagina,
-        "tem_proxima": tem_proxima,
-    }
+def _encode_cursor(pagina: int, **extra: object) -> str:
+    return base64.urlsafe_b64encode(
+        json.dumps({"p": pagina, **extra}, separators=(",", ":")).encode()
+    ).decode()
+
+def _decode_cursor(cursor: str) -> dict:
+    if not cursor:
+        return {}
+    return json.loads(base64.urlsafe_b64decode(cursor.encode()))
 ```
 
-### 2.4 Tools afetadas
+Modelo de envelope (Pydantic, em `responses.py`):
 
-| Tool | Chave | Situação atual | Ação |
-|---|---|---|---|
-| `sei_pesquisar_tipos_processo` | `tipos` | `total_itens` OK, sem `tem_proxima` | adicionar `_envelope_listagem` |
-| `sei_pesquisar_tipos_documento` | `tipos` | idem | idem |
-| `sei_pesquisar_hipoteses_legais` | `hipoteses` | idem | idem |
-| `sei_pesquisar_marcadores` | `marcadores` | idem | idem |
-| `sei_pesquisar_unidades` | `unidades` | idem | idem |
-| `sei_listar_modelos` | `modelos` | idem | idem |
-| `sei_listar_assuntos` | `assuntos` | idem | idem |
-| `sei_pesquisar_contatos` | `contatos` | idem | idem |
-| `sei_listar_textos_padrao` | `textos` | idem | idem |
-| `sei_listar_blocos` | `blocos` | sem `tem_proxima` | idem |
-| `sei_listar_blocos_assinatura` | `blocos` | `tem_proxima` OK na web | verificar REST |
-| `sei_pesquisar_processos` | `processos` | sem `tem_proxima` | shaper §1.3.4 + envelope |
+```python
+class Paginado(BaseModel):
+    total_itens: int | None = Field(default=None, description="total no servidor, None se desconhecido")
+    proximo_cursor: str | None = Field(default=None, description="passe em `cursor`; None = fim")
+    tem_proxima_inferida: bool = Field(default=False, description="True se inferido de len(items)>=limit")
+    next_actions: list[NextAction] = Field(default_factory=list)
+```
 
-### 2.5 Tools que ficam sem paginação
+**Entrada**: cada tool paginada ganha `cursor: str = ""` (opaco). Mantemos
+`pagina: int = 0` por compatibilidade com a surface e os testes existentes;
+quando `cursor` é passado, ele tem precedência (decodifica a página). Novos
+agentes usam só `cursor`. **Saída**: `proximo_cursor` é `None` quando não há mais
+páginas; quando há, `next_actions` inclui `{tool, args:{cursor}, reason}`.
 
-Listas inerentemente completas (sem `limit` no backend): `listar_sobrestamentos`,
-`listar_interessados`, `listar_unidades_processo`, `listar_relacionamentos`,
-`listar_atividades` (paginação aqui é por truncamento do shaper — ver §1.3.2).
-Para essas, adicionar `total_itens: len(items)` mas sem `tem_proxima`
-(semântica: "isto é tudo").
+**Honestidade do `has_more`**: se o total é conhecido,
+`proximo_cursor` é exato e `tem_proxima_inferida=False`. Se só sabemos
+`len(items) >= limit`, emitimos o cursor mas com `tem_proxima_inferida=True` —
+o agente sabe que pode receber página vazia na borda.
+
+### 2.3 Tools afetadas
+
+Catálogos e blocos (12 tools): `sei_pesquisar_tipos_processo/documento`,
+`sei_pesquisar_hipoteses_legais`, `sei_pesquisar_marcadores`,
+`sei_pesquisar_unidades`, `sei_listar_modelos`, `sei_listar_assuntos`,
+`sei_pesquisar_contatos`, `sei_listar_textos_padrao`, `sei_listar_blocos`,
+`sei_listar_blocos_assinatura`, `sei_pesquisar_processos`. `sei_listar_processos`
+migra de `tem_proxima`/`pagina` para o envelope `Paginado` (mantendo os campos
+legados durante a transição).
+
+Listas inerentemente completas (`sobrestamentos`, `interessados`,
+`unidades_processo`, `relacionamentos`): `total_itens = len(items)`,
+`proximo_cursor = None` — semântica "isto é tudo".
 
 ---
 
-## 3. Eval harness de seleção de tool
+## 3. Erros recuperáveis com continuação
 
-### 3.1 Por que evals de seleção
+> Skill: *"Where there's a clear next step, return a structured, recoverable
+> error: `error_code`, `message`, `recoverable: true`, and the key part —
+> `suggested_next_tool` + `suggested_args`. Raise it at the origin; let the tool
+> layer serialize it; never leak internals."*
 
-A suíte de 219 testes verifica que o código faz o que está escrito — parsers,
-backends, gates. **Não** verifica que o agente *escolhe a tool certa* entre 124
-candidatas ao receber uma pergunta em linguagem natural. Com 124 tools, a
-probabilidade de ambiguidade é alta:
+A RFC 0004 já entregou `SEIError(ToolError)` tipado e propagado sem rewrap — a
+base está certa. Esta RFC **enriquece** as exceções com a continuação que a skill
+pede, levantada na origem (cliente/backend que conhece o contexto), não
+reconstruída na tool.
 
-| Pergunta | Tools candidatas | Confusão esperada |
-|---|---|---|
-| "Liste os processos da minha unidade" | `sei_listar_processos` vs `sei_resumo_processos` | resumo é mais rico, mas não lista |
-| "Busca o documento 2843449" | `sei_buscar_documento` vs `sei_ler_documento` | ler é direto; buscar resolve número SEI |
-| "Qual a árvore do processo X?" | `sei_arvore_processo` vs `sei_consultar_processo` | consultar inclui árvore truncada |
-| "Anote observação no processo X" | `sei_anotar_processo` vs `sei_registrar_andamento` | anotação é um post-it; andamento é log oficial |
-| "Liste meus acompanhamentos" | `sei_listar_meus_acompanhamentos` vs `sei_listar_acompanhamentos_processo` | sujeito diferente |
-| "Assine o bloco de assinatura" | `sei_assinar_bloco` vs `sei_assinar_documento` | contexto de bloco vs. doc individual |
-| "Adicione o processo X ao bloco" | `sei_incluir_processo_bloco` vs `sei_incluir_documento_bloco_assinatura` | bloco interno vs. bloco de assinatura |
-| "Ver tipos de processo disponíveis" | `sei_pesquisar_tipos_processo` + resource `sei://hipoteses-legais` | resource pode ser suficiente |
+### 3.1 Atributos de recuperação na base
 
-### 3.2 Estrutura proposta
+```python
+class SEIError(ToolError):
+    def __init__(self, message: str, *, error_code: str = "",
+                 recoverable: bool = False,
+                 suggested_next_tool: str | None = None,
+                 suggested_args: dict | None = None) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.recoverable = recoverable
+        self.suggested_next_tool = suggested_next_tool
+        self.suggested_args = suggested_args or {}
+```
+
+O serializador no tool layer (`_json` de erro / o handler do `ToolError`) inclui
+`error_code`, `recoverable`, `suggested_next_tool`, `suggested_args` no corpo
+quando presentes.
+
+### 3.2 Casos canônicos do SEI (mapeiam direto ao exemplo da skill)
+
+O exemplo da skill — *"Unit 'GPF' not found → try `search_units` with
+query='GPF'"* — é literal no SEI, onde tramitação/atribuição resolvem sigla→id:
+
+| Origem | Exceção enriquecida |
+|---|---|
+| `enviar_processo` com sigla de unidade inexistente | `SEINotFoundError(..., error_code="UNIDADE_NAO_ENCONTRADA", recoverable=True, suggested_next_tool="sei_pesquisar_unidades", suggested_args={"filtro": "<sigla>"})` |
+| `atribuir_processo` com nome de usuário ambíguo | `suggested_next_tool="sei_listar_usuarios_unidade"` |
+| `criar_processo` restrito sem hipótese legal | `suggested_next_tool="sei_pesquisar_hipoteses_legais"` |
+| documento recém-criado não indexado no Solr | `recoverable=True`, mensagem: use o `idDocumento` retornado pela criação |
+| sessão expirada (401/403) | `SEIAuthError(..., error_code="SESSAO_EXPIRADA", suggested_next_tool="sei_status")` |
+
+Terminais (sem próximo passo claro) seguem mensagem acionável simples, como hoje.
+`raise X from e` preserva a cadeia; `logger.exception(...)` registra o trace
+server-side; **nada de stack trace/SQL/segredo vaza ao agente**.
+
+---
+
+## 4. Eval harness — redesenho conforme a skill
+
+### 4.1 Por que o design anterior estava errado
+
+A versão anterior desta RFC propunha eval single-turn com `tool_choice:"any"`,
+checando só *qual* tool o modelo escolheria. A skill é explícita:
+
+> *"Single-tool questions don't test selection under pressure. Include questions
+> that (a) discriminate between confusable siblings and (b) require a sequence of
+> calls, not a single lookup."*
+
+E exige 10 perguntas **independentes, read-only, realistas, complexas
+(multi-call), verificáveis por comparação de string**, rodadas por um agente que
+só tem as nossas tools — quando falha, conserta-se a **description** ou a
+**response shape**, não a pergunta.
+
+### 4.2 Determinismo — cassetes HTTP
+
+Respostas verificáveis por string exigem dados estáveis. Não dependemos de SEI ao
+vivo em CI (muda, exige rede/credencial). Gravamos **cassetes VCR** (`vcr.py` via
+`pytest-recording`, suporte httpx) uma vez contra ANTAQ/SEI-RO; em CI o `httpx`
+do `SEIClient`/`SEIWebClient` replay offline. As respostas das 10 QA ficam
+**pinadas ao snapshot do cassete** — determinístico e sem rede.
+
+### 4.3 Estrutura
 
 ```
 evals/
-  golden.json          # casos de teste (query → tool esperada + params subset)
-  conftest.py          # fixtures: carrega golden.json, instancia runner
-  test_tool_selection.py  # pytest: chama runner, compara seleção
-  runner.py            # usa Anthropic SDK para chamar agente com tool list
-  README.md            # como rodar, como adicionar casos
+  cassettes/            # gravações VCR (um por cenário de processo-fixture)
+  golden.xml            # as 10 QA no formato <evaluation>
+  runner.py             # loop de agente (Anthropic SDK) sobre o servidor com cassete
+  conftest.py           # fixture: sobe o servidor MCP com VCR ativo
+  test_evals.py         # pytest -m eval: roda cada QA, compara string final
+  README.md
 ```
 
-#### `evals/golden.json` — estrutura de cada caso
+O `runner.py` roda um **loop de agente real** (não single-turn): expõe as 124
+tools ao modelo, deixa-o explorar e encadear chamadas, e compara a resposta final
+com o `<answer>` esperado (substring case-insensitive, normalizada). Modelo sob
+teste: um modelo capaz o suficiente para multi-call (representativo do uso real);
+Haiku é barato demais para a exploração que essas QA exigem. Marker `eval`,
+pulado sem `ANTHROPIC_API_KEY`.
 
-```json
-{
-  "id": "listar-processos-unidade",
-  "query": "Liste os processos abertos na minha unidade",
-  "expected_tool": "sei_listar_processos",
-  "expected_params": {},
-  "not_tools": ["sei_resumo_processos", "sei_pesquisar_processos"],
-  "tags": ["processos", "listagem", "inbox"],
-  "rationale": "sei_resumo_processos agrega; sei_pesquisar_processos busca por texto. A caixa de entrada é sei_listar_processos."
-}
+### 4.4 As 10 perguntas (`golden.xml`)
+
+Cobrem discriminação de irmãs confundíveis **e** sequências. Respostas pinadas ao
+cassete-fixture do processo `50300.001234/2025-00` (valores ilustrativos abaixo;
+fixados no momento da gravação).
+
+```xml
+<evaluation>
+  <qa_pair>
+    <question>Quantos documentos tem o processo 50300.001234/2025-00 e qual o tipo do documento mais recente?</question>
+    <answer>12 documentos; o mais recente é um Despacho</answer>
+    <!-- sequência: consultar/arvore → contar → tipo do último. Irmãs: arvore vs consultar -->
+  </qa_pair>
+  <qa_pair>
+    <question>No processo 50300.001234/2025-00, qual unidade gerou o Ofício mais recente?</question>
+    <answer>GPF</answer>
+    <!-- arvore → filtrar Ofício → sigla_unidade. Multi-call -->
+  </qa_pair>
+  <qa_pair>
+    <question>Quantos tipos de processo disponíveis têm "Fiscalização" no nome?</question>
+    <answer>4</answer>
+    <!-- pesquisar_tipos_processo(filtro) + paginação. Irmãs: tipos_processo vs tipos_documento -->
+  </qa_pair>
+  <qa_pair>
+    <question>O processo 50300.001234/2025-00 já esteve sobrestado? Qual o motivo do último sobrestamento?</question>
+    <answer>Sim; aguardando manifestação da área técnica</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Em quais unidades o processo 50300.001234/2025-00 está aberto atualmente?</question>
+    <answer>GPF e GRP</answer>
+    <!-- Irmãs: listar_unidades_processo vs pesquisar_unidades -->
+  </qa_pair>
+  <qa_pair>
+    <question>Qual a especificação e o nível de acesso do processo 50300.001234/2025-00?</question>
+    <answer>Fiscalização de rotina; Público</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Quantos eventos de envio (tramitação) constam no histórico do processo 50300.001234/2025-00?</question>
+    <answer>3</answer>
+    <!-- listar_atividades → filtrar envios → contar -->
+  </qa_pair>
+  <qa_pair>
+    <question>Na caixa da unidade atual, quantos processos são do tipo "Pessoal: Férias"?</question>
+    <answer>7</answer>
+    <!-- resumo_processos(agrupar_por=tipo). Irmãs: resumo vs listar_processos -->
+  </qa_pair>
+  <qa_pair>
+    <question>O documento SEI 2843449 pertence a qual processo?</question>
+    <answer>50300.001234/2025-00</answer>
+    <!-- Irmãs: buscar_documento vs ler_documento -->
+  </qa_pair>
+  <qa_pair>
+    <question>Liste os interessados do processo 50300.001234/2025-00.</question>
+    <answer>Departamento Jurídico; Diretoria de Fiscalização</answer>
+    <!-- Irmãs: listar_interessados vs listar_unidades_processo -->
+  </qa_pair>
+</evaluation>
 ```
 
-Campos:
-- `id`: slug único
-- `query`: pergunta em linguagem natural (em português, como um usuário real escreveria)
-- `expected_tool`: nome exato da tool que deve ser chamada
-- `expected_params`: subconjunto de parâmetros esperados (match parcial; vazio = só a tool importa)
-- `not_tools`: lista de tools que NÃO devem ser chamadas (para distinguir entre similares)
-- `tags`: domínio do caso (para filtragem)
-- `rationale`: justificativa do caso (documentação, não executada)
+### 4.5 Tier rápido opcional
 
-#### `evals/runner.py`
-
-```python
-"""Runner de evals de seleção de tool.
-
-Usa o Anthropic SDK com tool_choice="any" para forçar o modelo a
-selecionar uma tool dado o schema completo do servidor + a query.
-Compara a tool selecionada contra o expected_tool do caso.
-"""
-import anthropic
-import json
-from pathlib import Path
-
-from todos.mcp_app import mcp  # acessa o registro de tools
-
-_MODEL = "claude-haiku-4-5-20251001"  # barato para evals
-
-def _tools_schema() -> list[dict]:
-    """Exporta o schema de todas as tools registradas no servidor."""
-    # FastMCP expõe as tools via mcp._tool_manager ou similar
-    ...
-
-def run_case(case: dict) -> dict:
-    """Executa um caso de eval. Retorna {passed, selected_tool, error}."""
-    client = anthropic.Anthropic()
-    response = client.messages.create(
-        model=_MODEL,
-        max_tokens=256,
-        tools=_tools_schema(),
-        tool_choice={"type": "any"},
-        messages=[{"role": "user", "content": case["query"]}],
-    )
-    selected = response.content[0].name if response.stop_reason == "tool_use" else None
-    passed = selected == case["expected_tool"]
-    if not_tools := case.get("not_tools", []):
-        passed = passed and selected not in not_tools
-    return {"passed": passed, "selected": selected, "expected": case["expected_tool"]}
-```
-
-**Nota**: o runner usa `claude-haiku-4-5-20251001` (barato) para manter o
-custo de evals em ~$0.01 por caso. A suíte completa de 20 casos custa ~$0.20
-por rodada, viável em CI com `pytest -m eval --api-key=$ANTHROPIC_API_KEY`.
-
-#### `evals/test_tool_selection.py`
-
-```python
-import pytest
-import json
-from pathlib import Path
-
-GOLDEN = json.loads((Path(__file__).parent / "golden.json").read_text())
-
-@pytest.mark.eval
-@pytest.mark.parametrize("case", GOLDEN, ids=[c["id"] for c in GOLDEN])
-def test_tool_selection(case):
-    from evals.runner import run_case
-    result = run_case(case)
-    assert result["passed"], (
-        f"Expected {result['expected']!r}, got {result['selected']!r}"
-    )
-```
-
-O marker `eval` é declarado em `pyproject.toml`:
-```toml
-[tool.pytest.ini_options]
-markers = ["eval: testes de seleção de tool via API Anthropic (requerem ANTHROPIC_API_KEY)"]
-```
-
-Sem `ANTHROPIC_API_KEY`, os testes são pulados automaticamente via fixture.
-
-### 3.3 Conjunto inicial de 20 casos (golden.json)
-
-Cobrindo as confusões de maior risco:
-
-| id | query | expected_tool | not_tools |
-|---|---|---|---|
-| listar-processos-unidade | "Liste os processos abertos na minha unidade" | `sei_listar_processos` | `sei_resumo_processos` |
-| resumo-por-tipo | "Quantos processos de cada tipo tem na minha caixa?" | `sei_resumo_processos` | `sei_listar_processos` |
-| ler-documento-numero | "Leia o documento SEI nº 2843449" | `sei_ler_documento` | `sei_buscar_documento` |
-| buscar-sem-ler | "Existe o documento SEI 2843449?" | `sei_buscar_documento` | `sei_ler_documento` |
-| arvore-completa | "Quero ver todos os documentos do processo 50300.000123/2025-00" | `sei_arvore_processo` | `sei_consultar_processo` |
-| consultar-processo | "Mostre os dados do processo 50300.000123/2025-00" | `sei_consultar_processo` | `sei_arvore_processo` |
-| registrar-andamento | "Registre que analisamos e aprovamos o pedido no processo X" | `sei_registrar_andamento` | `sei_anotar_processo` |
-| anotar-processo | "Coloque uma anotação rápida no processo X" | `sei_anotar_processo` | `sei_registrar_andamento` |
-| meus-acompanhamentos | "Quais processos estou acompanhando?" | `sei_listar_meus_acompanhamentos` | `sei_listar_acompanhamentos_processo` |
-| acompanhamentos-processo | "Quem está acompanhando o processo X?" | `sei_listar_acompanhamentos_processo` | `sei_listar_meus_acompanhamentos` |
-| criar-documento-interno | "Crie um despacho no processo X" | `sei_criar_documento` | `sei_criar_documento_externo` |
-| criar-documento-externo | "Anexe o PDF /tmp/laudo.pdf ao processo X" | `sei_criar_documento_externo` | `sei_criar_documento` |
-| assinar-documento | "Assine o documento 12345 do processo X" | `sei_assinar_documento` | `sei_assinar_bloco` |
-| assinar-bloco | "Assine todos os documentos do bloco de assinatura 99" | `sei_assinar_bloco` | `sei_assinar_documento` |
-| incluir-bloco-assinatura | "Adicione o documento 12345 ao bloco de assinatura 99" | `sei_incluir_documento_bloco_assinatura` | `sei_incluir_processo_bloco` |
-| incluir-bloco-interno | "Adicione o processo X ao bloco interno de revisão" | `sei_incluir_processo_bloco` | `sei_incluir_documento_bloco_assinatura` |
-| pesquisar-tipos | "Quais tipos de processo posso abrir?" | `sei_pesquisar_tipos_processo` | `sei_pesquisar_tipos_documento` |
-| trocar-unidade | "Mude minha unidade ativa para GPF" | `sei_trocar_unidade` | `sei_pesquisar_unidades` |
-| enviar-processo | "Encaminhe o processo X para a unidade GPF" | `sei_enviar_processo` | `sei_atribuir_processo` |
-| atribuir-processo | "Atribua o processo X para o servidor João" | `sei_atribuir_processo` | `sei_enviar_processo` |
-
-### 3.4 CI
-
-Os evals ficam em job separado no GitHub Actions, disparado manualmente
-(`workflow_dispatch`) ou em PRs que tocam `tools/`, `mcp_app.py` ou
-`src/todos/server.py`. Rodam em ambiente com `ANTHROPIC_API_KEY` em secret.
-
-```yaml
-# .github/workflows/evals.yml
-name: Evals (tool selection)
-on:
-  workflow_dispatch:
-  pull_request:
-    paths:
-      - 'src/todos/tools/**'
-      - 'src/todos/mcp_app.py'
-      - 'src/todos/server.py'
-      - 'evals/**'
-jobs:
-  evals:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
-      - run: uv sync
-      - run: uv run pytest evals/ -m eval -v
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-```
+Mantemos, como pré-filtro barato e determinístico, um tier T1 de smoke de
+seleção single-turn (a matriz de 20 casos do design anterior, via `tool_choice`),
+que pega misrouting grosseiro em segundos. O tier T2 (as 10 QA acima) é o
+primário e o que a skill exige. CI roda T1 sempre; T2 on-demand
+(`workflow_dispatch` + PRs que tocam `tools/`/`mcp_app.py`/`server.py`).
 
 ---
 
-## 4. Drift de contagem de tools
+## 5. Surface grande — descoberta progressiva
 
-### 4.1 Estado atual
+> Skill: *"Past a few dozen tools, loading every definition up front burns
+> context and degrades selection. Group by domain; short catalog description +
+> fuller candidate description; consider a capability-search tool; lean on
+> server `instructions`."*
 
-O arquivo `mcp_app.py` (instructions string) e o CLAUDE.md dizem "121 tools".
-O comentário em `server.py` (linha 68) diz "115 tools" nos módulos + 6 em
-`server.py` = 121. A contagem real por `@mcp.tool`:
+124 tools é "grande" pelo critério da skill. O que já temos e o que falta:
 
-| Arquivo | Registros |
-|---|---|
-| `tools/processos.py` | 27 |
-| `tools/documentos.py` | 14 |
-| `tools/blocos_assinatura.py` | 14 |
-| `tools/catalogos.py` | 12 |
-| `tools/unidades.py` | 13 |
-| `tools/marcadores.py` | 9 |
-| `tools/acompanhamento.py` | 8 |
-| `tools/blocos_internos.py` | 10 |
-| `tools/assinatura.py` | 7 |
-| `tools/credenciamento.py` | 4 |
-| `server.py` | 6 |
-| **Total** | **124** |
+| Recomendação da skill | Estado | Ação |
+|---|---|---|
+| Agrupar por domínio + prefixo | Parcial: tudo `sei_*` (prefixo único, não por domínio `process_*`/`sign_*`) | Manter `sei_*` — renomear 124 tools é breaking; o agrupamento por domínio existe nos **módulos** (`tools/processos.py`…) e nas recipes do `instructions`. Não renomear agora. |
+| `instructions` com modelo de domínio + recipes | **Forte** — bloco extenso com entidades, fluxos, formatação | Manter; é o que mais barateia seleção. |
+| Descrição curta (catálogo) + longa (candidata) | Ausente — descrições são uniformemente longas | **Adotar** quando o cliente suportar descrição em dois níveis; por ora, podar as descrições mais infladas para o essencial (a skill mediu: over-augmentar sobe sucesso ~6pp mas infla passos ~67%). |
+| Capability-search tool | Ausente | **Avaliar** `sei_buscar_ferramentas(intencao: str)` que retorna as N tools mais relevantes por tag de domínio — só se evals (T1) mostrarem degradação de seleção com a surface cheia. Não construir especulativamente. |
 
-Drift de 3 tools — provavelmente ferramentas adicionadas à RFC 0006 sem
-atualizar a docstring.
+Decisão: a alavanca de maior retorno aqui é **podar descrições infladas** (§5
+backfill) e **manter o `instructions` afiado**. Renomeação por domínio e
+capability-search ficam condicionadas a sinal de eval, não feitas às cegas.
 
-### 4.2 Proposta
+---
 
-1. Atualizar `mcp_app.py` `instructions`: "124 tools" → manter em sync com o
-   total real.
-2. Atualizar comentário em `server.py` linha 68.
-3. Atualizar CLAUDE.md.
-4. Adicionar teste de regressão em `tests/test_tool_routing.py`:
+## 6. Drift de contagem de tools
+
+Código tem **124** `@mcp.tool` (processos 27, documentos 14, blocos_assinatura
+14, unidades 13, catálogos 12, blocos_internos 10, marcadores 9, acompanhamento
+8, assinatura 7, credenciamento 4, server.py 6). Docs dizem "121". Corrigir em
+`mcp_app.py` (instructions), `server.py` (comentário), `CLAUDE.md`, e travar com
+teste de regressão:
 
 ```python
 def test_tool_count_matches_documentation():
-    """Garante que a contagem documentada bate com o registro real."""
-    from todos.server import mcp  # dispara registro de todas as tools
+    from todos.server import mcp
     registered = len(mcp._tool_manager.tools)
     assert registered == 124, (
-        f"Contagem de tools diverge: {registered} registradas, 124 documentadas. "
-        "Atualize o número em mcp_app.py instructions, server.py e CLAUDE.md."
+        f"{registered} tools registradas, 124 documentadas. "
+        "Atualize mcp_app.py, server.py e CLAUDE.md."
     )
 ```
 
-Quando uma nova tool for adicionada, o teste falha e força atualização da
-documentação — sem drift silencioso.
+---
+
+## 7. Plano de implantação
+
+### Fase 0 — Fundação de schemas (habilita o resto)
+1. Criar `src/todos/responses.py` com `NextAction`, `DocumentoResumo`,
+   `ListaDocumentos`, `RespostaEscrita`, `Paginado`, `ProcessoDetalhe`.
+2. Adicionar `_encode_cursor`/`_decode_cursor` e serializador de erro enriquecido
+   em `mcp_app.py`.
+3. Corrigir contagem (124) em 3 lugares + teste de regressão (§6).
+
+**Conclusão**: `ruff` limpo, suíte verde, `responses.py` importável.
+
+### Fase 1 — Paginação por cursor (aditivo, sem quebrar)
+1. Aplicar envelope `Paginado` + `cursor` nas 12 tools de catálogo/blocos (§2.3).
+2. `tem_proxima_inferida` honesto onde a inferência é `len>=limit`.
+3. Manter campos legados (`pagina`, `tem_proxima`) durante transição.
+4. Documentar `cursor`/`proximo_cursor` nas descriptions afetadas.
+
+**Dependência**: Fase 0. **Conclusão**: toda tool paginável emite
+`proximo_cursor`; nenhum `has_more` inferido sem marca.
+
+### Fase 2 — Shaping de leitura pesada (paralela à Fase 3)
+1. `_shape_lista_documentos` → `ListaDocumentos` em `arvore_processo`,
+   `listar_documentos`.
+2. `_shape_atividades` + parâmetro `ordem` em `listar_atividades`.
+3. `_shape_consultar_processo` → modelo `ProcessoDetalhe`; `next_actions` no lugar
+   de `_documentos_truncados`.
+4. `sei_pesquisar_processos` → poda Solr + `Paginado`.
+5. `include_raw: bool = False` nas 5 tools de leitura pesada (§1.5).
+
+**Dependência**: Fases 0–1. **Conclusão**: nenhuma leitura pesada retorna lista
+raw sem envelope; truncamento sempre com `next_actions`.
+
+### Fase 3 — Shaping de escrita (paralela à Fase 2)
+1. `_shape_resposta_escrita` → `RespostaEscrita` nas 5 tools de criação/alteração.
+2. Teste mock por tool: id+protocolo do recurso criado nunca se perdem.
+
+**Dependência**: Fase 0. Arquivos distintos da Fase 2 (sem conflito de merge).
+
+### Fase 4 — Erros recuperáveis
+1. Enriquecer `SEIError` com `error_code`/`recoverable`/`suggested_*` (§3.1).
+2. Levantar na origem os 5 casos canônicos (§3.2).
+3. Serializar os campos no tool layer; teste: nenhum stack trace/segredo no corpo.
+
+**Dependência**: Fase 0.
+
+### Fase 5 — Evals
+1. Gravar cassetes VCR contra ANTAQ/SEI-RO para o processo-fixture.
+2. `evals/golden.xml` (10 QA, §4.4), `runner.py` (loop de agente), `conftest.py`,
+   `test_evals.py`, marker `eval`, workflow CI (T1 sempre, T2 on-demand).
+3. Rodar; onde a taxa < 90%, corrigir **description ou response shape**, nunca a
+   pergunta.
+
+**Dependência**: Fases 1–4 verdes (shaping/erros afetam o que o agente vê).
+
+### Sequência
+```
+Fase 0 ─► Fase 1 ─┬─► Fase 2 ──┐
+                  ├─► Fase 3 ──┤
+                  └─► Fase 4 ──┴─► Fase 5
+```
 
 ---
 
-## 5. Plano de implantação
-
-### Fase 1 — Drift e contrato de paginação (baixo risco, sem mudança de comportamento)
-
-**Objetivo**: corrigir a contagem de tools e fechar o contrato de paginação
-nos catálogos. Sem mudança de campos, só adição de campos novos.
-
-**Tarefas**:
-1. Adicionar `_envelope_listagem` em `mcp_app.py`.
-2. Aplicar `_envelope_listagem` nas 11 tools de catálogos e blocos (§2.4).
-3. Adicionar `total_itens: len(items)` nas 5 listas inerentemente completas
-   (§2.5).
-4. Atualizar contagem (124) em 3 lugares + teste de regressão.
-5. Atualizar descriptions das tools modificadas para documentar os campos de
-   envelope.
-
-**Critério de conclusão**: `ruff check .` limpo; `uv run pytest` verde;
-todas as tools de listagem documentam `tem_proxima` na descrição.
-
-**Estimativa**: 1 sessão de código, sem dependências externas.
-
-### Fase 2 — Response shaping das tools de leitura pesada
-
-**Objetivo**: `sei_arvore_processo`, `sei_listar_documentos`,
-`sei_listar_atividades`, `sei_pesquisar_processos` devolvem payloads shaped.
-
-**Tarefas**:
-1. Implementar `_shape_lista_documentos` em `tools/processos.py` e aplicar
-   em `sei_arvore_processo` e `sei_listar_documentos`.
-2. Implementar `_shape_atividades` e aplicar em `sei_listar_atividades`.
-   Adicionar parâmetro `ordem: str = "desc"` na tool.
-3. Implementar `_shape_pesquisa_processos` em `server.py` e aplicar em
-   `sei_pesquisar_processos`. Integrar `_envelope_listagem` (Fase 1).
-4. Atualizar descriptions das 4 tools com os campos shaped e o comportamento
-   de truncamento.
-5. Atualizar testes em `test_tool_routing.py` para verificar presença de
-   `total_documentos`/`tem_proxima`/`_truncado` nos shapes.
-
-**Critério de conclusão**: suíte verde; nenhuma das 4 tools retorna lista raw
-sem envelope; truncamento documentado nas descriptions.
-
-**Dependência**: Fase 1 (usa `_envelope_listagem`).
-
-### Fase 3 — Response shaping das tools de escrita
-
-**Objetivo**: tools de criação/alteração devolvem só id+protocolo+mensagem.
-
-**Tarefas**:
-1. Implementar `_shape_resposta_escrita` em `mcp_app.py`.
-2. Aplicar em: `sei_criar_processo`, `sei_alterar_processo`,
-   `sei_criar_documento`, `sei_criar_documento_externo`,
-   `sei_alterar_documento_interno`.
-3. Verificar que id e protocolo do recurso criado **não** se perdem no shaping
-   (teste unitário mock para cada tool).
-4. Atualizar descriptions: "Retorna `{id_procedimento, protocolo, status}`".
-
-**Critério de conclusão**: nenhuma tool de escrita retorna payload REST bruto;
-testes unitários verificam que id+protocolo chegam ao agente.
-
-**Dependência**: nenhuma (paralela às Fases 1–2).
-
-### Fase 4 — Eval harness
-
-**Objetivo**: 20 casos golden rodando em CI.
-
-**Tarefas**:
-1. Criar `evals/` com `golden.json` (20 casos da §3.3), `runner.py`,
-   `conftest.py`, `test_tool_selection.py`.
-2. Implementar `_tools_schema()` em `runner.py` — exporta o schema FastMCP.
-3. Adicionar marker `eval` em `pyproject.toml`.
-4. Criar `.github/workflows/evals.yml`.
-5. Rodar localmente contra `ANTHROPIC_API_KEY` e fixar quaisquer casos
-   com taxa de aprovação < 90% (ajustar a description da tool afetada, não o
-   caso).
-
-**Critério de conclusão**: 20/20 casos passando em 3 rodadas consecutivas;
-workflow de CI configurado.
-
-**Dependência**: Fases 1–3 devem estar concluídas antes de rodar evals
-definitivos (shaping afeta a description e a usabilidade que o modelo vê).
-
-### Sequência recomendada
-
-```
-Fase 1 (paginação + drift)
-    │
-    ├── Fase 2 (shaping leitura)   ── paralela ──► Fase 3 (shaping escrita)
-    │                                                      │
-    └───────────────────────────────────────────── Fase 4 (evals)
-```
-
-Fases 2 e 3 podem ser desenvolvidas em paralelo (arquivos distintos, sem
-conflito de merge). Fase 4 começa depois que 1, 2 e 3 estão verdes.
-
----
-
-## 6. Critérios de conclusão globais
+## 8. Critérios de conclusão
 
 | Critério | Verificação |
 |---|---|
-| Toda tool de listagem paginável tem `tem_proxima` | `grep -r "tem_proxima\|has_more"` cobre todas as `list/search` tools |
-| Toda tool de listagem completa tem `total_itens` | idem |
-| `sei_arvore_processo` e `sei_listar_documentos` não retornam mais de 50 items sem sinal | teste unitário com mock de lista > 50 |
-| `sei_listar_atividades` não retorna mais de 50 atividades sem sinal | idem |
-| `sei_criar_processo` / `sei_criar_documento` não vazam payload REST bruto | teste unitário mock |
-| Contagem de tools documentada bate com a real | `test_tool_count_matches_documentation` |
-| 20 evals de seleção passando | CI green em `evals.yml` |
-| `ruff check . && ruff format --check .` limpos | CI pre-existing |
-| Suíte de 219+ testes verde | CI pre-existing |
+| Respostas shaped são modelos Pydantic, não dicts | grep por `_shape_*` retorna modelos de `responses.py` |
+| Toda paginável emite `proximo_cursor`; inferência marcada | teste de envelope por tool |
+| Leitura pesada trunca em ≤50 com `next_actions` | teste mock de lista > 50 |
+| `include_raw=True` devolve payload completo | teste por tool |
+| Escrita não vaza payload REST; id+protocolo preservados | teste mock por tool |
+| Erros recuperáveis carregam `suggested_next_tool`/`args`; nada vaza | teste de serialização de erro |
+| 10 QA multi-call passam sobre cassetes | CI `test_evals.py` |
+| Contagem documentada == real (124) | `test_tool_count_matches_documentation` |
+| `ruff check . && ruff format --check .` limpos | CI |
+| Suíte 219+ verde | CI |
 
 ---
 
-## 7. Riscos e mitigações
+## 9. Riscos
 
-| Risco | Probabilidade | Mitigação |
+| Risco | Prob. | Mitigação |
 |---|---|---|
-| Shaper poda campo que alguma tool downstream precisa | Médio | Testes unitários mock por tool; nunca podar `id*` ou `protocolo*` |
-| `tem_proxima` inferido errado (`len >= limit`) causa falso positivo | Baixo | Só ocorre na última página exata; agente pede página N+1 e recebe vazio — comportamento tolerável |
-| Eval runner flaky (LLM não-determinístico) | Médio | Rodar 3× e contar maioria; parametrizar `temperature=0`; casos não-determinísticos → ajustar description |
-| `_tools_schema()` quebra com FastMCP update | Baixo | Travar versão `mcp>=1.12,<2` e adicionar teste de importação |
-| Fase 3 quebra integração de algum cliente externo que lia campos REST | Baixo | Shaping é **aditivo** nas tools de escrita (adiciona `status`/`acao`); campos id/protocolo são preservados |
-| Tool count diverge novamente | Garantido sem teste | Teste de regressão (§4.2) falha no CI antes de mergear |
+| Shaper poda campo que downstream precisa | Médio | Testes mock por tool; nunca podar `id*`/`protocolo*` |
+| Cursor opaco confunde agentes que esperavam `pagina` | Baixo | Campos legados mantidos na transição; `cursor` tem precedência só quando passado |
+| `tem_proxima_inferida` → página vazia na borda | Baixo | Flag avisa o agente; receber vazio é tolerável e documentado |
+| Eval flaky (LLM não-determinístico) sobre cassete | Médio | `temperature=0`; rodar 3×, maioria; cassete fixa o I/O — variância só do modelo |
+| Cassetes desatualizam vs SEI real | Médio | Job mensal de regravação; cassetes versionados; divergência vira issue |
+| Pydantic de resposta quebra "no future annotations" | Baixo | Modelos isolados em `responses.py`; não afetam type hints de entrada das tools |
+| Renomear/contagem diverge de novo | Garantido sem teste | `test_tool_count_matches_documentation` falha no CI |
 
 ---
 
-## 8. Fora de escopo desta RFC
+## 10. Smell test (auto-revisão da skill)
 
-- **`outputSchema` / structured content**: exige mudança no FastMCP (suporte
-  experimental); adiado para RFC 0008 quando a API estabilizar.
-- **Consolidação de tools**: reduzir a surface de 124 tools por agrupamento
-  — decisão de produto, não de qualidade de resposta.
-- **Paginação em `sei_arvore_processo`**: o scraper web busca todos os
-  documentos de uma vez; paginar exigiria mudança no backend web. Adiado.
-- **Localização de mensagens de erro**: os `_truncado` e `_documentos_truncados`
-  já existem em português — padrão a manter.
+| Smell | Veredito |
+|---|---|
+| Tools `get`/`list`/`query` sem intenção | ✅ Limpo — tudo `sei_<verbo>_<objeto>` |
+| Espelho 1:1 do REST (Adapter) | ✅ Facade — composite, web backend, orquestração, resources |
+| Retorna upstream sem shape | ⚠️→✅ após Fases 2–3 |
+| List tool sem `limit` | ⚠️→✅ após Fase 1 (cursor + limit) |
+| Trunca/erra sem dizer como continuar | ⚠️→✅ após Fases 2 e 4 (`next_actions`/`suggested_*`) |
+| Descrições "gets data" ou infladas | ⚠️ parcial — podar infladas (§5) |
+| IDs sem nomes | ⚠️→✅ após §1.2 |
+| Write/sign/delete sem confirmação | ✅ gate `elicit` que falha fechado (RFC 0006) |
+| Throw em input ruim em vez de erro acionável | ✅ `SEIError(ToolError)`, +recuperável na Fase 4 |
+| Log em stdout sob stdio | ✅ stderr |
+| Sem evals | ⚠️→✅ após Fase 5 |
+
+Pré-RFC: 4 smells verdadeiros (≥3 = "agente vai sofrer"). Pós-RFC: 0 bloqueantes,
+1 contínuo (poda de descrições, §5).
+
+---
+
+## 11. Fora de escopo
+
+- **`structuredContent`/`outputSchema` ativo**: a Fase 0 deixa os modelos prontos
+  (adoção vira fiação), mas ligar depende de suporte estável do cliente — RFC 0008.
+- **Renomeação por domínio (`process_*`/`sign_*`)**: breaking em 124 tools;
+  condicionada a sinal de eval (§5).
+- **Capability-search tool**: só se T1 mostrar degradação de seleção (§5).
+- **Consolidação de tools (reduzir a surface)**: decisão de produto.
+- **Paginação interna em `arvore_processo`**: o scraper web busca tudo de uma vez;
+  paginar exige mudança no backend web.
