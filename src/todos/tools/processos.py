@@ -497,6 +497,15 @@ async def sei_criar_processo(
 
     Retorna o IdProcedimento e ProtocoloFormatado do processo criado.
     """
+    if nivel_acesso in ("1", "2") and not hipotese_legal:
+        msg = f"nivel_acesso={nivel_acesso} requer hipotese_legal. Informe o ID da hipótese legal."
+        raise SEIValidationError(
+            msg,
+            error_code="HIPOTESE_LEGAL_OBRIGATORIA",
+            recoverable=True,
+            suggested_next_tool="sei_pesquisar_hipoteses_legais",
+            suggested_args={"filtro": ""},
+        )
     backend = await _backend(ctx)
     result = await backend.criar_processo(
         NovoProcesso(

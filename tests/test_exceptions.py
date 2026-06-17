@@ -57,3 +57,71 @@ def test_context_and_message_in_text() -> None:
 def test_empty_message_uses_context_only() -> None:
     erro = erro_do_sei("Erro ao consultar", None)
     assert str(erro) == "Erro ao consultar"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — recoverable errors with continuation
+# ---------------------------------------------------------------------------
+
+
+def test_sei_error_without_suggestion_renders_plain_message() -> None:
+    err = SEIError("algo falhou")
+    assert str(err) == "algo falhou"
+    assert err.error_code == ""
+    assert err.recoverable is False
+    assert err.suggested_next_tool is None
+    assert err.suggested_args == {}
+
+
+def test_sei_error_with_suggestion_embeds_continuation_in_message() -> None:
+    err = SEIValidationError(
+        "Unidade 'GPF' não encontrada.",
+        error_code="UNIDADE_NAO_ENCONTRADA",
+        recoverable=True,
+        suggested_next_tool="sei_pesquisar_unidades",
+        suggested_args={"filtro": "GPF"},
+    )
+    rendered = str(err)
+    assert "Unidade 'GPF' não encontrada." in rendered
+    assert "sei_pesquisar_unidades" in rendered
+    assert '"filtro"' in rendered
+    assert '"GPF"' in rendered
+    assert err.error_code == "UNIDADE_NAO_ENCONTRADA"
+    assert err.recoverable is True
+
+
+def test_sei_error_structured_attrs_preserved_on_object() -> None:
+    err = SEIError(
+        "sessão expirada",
+        error_code="SESSAO_EXPIRADA",
+        recoverable=False,
+        suggested_next_tool="sei_status",
+        suggested_args={},
+    )
+    assert err.error_code == "SESSAO_EXPIRADA"
+    assert err.recoverable is False
+    assert err.suggested_next_tool == "sei_status"
+    assert err.suggested_args == {}
+
+
+def test_sei_error_message_contains_no_stack_trace() -> None:
+    err = SEIError(
+        "Documento '123' não encontrado.",
+        error_code="DOCUMENTO_NAO_INDEXADO",
+        recoverable=True,
+        suggested_next_tool="sei_arvore_processo",
+        suggested_args={"protocolo_formatado": ""},
+    )
+    rendered = str(err)
+    assert "Traceback" not in rendered
+    assert "File " not in rendered
+    assert "sei_arvore_processo" in rendered
+
+
+def test_sei_error_empty_args_renders_empty_object() -> None:
+    err = SEIError(
+        "falha",
+        suggested_next_tool="sei_status",
+        suggested_args={},
+    )
+    assert "{}" in str(err)

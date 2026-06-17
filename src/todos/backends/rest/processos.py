@@ -127,7 +127,13 @@ class ProcessosRest(_RestMixin):
                     f"Unidade '{destino}' não encontrada. Candidatos: {candidatos}. "
                     "Use sei_pesquisar_unidades ou informe o ID numérico diretamente."
                 )
-                raise SEIValidationError(msg)
+                raise SEIValidationError(
+                    msg,
+                    error_code="UNIDADE_NAO_ENCONTRADA",
+                    recoverable=True,
+                    suggested_next_tool="sei_pesquisar_unidades",
+                    suggested_args={"filtro": destino},
+                )
             ids_resolvidos.append(str(exact.get("id", "")))
         resolved = EnvioProcesso(
             unidades_destino=",".join(ids_resolvidos),
@@ -157,8 +163,14 @@ class ProcessosRest(_RestMixin):
         result = await self._rest.listar_usuarios(filtro=usuario)
         candidatos = result.get("usuarios", [])
         if not candidatos:
-            msg = f"Nenhum usuário encontrado com '{usuario}'. Use sei_listar_usuarios."
-            raise SEINotFoundError(msg)
+            msg = f"Nenhum usuário encontrado com '{usuario}'. Use sei_pesquisar_usuarios."
+            raise SEINotFoundError(
+                msg,
+                error_code="USUARIO_NAO_ENCONTRADO",
+                recoverable=True,
+                suggested_next_tool="sei_pesquisar_usuarios",
+                suggested_args={"filtro": usuario},
+            )
         erros: list[str] = []
         for u in candidatos:
             id_usuario = u.get("id_usuario")

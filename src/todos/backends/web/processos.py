@@ -220,14 +220,26 @@ class ProcessosWeb(_WebMixin):
                 id_usuario = parciais[0]["value"]
             elif not parciais:
                 msg = f"Usuário '{usuario}' não encontrado no form de atribuição."
-                raise SEIValidationError(msg)
+                raise SEIValidationError(
+                    msg,
+                    error_code="USUARIO_NAO_ENCONTRADO",
+                    recoverable=True,
+                    suggested_next_tool="sei_listar_usuarios",
+                    suggested_args={},
+                )
             else:
                 candidatos = ", ".join(o.get("texto", "") for o in parciais)
                 msg = (
                     f"Usuário '{usuario}' é ambíguo ({len(parciais)} candidatos: "
                     f"{candidatos}). Informe o login/id exato."
                 )
-                raise SEIValidationError(msg)
+                raise SEIValidationError(
+                    msg,
+                    error_code="USUARIO_AMBIGUO",
+                    recoverable=True,
+                    suggested_next_tool="sei_listar_usuarios",
+                    suggested_args={},
+                )
         return await self._web.executar_acao_processo(
             processo, "procedimento_atribuicao_cadastrar", {"selAtribuicao": id_usuario}
         )

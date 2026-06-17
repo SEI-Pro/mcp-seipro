@@ -652,10 +652,15 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
 
     msg = (
         f"Documento '{referencia}' não encontrado via pesquisa. "
-        "Se é um documento recém-criado, o Solr pode não ter indexado ainda. "
-        "Use sei_arvore_processo com o protocolo do processo para encontrá-lo."
+        "Se é um documento recém-criado, o Solr pode não ter indexado ainda."
     )
-    raise SEINotFoundError(msg)
+    raise SEINotFoundError(
+        msg,
+        error_code="DOCUMENTO_NAO_INDEXADO",
+        recoverable=True,
+        suggested_next_tool="sei_arvore_processo",
+        suggested_args={"protocolo_formatado": ""},
+    )
 
 
 def _json(data: object) -> str:
