@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -624,7 +623,7 @@ def test_tool_routes_to_expected_op(
         assert sentinel in forwarded, (
             f"{tool_name} dropped argument {sentinel!r} (forwarded {forwarded})"
         )
-    assert isinstance(result, str)
+    assert result is not None
 
 
 def test_consultar_processo_routes_and_keeps_public_payload(
@@ -846,11 +845,10 @@ def test_criar_processo_shaped_output_preserves_ids(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
     result = asyncio.run(processos.sei_criar_processo("123", ctx=None))
-    data = json.loads(result)
-    assert data["acao"] == "criar_processo"
-    assert data["status"] == "ok"
-    assert data["id_procedimento"] == "99"
-    assert data["protocolo"] == "50300.000001/2026-01"
+    assert result.acao == "criar_processo"
+    assert result.status == "ok"
+    assert result.id_procedimento == "99"
+    assert result.protocolo == "50300.000001/2026-01"
 
 
 def test_alterar_processo_shaped_output(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -859,9 +857,8 @@ def test_alterar_processo_shaped_output(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
     result = asyncio.run(processos.sei_alterar_processo("50300.000002/2026-02", ctx=None))
-    data = json.loads(result)
-    assert data["acao"] == "alterar_processo"
-    assert data["protocolo"] == "50300.000002/2026-02"
+    assert result.acao == "alterar_processo"
+    assert result.protocolo == "50300.000002/2026-02"
 
 
 def test_criar_documento_shaped_output_preserves_doc_ids(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -871,10 +868,9 @@ def test_criar_documento_shaped_output_preserves_doc_ids(monkeypatch: pytest.Mon
     monkeypatch.setattr(documentos, "_has_rest", aconst(True))
 
     result = asyncio.run(documentos.sei_criar_documento("PF", id_serie="S", ctx=None))
-    data = json.loads(result)
-    assert data["acao"] == "criar_documento"
-    assert data["id_documento"] == "D42"
-    assert data["numero_sei"] == "2843449"
+    assert result.acao == "criar_documento"
+    assert result.id_documento == "D42"
+    assert result.numero_sei == "2843449"
 
 
 def test_incluir_documento_externo_shaped_output(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -891,7 +887,6 @@ def test_incluir_documento_externo_shaped_output(monkeypatch: pytest.MonkeyPatch
             ctx=None,
         )
     )
-    data = json.loads(result)
-    assert data["acao"] == "incluir_documento_externo"
-    assert data["id_documento"] == "D77"
-    assert data["numero_sei"] == "2877777"
+    assert result.acao == "incluir_documento_externo"
+    assert result.id_documento == "D77"
+    assert result.numero_sei == "2877777"

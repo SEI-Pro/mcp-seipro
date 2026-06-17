@@ -56,6 +56,7 @@ from todos.mcp_app import (
     _shape_resposta_escrita,
     mcp,
 )
+from todos.responses import RespostaEscrita
 from todos.sei_styles import (
     SEI_STYLES,
     STYLE_SHORTCUTS,
@@ -287,7 +288,7 @@ async def sei_criar_documento(
     hipotese_legal: str = "",
     id_unidade: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> RespostaEscrita:
     """Cria um novo documento interno (nativo) em um processo SEI.
 
     Parâmetros:
@@ -317,7 +318,7 @@ async def sei_criar_documento(
         id_unidade=id_unidade,
     )
     result = await (await _backend(ctx)).criar_documento_interno(processo, dados)
-    return _json(_shape_resposta_escrita(result, "criar_documento"))
+    return _shape_resposta_escrita(result, "criar_documento")
 
 
 @mcp.tool(annotations=_READ)
@@ -508,7 +509,7 @@ async def sei_criar_documento_externo(
     descricao: str = "",
     nivel_acesso: str = "0",
     ctx: Context | None = None,
-) -> str:
+) -> RespostaEscrita:
     """Cria um documento externo (upload de arquivo) em um processo SEI.
 
     - processo: protocolo formatado ou IdProcedimento
@@ -524,7 +525,7 @@ async def sei_criar_documento_externo(
         nivel_acesso=nivel_acesso,
     )
     result = await (await _backend(ctx)).criar_documento_externo(processo, dados)
-    return _json(_shape_resposta_escrita(result, "criar_documento_externo"))
+    return _shape_resposta_escrita(result, "criar_documento_externo")
 
 
 @mcp.tool(annotations=_READ)
@@ -608,7 +609,7 @@ async def sei_alterar_documento_externo(
     hipotese_legal: str = "",
     arquivo_path: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> RespostaEscrita:
     """Altera metadados de um documento externo (e opcionalmente substitui o arquivo).
 
     - id_documento: ID interno do documento
@@ -627,7 +628,7 @@ async def sei_alterar_documento_externo(
         hipotese_legal=hipotese_legal,
         arquivo_path=arquivo_path,
     )
-    return _json(_shape_resposta_escrita(result, "alterar_documento_externo"))
+    return _shape_resposta_escrita(result, "alterar_documento_externo")
 
 
 @mcp.tool(annotations=_READ)
@@ -670,7 +671,7 @@ async def sei_incluir_documento_externo(
     nivel_acesso: str = "0",
     hipotese_legal: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> RespostaEscrita:
     """Inclui documento externo (PDF, imagem, etc.) em um processo SEI via web scraper.
 
     Implementação via scraper web — funciona em instâncias sem mod-wssei REST.
@@ -731,7 +732,7 @@ async def sei_incluir_documento_externo(
             hipotese_legal=hipotese_legal,
         )
         result = await (await _backend(ctx)).criar_documento_externo(processo, dados)
-        return _json(_shape_resposta_escrita(result, "incluir_documento_externo"))
+        return _shape_resposta_escrita(result, "incluir_documento_externo")
     except httpx.RequestError as e:
         msg = f"SEI inacessível: {e}"
         raise SEIConnectionError(msg) from e
