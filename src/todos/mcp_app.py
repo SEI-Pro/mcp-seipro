@@ -29,7 +29,7 @@ from todos.exceptions import (
     SEINotFoundError,
     SEIValidationError,
 )
-from todos.responses import NextAction
+from todos.responses import NextAction, RespostaEscrita
 from todos.sei_client import SEIClient
 from todos.sei_styles import (
     SEI_STYLES,
@@ -662,8 +662,34 @@ def _json(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
+def _shape_resposta_escrita(result: dict, acao: str) -> dict:
+    """Retorna RespostaEscrita normalizada para operações de escrita."""
+    return RespostaEscrita(
+        acao=acao,
+        id_procedimento=result.get("IdProcedimento")
+        or result.get("idProcedimento")
+        or result.get("id_procedimento"),
+        protocolo=(
+            result.get("ProtocoloProcedimentoFormatado")
+            or result.get("ProtocoloFormatado")
+            or result.get("protocoloFormatado")
+            or result.get("protocolo")
+        ),
+        id_documento=result.get("idDocumento") or result.get("id_documento"),
+        numero_sei=result.get("protocoloDocumentoFormatado") or result.get("numero_sei"),
+        mensagem=result.get("mensagem"),
+    ).model_dump(exclude_none=True)
+
+
 def _encode_cursor(pagina: int, **extra: object) -> str:
-    """Codifica página + filtros opcionais como cursor opaco base64url."""
+    """Codifica página + filtros opcionais como cursor opaco base64url.
+
+    Contrato: o JSON serializado usa a chave abreviada ``"p"`` para a página.
+    Callers de ``_decode_cursor`` devem usar ``decoded.get("p", 0)``.
+    """
+    if pagina < 0:
+        msg = "pagina não pode ser negativa."
+        raise SEIValidationError(msg)
     payload = json.dumps({"p": pagina, **extra}, separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(payload).decode()
 
@@ -676,14 +702,17 @@ def _decode_cursor(cursor: str) -> dict:
     """
     if not cursor:
         return {}
+    _bad_cursor_msg = (
+        "Cursor de paginação inválido. Use o `proximo_cursor` retornado pela "
+        "última chamada, ou omita `cursor` para começar da primeira página."
+    )
     try:
-        return json.loads(base64.urlsafe_b64decode(cursor.encode()))
+        decoded = json.loads(base64.urlsafe_b64decode(cursor.encode()))
     except (binascii.Error, ValueError, UnicodeDecodeError) as e:
-        msg = (
-            "Cursor de paginação inválido. Use o `proximo_cursor` retornado pela "
-            "última chamada, ou omita `cursor` para começar da primeira página."
-        )
-        raise SEIValidationError(msg) from e
+        raise SEIValidationError(_bad_cursor_msg) from e
+    if not isinstance(decoded, dict):
+        raise SEIValidationError(_bad_cursor_msg)
+    return decoded
 
 
 def _add_cursor(
@@ -707,8 +736,11 @@ def _add_cursor(
     itens_count = result.get("itens_pagina", 0)
     total = result.get("total_itens")
 
-    if total is not None and itens_count > 0 and total > itens_count:
-        # REST response with a real server total bigger than one page — exact
+    if total is not None and itens_count > 0:
+        # REST response with a real server total — use exact calculation.
+        # Condition was previously `total > itens_count` which missed the
+        # exact-page case (total == itens_count == limit → heuristic → false
+        # cursor on page 0 when catalog has exactly `limit` items).
         items_seen = pagina * limit + itens_count
         has_more = total > items_seen
         inferida = False

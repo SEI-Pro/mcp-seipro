@@ -67,7 +67,7 @@ _TOOL_MODULES = (
 # ---------------------------------------------------------------------------
 # Tools de orquestração que ainda vivem aqui (não absorvidas pelo contrato do
 # backend): busca multi-estratégia, agregação/pesquisa REST e resolução sigla→id.
-# As demais 118 tools estão nos módulos por domínio em todos/tools/.
+# As demais tools estão nos módulos por domínio em todos/tools/.
 # ---------------------------------------------------------------------------
 
 
@@ -386,8 +386,7 @@ def _pesquisa_cursor_args(
         extra["data_inicio"] = data_inicio
     if data_fim:
         extra["data_fim"] = data_fim
-    if limit != _DEFAULT_PESQUISA_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return pagina, palavras_chave, descricao, busca_rapida, data_inicio, data_fim, limit, extra
 
 

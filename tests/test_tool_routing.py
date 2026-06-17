@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -31,8 +32,12 @@ from todos.tools import documentos, processos
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-# Import every tool module so the @mcp.tool functions exist as plain coroutines.
+# Import every tool module + todos.server so the @mcp.tool functions exist as
+# plain coroutines and all 124 tools (including the 6 in server.py) are
+# registered — making test_all_mcp_tools_have_routing_entry deterministic
+# regardless of pytest collection order with test_tool_count.py.
 _MODULES = [
+    "todos.server",  # registers the 6 orquestração tools in server.py
     "todos.tools.acompanhamento",
     "todos.tools.assinatura",
     "todos.tools.blocos_assinatura",
@@ -586,7 +591,10 @@ _RECORDING_BACKEND_OPS: frozenset[str] = frozenset(
     | {
         "consultar_processo",  # test_consultar_processo_routes_and_keeps_public_payload
         "alterar_secoes",  # test_editar_secao_reads_then_writes_via_composite
-        "criar_documento_interno",  # test_criar_documento_routes_to_composite
+        "criar_documento_interno",  # test_criar_documento_routes_to_composite + test_criar_documento_shaped_output_preserves_doc_ids
+        "criar_processo",  # test_criar_processo_shaped_output_preserves_ids
+        "alterar_processo",  # test_alterar_processo_shaped_output
+        "criar_documento_externo",  # test_incluir_documento_externo_shaped_output
     }
 )
 
@@ -823,3 +831,66 @@ def test_all_mcp_tools_have_routing_entry() -> None:
         "Adicione uma rota em _ROUTES ou registre a ferramenta em _TOOLS_WITHOUT_ROUTING "
         "com um comentário explicando por que a validação de roteamento não se aplica."
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — write response shaping
+# ---------------------------------------------------------------------------
+
+
+def test_criar_processo_shaped_output_preserves_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_criar_processo must return shaped RespostaEscrita preserving id+protocolo."""
+    fake = RecordingBackend(
+        {"IdProcedimento": "99", "ProtocoloProcedimentoFormatado": "50300.000001/2026-01"}
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_criar_processo("123", ctx=None))
+    data = json.loads(result)
+    assert data["acao"] == "criar_processo"
+    assert data["id_procedimento"] == "99"
+    assert data["protocolo"] == "50300.000001/2026-01"
+
+
+def test_alterar_processo_shaped_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_alterar_processo must return shaped RespostaEscrita with protocolo."""
+    fake = RecordingBackend({"ProtocoloFormatado": "50300.000002/2026-02"})
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_alterar_processo("50300.000002/2026-02", ctx=None))
+    data = json.loads(result)
+    assert data["acao"] == "alterar_processo"
+    assert data["protocolo"] == "50300.000002/2026-02"
+
+
+def test_criar_documento_shaped_output_preserves_doc_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_criar_documento must return shaped RespostaEscrita preserving doc id+numero_sei."""
+    fake = RecordingBackend({"idDocumento": "D42", "protocoloDocumentoFormatado": "2843449"})
+    monkeypatch.setattr(documentos, "_backend", aconst(fake))
+    monkeypatch.setattr(documentos, "_has_rest", aconst(True))
+
+    result = asyncio.run(documentos.sei_criar_documento("PF", id_serie="S", ctx=None))
+    data = json.loads(result)
+    assert data["acao"] == "criar_documento"
+    assert data["id_documento"] == "D42"
+    assert data["numero_sei"] == "2843449"
+
+
+def test_incluir_documento_externo_shaped_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_incluir_documento_externo must return shaped RespostaEscrita."""
+    fake = RecordingBackend({"idDocumento": "D77", "protocoloDocumentoFormatado": "2877777"})
+    monkeypatch.setattr(documentos, "_backend", aconst(fake))
+
+    result = asyncio.run(
+        documentos.sei_incluir_documento_externo(
+            "50300.000001/2026-01",
+            arquivo_base64="dGVzdA==",
+            nome_arquivo="test.pdf",
+            id_serie="5",
+            ctx=None,
+        )
+    )
+    data = json.loads(result)
+    assert data["acao"] == "incluir_documento_externo"
+    assert data["id_documento"] == "D77"
+    assert data["numero_sei"] == "2877777"
