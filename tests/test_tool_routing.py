@@ -32,8 +32,12 @@ from todos.tools import documentos, processos
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-# Import every tool module so the @mcp.tool functions exist as plain coroutines.
+# Import every tool module + todos.server so the @mcp.tool functions exist as
+# plain coroutines and all 124 tools (including the 6 in server.py) are
+# registered — making test_all_mcp_tools_have_routing_entry deterministic
+# regardless of pytest collection order with test_tool_count.py.
 _MODULES = [
+    "todos.server",  # registers the 6 orquestração tools in server.py
     "todos.tools.acompanhamento",
     "todos.tools.assinatura",
     "todos.tools.blocos_assinatura",

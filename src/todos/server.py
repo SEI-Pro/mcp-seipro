@@ -67,7 +67,7 @@ _TOOL_MODULES = (
 # ---------------------------------------------------------------------------
 # Tools de orquestração que ainda vivem aqui (não absorvidas pelo contrato do
 # backend): busca multi-estratégia, agregação/pesquisa REST e resolução sigla→id.
-# As demais 118 tools estão nos módulos por domínio em todos/tools/.
+# As demais tools estão nos módulos por domínio em todos/tools/.
 # ---------------------------------------------------------------------------
 
 

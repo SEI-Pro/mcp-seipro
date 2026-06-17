@@ -23,8 +23,10 @@ class NextAction(BaseModel):
 class DocumentoResumo(BaseModel):
     """Documento na árvore de um processo (campos essenciais para chaining)."""
 
-    id: str = Field(description="idDocumento interno, ex: '2843449'")
-    numero_sei: str = Field(default="", description="Número visível, ex: '2843449'")
+    id: str = Field(description="idDocumento interno (opaco), ex: '2843449'")
+    numero_sei: str = Field(
+        default="", description="Número visível formatado, ex: '0050769-51.2024.4.02.8000'"
+    )
     tipo_documento: str = Field(default="", description="ex: 'Despacho'")
     nome_composto: str = Field(default="", description="ex: 'Despacho GPF 2874369'")
     sigla_unidade: str = Field(default="", description="unidade geradora, ex: 'GPF'")

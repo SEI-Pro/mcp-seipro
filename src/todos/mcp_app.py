@@ -695,14 +695,17 @@ def _decode_cursor(cursor: str) -> dict:
     """
     if not cursor:
         return {}
+    _bad_cursor_msg = (
+        "Cursor de paginação inválido. Use o `proximo_cursor` retornado pela "
+        "última chamada, ou omita `cursor` para começar da primeira página."
+    )
     try:
-        return json.loads(base64.urlsafe_b64decode(cursor.encode()))
+        decoded = json.loads(base64.urlsafe_b64decode(cursor.encode()))
     except (binascii.Error, ValueError, UnicodeDecodeError) as e:
-        msg = (
-            "Cursor de paginação inválido. Use o `proximo_cursor` retornado pela "
-            "última chamada, ou omita `cursor` para começar da primeira página."
-        )
-        raise SEIValidationError(msg) from e
+        raise SEIValidationError(_bad_cursor_msg) from e
+    if not isinstance(decoded, dict):
+        raise SEIValidationError(_bad_cursor_msg)
+    return decoded
 
 
 def _add_cursor(

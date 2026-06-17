@@ -16,9 +16,17 @@ from pathlib import Path
 from todos.server import mcp
 
 _TOOL_COUNT = 124
-_DOC_FILES = ("README.md", "CLAUDE.md", "manifest.json", "src/todos/mcp_app.py")
-# Detecta qualquer número de 100–123 seguido de "tools" ou "ferramentas"
-_STALE_RE = re.compile(r"\b(1[01][0-9]|12[0-3])\s*(tools|ferramentas)\b")
+_DOC_FILES = (
+    "README.md",
+    "CLAUDE.md",
+    "manifest.json",
+    "src/todos/mcp_app.py",
+    "pyproject.toml",
+    "src/todos/server.py",
+)
+# Detecta qualquer número diferente de _TOOL_COUNT antes de "tools"/"ferramentas".
+# Regex genérico — nunca precisa de atualização manual a cada bump de contagem.
+_STALE_RE = re.compile(r"\b(\d+)\s*(tools|ferramentas)\b")
 
 
 def test_tool_count_matches_runtime() -> None:
@@ -35,8 +43,9 @@ def test_no_stale_tool_count_in_docs() -> None:
     root = Path(__file__).resolve().parent.parent
     for rel in _DOC_FILES:
         text = (root / rel).read_text(encoding="utf-8")
-        match = _STALE_RE.search(text)
-        assert match is None, (
-            f"{rel} contém uma contagem de tools desatualizada: "
-            f"'{match.group()}' (esperado {_TOOL_COUNT})."
-        )
+        for match in _STALE_RE.finditer(text):
+            count = int(match.group(1))
+            assert count == _TOOL_COUNT, (
+                f"{rel} contém uma contagem de tools desatualizada: "
+                f"'{match.group()}' (esperado {_TOOL_COUNT})."
+            )
