@@ -95,6 +95,9 @@ ignore = [
 "src/todos/tools/catalogos.py" = [
     "PLR0913",  # sei_pesquisar_tipos_documento: 5 independent search/pagination params + ctx
 ]
+"src/todos/tools/unidades.py" = [
+    "PLR0913",  # sei_pesquisar_usuarios: filtro+id_orgao+limit+pagina+cursor+ctx = 6 MCP params
+]
 "src/todos/tools/documentos.py" = [
     "PLR0913",  # sei_criar_documento/sei_ler_documento/sei_alterar_documento_externo/
                 # sei_criar_documento_externo/sei_incluir_documento_externo: MCP API needs all
