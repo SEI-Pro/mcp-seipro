@@ -242,9 +242,24 @@ async def sei_listar_documentos(
     Para ler o conteúdo de um documento, use sei_ler_documento com o id.
     """
     backend = await _backend(ctx)
-    result = await backend.listar_documentos(protocolo_formatado)
+    raw = await backend.listar_documentos(protocolo_formatado)
     if include_raw:
-        return _json(result)
+        return _json(raw)
+    # REST backend returns list[dict]; normalize to the same dict format as the web backend.
+    if isinstance(raw, list):
+        docs = [
+            {
+                "id": str(d.get("id", "")),
+                "numero_sei": d.get("atributos", {}).get("protocoloFormatado", ""),
+                "tipo_documento": d.get("atributos", {}).get("tipoDocumento", ""),
+                "nome_composto": d.get("atributos", {}).get("tipoDocumento", ""),
+                "sigla_unidade": d.get("atributos", {}).get("siglaUnidade", ""),
+            }
+            for d in raw
+        ]
+        result: dict = {"documentos": docs, "total_documentos": len(docs)}
+    else:
+        result = raw
     return _json(
         _shape_lista_documentos(result, protocolo_formatado, tool_name="sei_listar_documentos")
     )
