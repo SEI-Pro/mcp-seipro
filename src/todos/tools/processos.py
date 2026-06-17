@@ -35,7 +35,13 @@ from todos.mcp_app import (
     access_control,
     mcp,
 )
-from todos.responses import DocumentoResumo, ListaDocumentos, NextAction, ProcessoDetalhe
+from todos.responses import (
+    DocumentoResumo,
+    ListaDocumentos,
+    NextAction,
+    ProcessoDetalhe,
+    RespostaEscrita,
+)
 
 # ---------------------------------------------------------------------------
 # Leitura
@@ -498,7 +504,7 @@ async def sei_criar_processo(
     nivel_acesso: str = "0",
     hipotese_legal: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> RespostaEscrita:
     """Cria um novo processo no SEI.
 
     Parâmetros:
@@ -534,7 +540,7 @@ async def sei_criar_processo(
             hipotese_legal=hipotese_legal,
         )
     )
-    return _json(_shape_resposta_escrita(result, "criar_processo"))
+    return _shape_resposta_escrita(result, "criar_processo")
 
 
 @mcp.tool(annotations=_WRITE)
@@ -545,7 +551,7 @@ async def sei_alterar_processo(
     hipotese_legal: str = "",
     observacao: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> RespostaEscrita:
     """Altera metadados de um processo no SEI.
 
     Parâmetros:
@@ -566,7 +572,7 @@ async def sei_alterar_processo(
         hipotese_legal=hipotese_legal,
         observacao=observacao,
     )
-    return _json(_shape_resposta_escrita(result, "alterar_processo"))
+    return _shape_resposta_escrita(result, "alterar_processo")
 
 
 # sei_enviar_processo permanece em server.py: a resolução sigla→id da unidade de

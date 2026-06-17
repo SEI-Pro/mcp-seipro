@@ -4,9 +4,10 @@ Isolados aqui para não interferir na introspecção de type hints de entrada
 do FastMCP (que requer anotações avaliadas em tempo de execução — sem
 ``from __future__ import annotations`` nos módulos de tools).
 
-Uso: ``return _json(model.model_dump())`` — JSON compacto via ``_json`` enquanto
-o FastMCP/cliente não suportar ``structuredContent`` de forma estável. Quando
-suportado, trocar por ``return model`` é só fiação.
+Uso: retorne o modelo diretamente (``return model``). FastMCP 3.4+ serializa
+automaticamente em ``content[0].text`` (JSON, compatível com clientes antigos)
+**e** ``structured_content`` (JSON tipado para clientes modernos), além de
+publicar ``outputSchema`` no catálogo de tools.
 """
 
 from pydantic import BaseModel, Field

@@ -667,7 +667,7 @@ def _json(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
-def _shape_resposta_escrita(result: dict, acao: str) -> dict:
+def _shape_resposta_escrita(result: dict, acao: str) -> RespostaEscrita:
     """Retorna RespostaEscrita normalizada para operações de escrita."""
     return RespostaEscrita(
         acao=acao,
@@ -683,7 +683,7 @@ def _shape_resposta_escrita(result: dict, acao: str) -> dict:
         id_documento=result.get("idDocumento") or result.get("id_documento"),
         numero_sei=result.get("protocoloDocumentoFormatado") or result.get("numero_sei"),
         mensagem=result.get("mensagem"),
-    ).model_dump(exclude_none=True)
+    )
 
 
 def _encode_cursor(pagina: int, **extra: object) -> str:
