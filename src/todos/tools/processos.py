@@ -17,6 +17,7 @@ import base64
 import re
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from fastmcp import Context
 
@@ -33,51 +34,115 @@ from todos.mcp_app import (
     access_control,
     mcp,
 )
+from todos.responses import DocumentoResumo, ListaDocumentos, NextAction, ProcessoDetalhe
 
 # ---------------------------------------------------------------------------
 # Leitura
 # ---------------------------------------------------------------------------
 
 
-_DOCS_INLINE_LIMIT = 30
+_LISTA_DOCS_LIMIT = 50
+_ATIVIDADES_LIMIT = 50
 
 
-def _shape_consultar_processo(merged: dict) -> dict:
-    """Retorna um subconjunto legível do payload bruto de consultar_processo.
+def _to_str_list(items: list) -> list[str]:
+    """Normaliza lista de strings ou dicts para list[str]."""
+    out = []
+    for item in items:
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, dict):
+            out.append(item.get("nome") or item.get("sigla") or item.get("unidade") or str(item))
+    return out
 
-    Preserva todos os campos de metadata (pequenos) e trunca documentos[]
-    se exceder _DOCS_INLINE_LIMIT, para evitar payloads de centenas de entradas.
-    Para a lista completa de documentos use sei_arvore_processo.
-    """
-    docs_raw: list = merged.get("documentos", [])
-    total_docs: int = merged.get("total_documentos", len(docs_raw))
 
-    docs_shaped = docs_raw[:_DOCS_INLINE_LIMIT]
-    has_more_docs = total_docs > _DOCS_INLINE_LIMIT
-
-    out: dict = {}
-    # Campos de identidade (REST ou web, normalize para snake_case)
-    out["id_procedimento"] = merged.get("IdProcedimento") or merged.get("id_procedimento", "")
-    out["protocolo"] = merged.get("ProtocoloProcedimentoFormatado") or merged.get("protocolo", "")
-    out["tipo"] = merged.get("NomeTipoProcedimento") or merged.get("tipo", "")
-    out["especificacao"] = merged.get("especificacao", "")
-    out["nivel_acesso"] = merged.get("nivelAcesso", merged.get("nivel_acesso", ""))
-    out["hipotese_legal"] = merged.get("hipoteseLegal", merged.get("hipotese_legal", ""))
-    out["grau_sigilo"] = merged.get("grauSigilo", "")
-    # Arrays de metadata
-    out["assuntos"] = merged.get("assuntos", [])
-    out["interessados"] = merged.get("interessados", [])
-    out["observacoes"] = merged.get("observacoes", [])
-    out["relacionados"] = merged.get("relacionados", [])
-    # Documentos (possivelmente truncados)
-    out["total_documentos"] = total_docs
-    out["documentos"] = docs_shaped
-    if has_more_docs:
-        out["_documentos_truncados"] = (
-            f"Exibindo {len(docs_shaped)} de {total_docs}. "
-            "Use sei_arvore_processo para a lista completa."
+def _shape_lista_documentos(result: dict, protocolo: str, *, tool_name: str) -> dict:
+    """Retorna ListaDocumentos a partir do payload bruto de arvore_processo/listar_documentos."""
+    docs_raw: list = result.get("documentos", [])
+    total: int = result.get("total_documentos", len(docs_raw))
+    docs = docs_raw[:_LISTA_DOCS_LIMIT]
+    resumos = [
+        DocumentoResumo(
+            id=str(d.get("id", "")),
+            numero_sei=str(d.get("numero_sei", "")),
+            tipo_documento=str(d.get("tipo_documento", "")),
+            nome_composto=str(d.get("nome_composto", "")),
+            sigla_unidade=str(d.get("sigla_unidade", "")),
+            assinado=d.get("assinado"),
+            cancelado=d.get("cancelado"),
         )
-    # Avisos do composite (falha parcial de backend)
+        for d in docs
+    ]
+    actions: list[NextAction] = []
+    if total > _LISTA_DOCS_LIMIT:
+        actions = [
+            NextAction(
+                tool=tool_name,
+                args={"protocolo_formatado": protocolo, "include_raw": True},
+                reason=(
+                    f"Exibindo {len(resumos)} de {total} documentos; "
+                    "use include_raw=true para a lista completa."
+                ),
+            )
+        ]
+    return ListaDocumentos(
+        processo=protocolo,
+        total_documentos=total,
+        documentos=resumos,
+        next_actions=actions,
+    ).model_dump()
+
+
+def _shape_atividades(result: dict, *, ordem: str = "desc") -> dict:
+    """Retorna andamentos em formato shaped a partir do payload bruto de listar_atividades."""
+    andamentos: list = list(result.get("andamentos", []))
+    if ordem == "desc":
+        andamentos.reverse()
+    total = result.get("total_andamentos", len(andamentos))
+    truncated = andamentos[:_ATIVIDADES_LIMIT]
+    return {
+        "processo": result.get("processo", {}),
+        "total_andamentos": total,
+        "andamentos": truncated,
+        "truncado": total > _ATIVIDADES_LIMIT,
+    }
+
+
+def _shape_consultar_processo(merged: dict, protocolo: str) -> dict:
+    """Retorna ProcessoDetalhe shaped do payload bruto de consultar_processo.
+
+    Com include_raw=False (padrão), retorna um resumo compacto com next_actions
+    apontando para sei_arvore_processo quando há documentos.
+    """
+    total_docs = merged.get("total_documentos", len(merged.get("documentos", [])))
+
+    interessados = _to_str_list(merged.get("interessados", []))
+    unidades = _to_str_list(merged.get("unidades_abertas", []))
+
+    actions: list[NextAction] = []
+    if total_docs > 0:
+        actions.append(
+            NextAction(
+                tool="sei_arvore_processo",
+                args={"protocolo_formatado": protocolo},
+                reason=f"Processo tem {total_docs} documento(s); use sei_arvore_processo para ver a lista.",
+            )
+        )
+
+    detail = ProcessoDetalhe(
+        id_procedimento=merged.get("IdProcedimento") or merged.get("id_procedimento", ""),
+        protocolo=merged.get("ProtocoloProcedimentoFormatado")
+        or merged.get("protocolo", protocolo),
+        tipo=merged.get("NomeTipoProcedimento") or merged.get("tipo", ""),
+        especificacao=merged.get("especificacao", ""),
+        situacao=merged.get("situacao", ""),
+        nivel_acesso=merged.get("nivelAcesso", merged.get("nivel_acesso", "")),
+        interessados=interessados,
+        unidades_abertas=unidades,
+        total_documentos=total_docs,
+        next_actions=actions,
+    )
+    out = detail.model_dump()
     if "_warnings" in merged:
         out["_warnings"] = merged["_warnings"]
     if "_aviso_acesso" in merged:
@@ -86,7 +151,12 @@ def _shape_consultar_processo(merged: dict) -> dict:
 
 
 @mcp.tool(annotations=_READ)
-async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
+async def sei_consultar_processo(
+    protocolo_formatado: str,
+    ctx: Context,
+    *,
+    include_raw: bool = False,
+) -> str:
     """Consulta um processo SEI pelo número de protocolo formatado.
 
     Exemplo de protocolo: 50300.000123/2025-00
@@ -94,12 +164,13 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
     Implementação híbrida: combina REST mod-wssei (campos estruturados) com
     scraper web (árvore de documentos), ambos em paralelo.
 
-    Campos retornados:
-    - id_procedimento, protocolo, tipo, especificacao
-    - nivel_acesso, hipotese_legal, grau_sigilo
-    - assuntos[], interessados[], observacoes[], relacionados[]
-    - documentos[] (primeiros 30; use sei_arvore_processo para a lista completa)
-    - total_documentos
+    Campos retornados (include_raw=false, padrão):
+    - protocolo, tipo, especificacao, situacao, nivel_acesso
+    - interessados[], unidades_abertas[], total_documentos
+    - next_actions: sugere sei_arvore_processo quando há documentos
+
+    Use include_raw=true para o payload bruto completo com todos os campos
+    (assuntos, hipotese_legal, grau_sigilo, observacoes, relacionados, documentos[]).
 
     Quando o processo é restrito ou sigiloso (nivel_acesso 1 ou 2), a resposta
     inclui `_aviso_acesso` — aviso informativo, não erro de permissão.
@@ -115,13 +186,15 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
             alvo={"tipo": "processo", "protocolo": protocolo_formatado},
         )
 
-    return _json(_shape_consultar_processo(merged))
+    return _json(merged if include_raw else _shape_consultar_processo(merged, protocolo_formatado))
 
 
 @mcp.tool(annotations=_READ)
 async def sei_arvore_processo(
     protocolo_formatado: str,
     ctx: Context | None = None,
+    *,
+    include_raw: bool = False,
 ) -> str:
     """Mostra a árvore completa de documentos de um processo SEI.
 
@@ -131,6 +204,10 @@ async def sei_arvore_processo(
 
     Aceita o protocolo formatado (ex: 50300.000123/2025-00).
 
+    Retorno padrão (include_raw=false): lista shaped com até 50 documentos
+    (DocumentoResumo: id, numero_sei, tipo_documento, nome_composto, sigla_unidade).
+    Use include_raw=true para o payload bruto completo (todos os docs, todos os campos).
+
     Para ler o conteúdo de um documento, use sei_ler_documento com o id.
     """
     backend = await _backend(ctx)
@@ -139,25 +216,53 @@ async def sei_arvore_processo(
     result = await backend.arvore_processo(protocolo_formatado)
     if ctx:
         await ctx.report_progress(100, 100)
-    return _json(result)
+    if include_raw:
+        return _json(result)
+    return _json(
+        _shape_lista_documentos(result, protocolo_formatado, tool_name="sei_arvore_processo")
+    )
 
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_documentos(
     protocolo_formatado: str,
     ctx: Context | None = None,
+    *,
+    include_raw: bool = False,
 ) -> str:
     """Lista todos os documentos de um processo SEI.
 
     Implementação via scraper web (~10× mais rápido que REST).
     Aceita o protocolo formatado (ex: 50300.000123/2025-00).
 
-    Cada documento tem: id, nome_composto, tipo_documento, sigla_unidade,
-    numero_sei. Para ler o conteúdo, use sei_ler_documento com o id.
+    Retorno padrão (include_raw=false): até 50 documentos shaped
+    (id, numero_sei, tipo_documento, nome_composto, sigla_unidade).
+    Use include_raw=true para o payload bruto completo.
+
+    Para ler o conteúdo de um documento, use sei_ler_documento com o id.
     """
     backend = await _backend(ctx)
-    result = await backend.listar_documentos(protocolo_formatado)
-    return _json(result)
+    raw = await backend.listar_documentos(protocolo_formatado)
+    if include_raw:
+        return _json(raw)
+    # REST backend returns list[dict]; normalize to the same dict format as the web backend.
+    if isinstance(raw, list):
+        docs = [
+            {
+                "id": str(d.get("id", "")),
+                "numero_sei": d.get("atributos", {}).get("protocoloFormatado", ""),
+                "tipo_documento": d.get("atributos", {}).get("tipoDocumento", ""),
+                "nome_composto": d.get("atributos", {}).get("tipoDocumento", ""),
+                "sigla_unidade": d.get("atributos", {}).get("siglaUnidade", ""),
+            }
+            for d in raw
+        ]
+        result: dict = {"documentos": docs, "total_documentos": len(docs)}
+    else:
+        result = raw
+    return _json(
+        _shape_lista_documentos(result, protocolo_formatado, tool_name="sei_listar_documentos")
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -284,18 +389,28 @@ async def sei_listar_relacionamentos(
 async def sei_listar_atividades(
     processo: str,
     ctx: Context | None = None,
+    *,
+    ordem: Literal["desc", "asc"] = "desc",
+    include_raw: bool = False,
 ) -> str:
     """Lista o histórico de atividades/andamentos de um processo.
 
     Implementação via scraper web (procedimento_consultar_historico.php).
-    Retorna todas as ações registradas (tramitações, assinaturas, edições, etc.)
+    Retorna ações registradas (tramitações, assinaturas, edições, etc.)
     com data/hora, unidade, usuário e descrição.
 
     Aceita protocolo formatado (ex: 50300.000123/2025-00).
+
+    Parâmetros:
+    - ordem: "desc" (padrão — mais recente primeiro) ou "asc" (cronológica)
+    - include_raw: false (padrão) retorna até 50 andamentos shaped;
+      true retorna o payload bruto completo.
     """
     backend = await _backend(ctx)
     result = await backend.listar_atividades(processo)
-    return _json(result)
+    if include_raw:
+        return _json(result)
+    return _json(_shape_atividades(result, ordem=ordem))
 
 
 @mcp.tool(annotations=_READ)
