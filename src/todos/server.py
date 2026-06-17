@@ -20,7 +20,9 @@ from todos.mcp_app import (
     _MAX_GRUPO_INLINE,
     _READ,
     _WRITE,
+    _add_cursor,
     _backend,
+    _decode_cursor,
     _get_client,
     _get_web_client,
     _http_mode,
@@ -350,6 +352,62 @@ async def sei_resumo_processos(
         raise SEIConnectionError(msg) from e
 
 
+_DEFAULT_PESQUISA_LIMIT = 50
+
+
+def _pesquisa_cursor_args(
+    cursor: str,
+    pagina: int,
+    palavras_chave: str,
+    descricao: str,
+    busca_rapida: str,
+    data_inicio: str,
+    data_fim: str,
+    limit: int,
+) -> tuple[int, str, str, str, str, str, int, dict]:
+    """Resolve paginação por cursor e monta cursor_extra para pesquisa de processos."""
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        palavras_chave = decoded.get("palavras_chave", palavras_chave)
+        descricao = decoded.get("descricao", descricao)
+        busca_rapida = decoded.get("busca_rapida", busca_rapida)
+        data_inicio = decoded.get("data_inicio", data_inicio)
+        data_fim = decoded.get("data_fim", data_fim)
+        limit = decoded.get("limit", limit)
+    extra: dict = {}
+    if palavras_chave:
+        extra["palavras_chave"] = palavras_chave
+    if descricao:
+        extra["descricao"] = descricao
+    if busca_rapida:
+        extra["busca_rapida"] = busca_rapida
+    if data_inicio:
+        extra["data_inicio"] = data_inicio
+    if data_fim:
+        extra["data_fim"] = data_fim
+    if limit != _DEFAULT_PESQUISA_LIMIT:
+        extra["limit"] = limit
+    return pagina, palavras_chave, descricao, busca_rapida, data_inicio, data_fim, limit, extra
+
+
+def _wrap_pesquisa(
+    result: dict, *, include_raw: bool, pagina: int, limit: int, cursor_extra: dict
+) -> str:
+    """Retorna JSON do resultado com envelope de cursor opaco ou bruto segundo include_raw."""
+    if include_raw:
+        return _json(result)
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_processos",
+            cursor_extra=cursor_extra,
+        )
+    )
+
+
 @mcp.tool(annotations=_READ)
 async def sei_pesquisar_processos(
     palavras_chave: str = "",
@@ -363,7 +421,10 @@ async def sei_pesquisar_processos(
     grupo: str = "",
     limit: int = 50,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
+    *,
+    include_raw: bool = False,
 ) -> str:
     """Pesquisa processos no SEI por texto, descrição, datas, unidade ou assunto.
 
@@ -377,7 +438,8 @@ async def sei_pesquisar_processos(
     - id_assunto: id do assunto (use sei_pesquisar_assuntos para obter o id)
     - grupo: id do grupo de acompanhamento (use sei_listar_grupos_acompanhamento)
 
-    Paginação: pagina=0 é a primeira página, pagina=1 a segunda, etc.
+    Paginação: passe `cursor` = `proximo_cursor` da resposta anterior, ou use
+    `pagina` (0-indexado) para acesso direto.
 
     Busca via web (instâncias sem mod-wssei, ex: SEI-RO):
     - Quando REST não está disponível, a busca usa o formulário de pesquisa
@@ -388,7 +450,15 @@ async def sei_pesquisar_processos(
     - Os filtros estruturais acima são ignorados no caminho web; quando isso
       ocorre, o campo "aviso" no retorno lista os filtros descartados.
     - Máximo de 10 resultados por página no caminho web.
+
+    Use include_raw=true para o payload bruto sem envelope de paginação.
     """
+    pagina, palavras_chave, descricao, busca_rapida, data_inicio, data_fim, limit, cursor_extra = (
+        _pesquisa_cursor_args(
+            cursor, pagina, palavras_chave, descricao, busca_rapida, data_inicio, data_fim, limit
+        )
+    )
+
     _rest_unavailable = False
     try:
         client = await _get_client(ctx)
@@ -407,7 +477,9 @@ async def sei_pesquisar_processos(
                 pagina=pagina,
             )
         )
-        return _json(result)
+        return _wrap_pesquisa(
+            result, include_raw=include_raw, pagina=pagina, limit=limit, cursor_extra=cursor_extra
+        )
     except (ValueError, httpx.UnsupportedProtocol):
         _rest_unavailable = True  # REST não configurado (sem SEI_URL) ou URL inválida
     except httpx.HTTPStatusError as exc:
@@ -472,7 +544,9 @@ async def sei_pesquisar_processos(
             )
         if avisos:
             paged["aviso"] = "; ".join(avisos).capitalize()
-        return _json(paged)
+        return _wrap_pesquisa(
+            paged, include_raw=include_raw, pagina=pagina, limit=limit, cursor_extra=cursor_extra
+        )
     except (SEIError, httpx.HTTPError) as e2:
         msg = f"Web: {e2}"
         raise SEIError(msg) from e2

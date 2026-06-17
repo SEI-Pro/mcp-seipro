@@ -75,6 +75,7 @@ class Paginado(BaseModel):
 class ProcessoDetalhe(BaseModel):
     """Resposta shaped de sei_consultar_processo."""
 
+    id_procedimento: str = ""
     protocolo: str
     tipo: str = ""
     especificacao: str = ""
