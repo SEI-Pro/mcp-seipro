@@ -51,8 +51,7 @@ async def sei_pesquisar_hipoteses_legais(
     extra: dict = {}
     if filtro:
         extra["filtro"] = filtro
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,
@@ -102,8 +101,7 @@ async def sei_pesquisar_tipos_processo(
         extra["filtro"] = filtro
     if favoritos:
         extra["favoritos"] = favoritos
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,
@@ -160,8 +158,7 @@ async def sei_pesquisar_tipos_documento(
         extra["favoritos"] = favoritos
     if aplicabilidade:
         extra["aplicabilidade"] = aplicabilidade
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,
@@ -205,8 +202,7 @@ async def sei_pesquisar_tipos_documento_externo(
     extra: dict = {}
     if filtro:
         extra["filtro"] = filtro
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,
@@ -250,8 +246,7 @@ async def sei_pesquisar_tipos_conferencia(
     extra: dict = {}
     if filtro:
         extra["filtro"] = filtro
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,
@@ -294,8 +289,7 @@ async def sei_pesquisar_assuntos(
     extra: dict = {}
     if filtro:
         extra["filtro"] = filtro
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,
@@ -372,8 +366,7 @@ async def sei_pesquisar_textos_padrao(
     extra: dict = {}
     if filtro:
         extra["filtro"] = filtro
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,
@@ -407,8 +400,7 @@ async def sei_listar_grupos_modelos(
     backend = await _backend(ctx)
     result = await backend.listar_grupos_modelos(limit=limit, pagina=pagina)
     extra: dict = {}
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,
@@ -457,8 +449,7 @@ async def sei_listar_modelos(
         extra["id_grupo"] = id_grupo
     if filtro:
         extra["filtro"] = filtro
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result, pagina=pagina, limit=limit, tool_name="sei_listar_modelos", cursor_extra=extra

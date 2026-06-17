@@ -82,8 +82,7 @@ async def sei_pesquisar_unidades(
     extra: dict = {}
     if filtro:
         extra["filtro"] = filtro
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,
@@ -187,8 +186,7 @@ async def sei_pesquisar_usuarios(
         extra["filtro"] = filtro
     if id_orgao:
         extra["id_orgao"] = id_orgao
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,
@@ -227,8 +225,7 @@ async def sei_pesquisar_outras_unidades(
     extra: dict = {}
     if filtro:
         extra["filtro"] = filtro
-    if limit != _DEFAULT_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return _json(
         _add_cursor(
             result,

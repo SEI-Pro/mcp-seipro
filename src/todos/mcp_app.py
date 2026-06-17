@@ -682,7 +682,14 @@ def _shape_resposta_escrita(result: dict, acao: str) -> dict:
 
 
 def _encode_cursor(pagina: int, **extra: object) -> str:
-    """Codifica página + filtros opcionais como cursor opaco base64url."""
+    """Codifica página + filtros opcionais como cursor opaco base64url.
+
+    Contrato: o JSON serializado usa a chave abreviada ``"p"`` para a página.
+    Callers de ``_decode_cursor`` devem usar ``decoded.get("p", 0)``.
+    """
+    if pagina < 0:
+        msg = "pagina não pode ser negativa."
+        raise SEIValidationError(msg)
     payload = json.dumps({"p": pagina, **extra}, separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(payload).decode()
 
@@ -729,8 +736,11 @@ def _add_cursor(
     itens_count = result.get("itens_pagina", 0)
     total = result.get("total_itens")
 
-    if total is not None and itens_count > 0 and total > itens_count:
-        # REST response with a real server total bigger than one page — exact
+    if total is not None and itens_count > 0:
+        # REST response with a real server total — use exact calculation.
+        # Condition was previously `total > itens_count` which missed the
+        # exact-page case (total == itens_count == limit → heuristic → false
+        # cursor on page 0 when catalog has exactly `limit` items).
         items_seen = pagina * limit + itens_count
         has_more = total > items_seen
         inferida = False

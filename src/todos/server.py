@@ -386,8 +386,7 @@ def _pesquisa_cursor_args(
         extra["data_inicio"] = data_inicio
     if data_fim:
         extra["data_fim"] = data_fim
-    if limit != _DEFAULT_PESQUISA_LIMIT:
-        extra["limit"] = limit
+    extra["limit"] = limit
     return pagina, palavras_chave, descricao, busca_rapida, data_inicio, data_fim, limit, extra
 
 
