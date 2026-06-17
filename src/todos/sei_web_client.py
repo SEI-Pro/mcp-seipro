@@ -5,8 +5,8 @@ e navegação. Login via formulário SIP, navegação via páginas pré-assinada
 com `infra_hash` capturado na cadeia de redirects.
 
 Performance medida (sei.antaq.gov.br, abril/2026):
-- listar_processos: ~14.5 s (REST) → ~0.6 s (web) → 23× mais rápido
-- consultar_processo: ~5.9 s (REST 2 calls) → ~0.9 s (web 2 calls) → 6× mais rápido
+- listar_processos: ~14.5 s (REST) → ~0.6 s (web) → 23x mais rápido
+- consultar_processo: ~5.9 s (REST 2 calls) → ~0.9 s (web 2 calls) → 6x mais rápido
 
 Limitações:
 - Requer cadeia inicial de login (~3-4 s, uma vez por sessão)
@@ -1356,7 +1356,7 @@ class SEIWebClient:
                               numero_sei, tipo_no, icone}, ...],
             }
 
-        ~10× mais rápido que a REST /documento/listar (9.7 s → ~1 s).
+        ~10x mais rápido que a REST /documento/listar (9.7 s → ~1 s).
         """
         proc = await self.consultar_processo(protocolo_formatado)
 

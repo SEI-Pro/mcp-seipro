@@ -849,7 +849,7 @@ def _render_timing_section(
     if a and b and a.warm_ms and b.warm_ms:
         ratio = a_stats["median"] / b_stats["median"] if b_stats["median"] > 0 else 0
         winner = "Web" if ratio > 1 else "REST"
-        out.append(f"**Speedup (warm median)**: {ratio:.2f}× — {winner} mais rápido")
+        out.append(f"**Speedup (warm median)**: {ratio:.2f}x — {winner} mais rápido")
         out.append("")
 
 
