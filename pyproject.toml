@@ -35,6 +35,9 @@ dev = [
     "bandit>=1.8",
     "pip-audit>=2.8",
 ]
+eval = [
+    "anthropic>=0.30",
+]
 
 [tool.hatch.version]
 path = "src/todos/__init__.py"
@@ -107,10 +110,14 @@ ignore = [
     "PLR0913",  # sei_criar_processo (7 business fields) + sei_alterar_processo: MCP API surface
 ]
 "tests/**" = ["S101", "ANN", "D", "PLR2004", "SLF001", "FBT003"]  # assert/no-annot/no-docstring/magic-vals/bool-args ok in tests
+"evals/**" = ["S101", "ANN", "D", "PLR2004", "SLF001", "FBT003", "INP001"]  # same relaxations as tests/
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["tests"]
+testpaths = ["tests", "evals"]
+pythonpath = ["tests", "evals"]
+markers = [
+    "eval: marks eval tests that require ANTHROPIC_API_KEY",
+]
 
 [tool.vulture]
 min_confidence = 80
