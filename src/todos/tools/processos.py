@@ -39,35 +39,72 @@ from todos.mcp_app import (
 # ---------------------------------------------------------------------------
 
 
+_DOCS_INLINE_LIMIT = 30
+
+
+def _shape_consultar_processo(merged: dict) -> dict:
+    """Retorna um subconjunto legível do payload bruto de consultar_processo.
+
+    Preserva todos os campos de metadata (pequenos) e trunca documentos[]
+    se exceder _DOCS_INLINE_LIMIT, para evitar payloads de centenas de entradas.
+    Para a lista completa de documentos use sei_arvore_processo.
+    """
+    docs_raw: list = merged.get("documentos", [])
+    total_docs: int = merged.get("total_documentos", len(docs_raw))
+
+    docs_shaped = docs_raw[:_DOCS_INLINE_LIMIT]
+    has_more_docs = total_docs > _DOCS_INLINE_LIMIT
+
+    out: dict = {}
+    # Campos de identidade (REST ou web, normalize para snake_case)
+    out["id_procedimento"] = merged.get("IdProcedimento") or merged.get("id_procedimento", "")
+    out["protocolo"] = merged.get("ProtocoloProcedimentoFormatado") or merged.get("protocolo", "")
+    out["tipo"] = merged.get("NomeTipoProcedimento") or merged.get("tipo", "")
+    out["especificacao"] = merged.get("especificacao", "")
+    out["nivel_acesso"] = merged.get("nivelAcesso", merged.get("nivel_acesso", ""))
+    out["hipotese_legal"] = merged.get("hipoteseLegal", merged.get("hipotese_legal", ""))
+    out["grau_sigilo"] = merged.get("grauSigilo", "")
+    # Arrays de metadata
+    out["assuntos"] = merged.get("assuntos", [])
+    out["interessados"] = merged.get("interessados", [])
+    out["observacoes"] = merged.get("observacoes", [])
+    out["relacionados"] = merged.get("relacionados", [])
+    # Documentos (possivelmente truncados)
+    out["total_documentos"] = total_docs
+    out["documentos"] = docs_shaped
+    if has_more_docs:
+        out["_documentos_truncados"] = (
+            f"Exibindo {len(docs_shaped)} de {total_docs}. "
+            "Use sei_arvore_processo para a lista completa."
+        )
+    # Avisos do composite (falha parcial de backend)
+    if "_warnings" in merged:
+        out["_warnings"] = merged["_warnings"]
+    if "_aviso_acesso" in merged:
+        out["_aviso_acesso"] = merged["_aviso_acesso"]
+    return out
+
+
 @mcp.tool(annotations=_READ)
 async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
     """Consulta um processo SEI pelo número de protocolo formatado.
 
     Exemplo de protocolo: 50300.000123/2025-00
 
-    Implementação **híbrida**: combina REST mod-wssei (campos estruturados)
-    com scraper do frontend web (lista completa de documentos da árvore).
-    As duas fontes rodam em paralelo via asyncio.gather.
+    Implementação híbrida: combina REST mod-wssei (campos estruturados) com
+    scraper web (árvore de documentos), ambos em paralelo.
 
-    Campos da REST (`/processo/consultar` + `/processo/consultar/{id}`):
-    - IdProcedimento, ProtocoloProcedimentoFormatado, NomeTipoProcedimento
-    - especificacao, assuntos[], interessados[], observacoes[]
-    - nivelAcesso, hipoteseLegal, grauSigilo
+    Campos retornados:
+    - id_procedimento, protocolo, tipo, especificacao
+    - nivel_acesso, hipotese_legal, grau_sigilo
+    - assuntos[], interessados[], observacoes[], relacionados[]
+    - documentos[] (primeiros 30; use sei_arvore_processo para a lista completa)
+    - total_documentos
 
-    Campos do scraper web (`procedimento_visualizar` / arvore_montar.php):
-    - documentos[]: lista completa de documentos com id, label, tipo
-    - relacionados[]: processos relacionados (cards na sidebar)
-
-    Se o scraper web falhar (ex: processo não está na inbox da unidade atual),
-    a tool ainda retorna os campos REST. Se a REST falhar, retorna pelo menos
-    o que o scraper conseguiu extrair.
-
-    Quando o processo é restrito ou sigiloso (nivelAcesso 1 ou 2), a resposta
-    inclui o campo `_aviso_acesso` — um aviso INFORMATIVO de privacidade,
-    NÃO um erro de permissão. Os metadados foram retornados com sucesso.
+    Quando o processo é restrito ou sigiloso (nivel_acesso 1 ou 2), a resposta
+    inclui `_aviso_acesso` — aviso informativo, não erro de permissão.
     """
     backend = await _backend(ctx)
-    # O composite combina metadados da REST + árvore de documentos do web.
     merged = await backend.consultar_processo(protocolo_formatado)
 
     nivel, hipotese = access_control.extrair_nivel(merged)
@@ -78,7 +115,7 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
             alvo={"tipo": "processo", "protocolo": protocolo_formatado},
         )
 
-    return _json(merged)
+    return _json(_shape_consultar_processo(merged))
 
 
 @mcp.tool(annotations=_READ)
@@ -128,7 +165,13 @@ async def sei_listar_unidades_processo(
     processo: str,
     ctx: Context | None = None,
 ) -> str:
-    """Lista as unidades onde o processo está aberto."""
+    """Lista as unidades onde o processo está aberto atualmente.
+
+    - processo: protocolo formatado (ex: 50300.000123/2025-00) ou IdProcedimento
+
+    Retorna lista de objetos com id_unidade, sigla e nome. Útil para saber em
+    quais setores o processo está distribuído antes de tramitar ou consultar.
+    """
     backend = await _backend(ctx)
     result = await backend.listar_unidades_processo(processo)
     return _json(result)
@@ -139,7 +182,13 @@ async def sei_listar_interessados(
     processo: str,
     ctx: Context | None = None,
 ) -> str:
-    """Lista os interessados de um processo."""
+    """Lista os interessados cadastrados em um processo.
+
+    - processo: protocolo formatado (ex: 50300.000123/2025-00) ou IdProcedimento
+
+    Retorna lista de objetos com id e nome de cada interessado. Use para verificar
+    ou auditar os interessados antes de alterar o processo via sei_alterar_processo.
+    """
     backend = await _backend(ctx)
     result = await backend.listar_interessados(processo)
     return _json(result)
@@ -150,7 +199,14 @@ async def sei_listar_sobrestamentos(
     processo: str,
     ctx: Context | None = None,
 ) -> str:
-    """Lista o histórico de sobrestamentos de um processo."""
+    """Lista o histórico de sobrestamentos de um processo.
+
+    - processo: protocolo formatado (ex: 50300.000123/2025-00) ou IdProcedimento
+
+    Retorna lista cronológica de eventos de sobrestamento (data, motivo, processo
+    vinculado) e dessobrestamento. Use sei_remover_sobrestamento para dessobrestar
+    o processo ativo.
+    """
     backend = await _backend(ctx)
     result = await backend.listar_sobrestamentos(processo)
     return _json(result)
@@ -253,8 +309,7 @@ async def sei_listar_processos(
     """Lista processos da caixa da unidade atual no SEI (Controle de Processos).
 
     Implementação via scraper do frontend web (~20× mais rápida que a REST API).
-    Retorna a página inteira de uma vez (a paginação é controlada pelo SEI;
-    para a maioria das unidades todos os processos cabem em poucas páginas).
+    O SEI pagina em até 500 processos por página; use `pagina` para navegar.
 
     Parâmetros:
     - pagina: número da página (0=primeira, 1=segunda, etc.)
@@ -273,11 +328,16 @@ async def sei_listar_processos(
     - Especificação, Interessados, Marcadores, etc. — conforme as colunas
       configuradas no painel da unidade
 
+    Campos de paginação na resposta:
+    - total_itens: total de processos no servidor (antes de filtros client-side)
+    - total_filtrados: após filtros tipo/filtro
+    - pagina_atual: página corrente
+    - tem_proxima: true se há mais páginas (repita com pagina+1)
+
     NOTAS:
     - Processos sobrestados e concluídos não aparecem nesta listagem.
-    - Para agrupamento estatístico (sei_resumo_processos) usa-se a REST API
-      diretamente (que tem flags estruturadas como tramitação, sobrestamento,
-      acesso, etc.).
+    - Para agrupamento estatístico use sei_resumo_processos (REST, com flags
+      estruturadas de tramitação, sobrestamento, acesso, etc.).
     - Login web é executado uma vez por sessão (~3 s); listagens subsequentes
       custam ~600 ms cada, contra ~14 s da REST API.
     """

@@ -375,7 +375,7 @@ async def sei_estilos_resource() -> str:
             "Item_Inciso_Romano para incisos — NUNCA escreva I - II - no texto."
         ),
     }
-    return json.dumps(data, ensure_ascii=False, indent=2)
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
 @mcp.resource("sei://hipoteses-legais")
@@ -387,7 +387,7 @@ async def sei_hipoteses_resource(ctx: Context) -> str:
     Evita uma chamada de tool para sei_pesquisar_hipoteses_legais.
     """
     result = await (await _backend(ctx)).pesquisar_hipoteses_legais()
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
 
 class _ConsentimentoRestrito(BaseModel):
@@ -655,7 +655,7 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
 
 
 def _json(data: object) -> str:
-    return json.dumps(data, ensure_ascii=False, indent=2)
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
 # Tool annotation profiles
