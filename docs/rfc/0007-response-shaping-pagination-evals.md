@@ -216,8 +216,21 @@ def _encode_cursor(pagina: int, **extra: object) -> str:
 def _decode_cursor(cursor: str) -> dict:
     if not cursor:
         return {}
-    return json.loads(base64.urlsafe_b64decode(cursor.encode()))
+    try:
+        return json.loads(base64.urlsafe_b64decode(cursor.encode()))
+    except (binascii.Error, ValueError, UnicodeDecodeError) as e:
+        # Cursor opaco corrompido/truncado pelo agente: erro acionável, não crash.
+        raise SEIValidationError(
+            "Cursor de paginação inválido. Use o `proximo_cursor` retornado pela "
+            "última chamada, ou omita `cursor` para começar da primeira página.",
+            error_code="CURSOR_INVALIDO",
+            recoverable=True,
+        ) from e
 ```
+
+Coerente com o princípio de erro recuperável da §3: o decoder valida e levanta
+`SEIValidationError` tipada em vez de propagar `binascii.Error`/`JSONDecodeError`
+cru como "internal error".
 
 Modelo de envelope (Pydantic, em `responses.py`):
 
@@ -276,16 +289,45 @@ class SEIError(ToolError):
                  recoverable: bool = False,
                  suggested_next_tool: str | None = None,
                  suggested_args: dict | None = None) -> None:
-        super().__init__(message)
         self.error_code = error_code
         self.recoverable = recoverable
         self.suggested_next_tool = suggested_next_tool
         self.suggested_args = suggested_args or {}
+        super().__init__(self._render(message))
+
+    def _render(self, message: str) -> str:
+        # A continuação precisa viajar DENTRO da string da mensagem (ver §3.1.1).
+        if not self.suggested_next_tool:
+            return message
+        args = json.dumps(self.suggested_args, ensure_ascii=False, separators=(",", ":"))
+        return (
+            f"{message}\n\nPróximo passo sugerido: chame `{self.suggested_next_tool}` "
+            f"com {args}."
+        )
 ```
 
-O serializador no tool layer (`_json` de erro / o handler do `ToolError`) inclui
-`error_code`, `recoverable`, `suggested_next_tool`, `suggested_args` no corpo
-quando presentes.
+### 3.1.1 Por que a continuação vai na mensagem, não em campos soltos
+
+**Restrição do transporte MCP** (verificada no FastMCP/SDK desta árvore): quando
+um `ToolError` cruza a fronteira, o servidor serializa **apenas
+`str(exception)`** em `CallToolResult.content[0].text` com `isError=True`
+(`mcp/server/lowlevel/server.py`). Atributos Python extras
+(`suggested_next_tool`, `suggested_args`) **NÃO** chegam ao agente — somem com a
+exceção. Não existe, hoje, "serializador de erro" no tool layer: `_json`
+(`mcp_app.py`) é só para respostas de sucesso.
+
+Portanto, a continuação recuperável precisa estar **embutida na string da
+mensagem** (feito por `_render` acima) — é o único canal que sobrevive ao
+transporte. Os atributos estruturados (`error_code`, `recoverable`,
+`suggested_*`) permanecem no objeto para (a) testes, (b) logging server-side, e
+(c) adoção futura de `structuredContent` (RFC 0008), quando passarão a viajar
+como estrutura sem reescrever os call-sites. Até lá, **a fonte da verdade que o
+agente lê é o texto da mensagem**.
+
+> Nota de escopo: isto resolve a contradição apontada na revisão — a §11 adia
+> `structuredContent`, então a §3 **não pode** depender de campos de erro
+> estruturados chegando ao agente. A mensagem renderizada é a ponte até a
+> RFC 0008.
 
 ### 3.2 Casos canônicos do SEI (mapeiam direto ao exemplo da skill)
 
@@ -444,19 +486,54 @@ capability-search ficam condicionadas a sinal de eval, não feitas às cegas.
 
 Código tem **124** `@mcp.tool` (processos 27, documentos 14, blocos_assinatura
 14, unidades 13, catálogos 12, blocos_internos 10, marcadores 9, acompanhamento
-8, assinatura 7, credenciamento 4, server.py 6). Docs dizem "121". Corrigir em
-`mcp_app.py` (instructions), `server.py` (comentário), `CLAUDE.md`, e travar com
-teste de regressão:
+8, assinatura 7, credenciamento 4, server.py 6). A contagem real foi confirmada
+via `len(asyncio.run(mcp.list_tools())) == 124`.
+
+A string de contagem desatualizada aparece em **cinco** lugares (não três) — a
+auditoria inicial omitiu README e manifest:
+
+| Arquivo | Diz hoje | Corrigir para |
+|---|---|---|
+| `mcp_app.py` (instructions) | "121 tools" | 124 |
+| `server.py` (comentário) | "115 tools" / "121" | 124 |
+| `CLAUDE.md` (3 ocorrências) | "121 tools" | 124 |
+| `README.md:5` | "121 tools" | 124 |
+| `manifest.json:6` (description) | "116 ferramentas" | 124 |
+
+Teste de regressão. **API**: o FastMCP não expõe `_tool_manager`; a forma pública
+de enumerar tools (já usada em `tests/test_tool_routing.py:749`) é a coroutine
+`mcp.list_tools()`. Além de validar o número, o teste varre os arquivos de
+documentação — o número sozinho não pega strings desatualizadas em README/manifest:
 
 ```python
-def test_tool_count_matches_documentation():
-    from todos.server import mcp
-    registered = len(mcp._tool_manager.tools)
-    assert registered == 124, (
-        f"{registered} tools registradas, 124 documentadas. "
-        "Atualize mcp_app.py, server.py e CLAUDE.md."
+import asyncio
+import re
+from pathlib import Path
+
+from todos.server import mcp
+
+_TOOL_COUNT = 124
+_DOC_FILES = ("README.md", "CLAUDE.md", "manifest.json", "src/todos/mcp_app.py")
+_STALE = re.compile(r"\b(1[01][0-9]|12[0-3])\s*(tools|ferramentas)\b")  # 100–123
+
+def test_tool_count_matches_runtime() -> None:
+    registered = len(asyncio.run(mcp.list_tools()))
+    assert registered == _TOOL_COUNT, (
+        f"{registered} tools registradas, {_TOOL_COUNT} documentadas. "
+        "Atualize os arquivos de _DOC_FILES e este teste."
     )
+
+def test_no_stale_tool_count_in_docs() -> None:
+    root = Path(__file__).resolve().parent.parent
+    for rel in _DOC_FILES:
+        text = (root / rel).read_text(encoding="utf-8")
+        assert not _STALE.search(text), (
+            f"{rel} contém uma contagem de tools desatualizada (esperado {_TOOL_COUNT})."
+        )
 ```
+
+O segundo teste falha enquanto qualquer doc citar uma contagem de 100–123, então
+README e manifest não podem ficar para trás silenciosamente.
 
 ---
 
@@ -465,9 +542,10 @@ def test_tool_count_matches_documentation():
 ### Fase 0 — Fundação de schemas (habilita o resto)
 1. Criar `src/todos/responses.py` com `NextAction`, `DocumentoResumo`,
    `ListaDocumentos`, `RespostaEscrita`, `Paginado`, `ProcessoDetalhe`.
-2. Adicionar `_encode_cursor`/`_decode_cursor` e serializador de erro enriquecido
-   em `mcp_app.py`.
-3. Corrigir contagem (124) em 3 lugares + teste de regressão (§6).
+2. Adicionar `_encode_cursor`/`_decode_cursor` (com validação que levanta
+   `SEIValidationError`, §2.2) em `mcp_app.py`.
+3. Corrigir contagem (124) nos **5 arquivos** de doc + os 2 testes de regressão
+   (`mcp.list_tools()` e varredura de strings, §6).
 
 **Conclusão**: `ruff` limpo, suíte verde, `responses.py` importável.
 
@@ -499,9 +577,13 @@ raw sem envelope; truncamento sempre com `next_actions`.
 **Dependência**: Fase 0. Arquivos distintos da Fase 2 (sem conflito de merge).
 
 ### Fase 4 — Erros recuperáveis
-1. Enriquecer `SEIError` com `error_code`/`recoverable`/`suggested_*` (§3.1).
+1. Enriquecer `SEIError` com `error_code`/`recoverable`/`suggested_*` + `_render`
+   que **embute a continuação na string da mensagem** (§3.1, §3.1.1) — único canal
+   que sobrevive ao transporte enquanto `structuredContent` não é adotado.
 2. Levantar na origem os 5 casos canônicos (§3.2).
-3. Serializar os campos no tool layer; teste: nenhum stack trace/segredo no corpo.
+3. Testes: a mensagem entregue ao agente contém `suggested_next_tool`/`args`;
+   nenhum stack trace/segredo no corpo; atributos estruturados ficam no objeto
+   para logging e adoção futura de `structuredContent`.
 
 **Dependência**: Fase 0.
 
