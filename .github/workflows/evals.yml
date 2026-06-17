@@ -1,0 +1,44 @@
+name: Evals
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/todos/tools/**"
+      - "src/todos/mcp_app.py"
+      - "src/todos/server.py"
+  pull_request:
+    paths:
+      - "src/todos/tools/**"
+      - "src/todos/mcp_app.py"
+      - "src/todos/server.py"
+  workflow_dispatch:
+
+jobs:
+  t1-smoke:
+    name: T1 Smoke (tool selection)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --group eval
+      - name: Run T1 smoke tests
+        run: uv run pytest evals/ -m eval -k "t1" -v
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  t2-qa:
+    name: T2 QA (multi-call agent loop)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --group eval
+      - name: Run T2 QA tests
+        run: uv run pytest evals/ -m eval -k "t2" -v --timeout=300
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

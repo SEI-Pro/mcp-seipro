@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  10 QA pairs for the todos MCP server eval harness (RFC 0007 §4.4).
+  All answers are pinned to the fixture process 50300.001234/2025-00.
+  Each pair exercises multi-call sequences and discriminates confusable tools.
+-->
+<evaluation>
+  <qa_pair>
+    <question>Quantos documentos tem o processo 50300.001234/2025-00 e qual o tipo do documento mais recente?</question>
+    <answer>12 documentos; o mais recente é um Despacho</answer>
+    <!-- sequência: consultar/arvore → contar → tipo do último. Irmãs: arvore vs consultar -->
+  </qa_pair>
+  <qa_pair>
+    <question>No processo 50300.001234/2025-00, qual unidade gerou o Ofício mais recente?</question>
+    <answer>GPF</answer>
+    <!-- arvore → filtrar Ofício → sigla_unidade. Multi-call -->
+  </qa_pair>
+  <qa_pair>
+    <question>Quantos tipos de processo disponíveis têm "Fiscalização" no nome?</question>
+    <answer>4</answer>
+    <!-- pesquisar_tipos_processo(filtro) + paginação. Irmãs: tipos_processo vs tipos_documento -->
+  </qa_pair>
+  <qa_pair>
+    <question>O processo 50300.001234/2025-00 já esteve sobrestado? Qual o motivo do último sobrestamento?</question>
+    <answer>Sim; aguardando manifestação da área técnica</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Em quais unidades o processo 50300.001234/2025-00 está aberto atualmente?</question>
+    <answer>GPF e GRP</answer>
+    <!-- Irmãs: listar_unidades_processo vs pesquisar_unidades -->
+  </qa_pair>
+  <qa_pair>
+    <question>Qual a especificação e o nível de acesso do processo 50300.001234/2025-00?</question>
+    <answer>Fiscalização de rotina; Público</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Quantos eventos de envio (tramitação) constam no histórico do processo 50300.001234/2025-00?</question>
+    <answer>3</answer>
+    <!-- listar_atividades → filtrar envios → contar -->
+  </qa_pair>
+  <qa_pair>
+    <question>Na caixa da unidade atual, quantos processos são do tipo "Pessoal: Férias"?</question>
+    <answer>7</answer>
+    <!-- resumo_processos(agrupar_por=tipo). Irmãs: resumo vs listar_processos -->
+  </qa_pair>
+  <qa_pair>
+    <question>O documento SEI 2843449 pertence a qual processo?</question>
+    <answer>50300.001234/2025-00</answer>
+    <!-- Irmãs: buscar_documento vs ler_documento -->
+  </qa_pair>
+  <qa_pair>
+    <question>Liste os interessados do processo 50300.001234/2025-00.</question>
+    <answer>Departamento Jurídico; Diretoria de Fiscalização</answer>
+    <!-- Irmãs: listar_interessados vs listar_unidades_processo -->
+  </qa_pair>
+</evaluation>
