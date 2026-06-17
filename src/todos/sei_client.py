@@ -233,8 +233,6 @@ class SEIClient:
                     msg,
                     error_code="SESSAO_EXPIRADA",
                     recoverable=False,
-                    suggested_next_tool="sei_status",
-                    suggested_args={},
                 )
             if resp.status_code == httpx.codes.NOT_FOUND:
                 msg = f"Recurso não encontrado: {method} {path}"

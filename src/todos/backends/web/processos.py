@@ -225,7 +225,7 @@ class ProcessosWeb(_WebMixin):
                     error_code="USUARIO_NAO_ENCONTRADO",
                     recoverable=True,
                     suggested_next_tool="sei_listar_usuarios",
-                    suggested_args={},
+                    suggested_args={"filtro": usuario},
                 )
             else:
                 candidatos = ", ".join(o.get("texto", "") for o in parciais)
@@ -238,7 +238,7 @@ class ProcessosWeb(_WebMixin):
                     error_code="USUARIO_AMBIGUO",
                     recoverable=True,
                     suggested_next_tool="sei_listar_usuarios",
-                    suggested_args={},
+                    suggested_args={"filtro": usuario},
                 )
         return await self._web.executar_acao_processo(
             processo, "procedimento_atribuicao_cadastrar", {"selAtribuicao": id_usuario}

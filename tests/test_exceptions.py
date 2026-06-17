@@ -121,7 +121,19 @@ def test_sei_error_message_contains_no_stack_trace() -> None:
 def test_sei_error_empty_args_renders_empty_object() -> None:
     err = SEIError(
         "falha",
-        suggested_next_tool="sei_status",
+        recoverable=True,
+        suggested_next_tool="sei_alguma_tool",
         suggested_args={},
     )
     assert "{}" in str(err)
+
+
+def test_sei_error_recoverable_false_suppresses_continuation() -> None:
+    err = SEIError(
+        "sessão inválida",
+        error_code="SESSAO_EXPIRADA",
+        recoverable=False,
+        suggested_next_tool="sei_alguma_tool",
+        suggested_args={"x": "y"},
+    )
+    assert str(err) == "sessão inválida"

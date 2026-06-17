@@ -42,7 +42,7 @@ class SEIError(ToolError):
         error_code: str = "",
         recoverable: bool = False,
         suggested_next_tool: str | None = None,
-        suggested_args: dict | None = None,
+        suggested_args: dict[str, str | int | bool | None] | None = None,
     ) -> None:
         """Inicializa com mensagem e metadados de recuperação opcionais."""
         self.error_code = error_code
@@ -53,7 +53,7 @@ class SEIError(ToolError):
 
     def _render(self, message: str) -> str:
         """Embute a continuação na string da mensagem se houver sugestão de próxima tool."""
-        if not self.suggested_next_tool:
+        if not self.suggested_next_tool or not self.recoverable:
             return message
         args = json.dumps(self.suggested_args, ensure_ascii=False, separators=(",", ":"))
         return (
