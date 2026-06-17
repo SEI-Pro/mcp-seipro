@@ -10,7 +10,7 @@ Este projeto é um fork de [**mcp-seipro**](https://github.com/SEI-Pro/mcp-seipr
 
 Um agradecimento especial ao Pedro Soares pela dedicação em construir o mcp-seipro do zero — sem esse trabalho pioneiro, este fork não existiria.
 
-**Por que o fork?** O mcp-seipro depende exclusivamente da API REST mod-wssei — um módulo opcional que precisa ser instalado pelo administrador do SEI. O [SEI de Rondônia](https://sei.sistemas.ro.gov.br) (e diversas outras instâncias públicas) não tem o mod-wssei instalado, tornando todas as suas tools inoperantes nessas instâncias.
+**Por que o fork?** O mcp-seipro depende exclusivamente da API REST mod-wssei — um módulo opcional que precisa ser instalado pelo administrador do SEI. O [SEI de Rondônia](https://sei.sistemas.ro.gov.br) (e diversas outras instâncias públicas) não tem o mod-wssei instalado, tornando todas as 124 tools inoperantes nessas instâncias.
 
 A solução foi implementar um **scraper HTTP do próprio frontend web do SEI** como backend primário: sem dependência de módulo extra, sem configuração no servidor, funciona em qualquer instância que o usuário consiga acessar pelo navegador. O projeto upstream está focado na API REST; este fork mantém compatibilidade total com ela quando disponível e adiciona paridade web completa para quem não tem.
 

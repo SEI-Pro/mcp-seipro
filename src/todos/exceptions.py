@@ -12,6 +12,8 @@ traces httpx ou strings técnicas diretamente ao agente.
 
 from __future__ import annotations
 
+import json
+
 from fastmcp.exceptions import ToolError
 
 
@@ -25,7 +27,38 @@ class SEIError(ToolError):
     na mensagem que o cliente/scraper coloca ao levantar o erro (o SEI já devolve
     um texto explicativo); quem só precisa da categoria captura por TIPO
     (`except SEIAuthError`, `SEINotFoundError`, …).
+
+    Os atributos `error_code`, `recoverable`, `suggested_next_tool` e
+    `suggested_args` enriquecem o objeto para logging server-side e adoção futura
+    de structuredContent (RFC 0008). Enquanto isso, `_render` embute a continuação
+    na string da mensagem — único canal que sobrevive ao transporte MCP (o SDK
+    serializa apenas `str(exception)` em `CallToolResult.content[0].text`).
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str = "",
+        recoverable: bool = False,
+        suggested_next_tool: str | None = None,
+        suggested_args: dict[str, str | int | bool | None] | None = None,
+    ) -> None:
+        """Inicializa com mensagem e metadados de recuperação opcionais."""
+        self.error_code = error_code
+        self.recoverable = recoverable
+        self.suggested_next_tool = suggested_next_tool
+        self.suggested_args = suggested_args or {}
+        super().__init__(self._render(message))
+
+    def _render(self, message: str) -> str:
+        """Embute a continuação na string da mensagem se houver sugestão de próxima tool."""
+        if not self.suggested_next_tool or not self.recoverable:
+            return message
+        args = json.dumps(self.suggested_args, ensure_ascii=False, separators=(",", ":"))
+        return (
+            f"{message}\n\nPróximo passo sugerido: chame `{self.suggested_next_tool}` com {args}."
+        )
 
 
 class SEIAuthError(SEIError):

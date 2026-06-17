@@ -229,7 +229,11 @@ class SEIClient:
                 )
             if resp.status_code in (401, 403):
                 msg = "Sessão SEI expirada ou inválida após re-autenticação."
-                raise SEIAuthError(msg)
+                raise SEIAuthError(
+                    msg,
+                    error_code="SESSAO_EXPIRADA",
+                    recoverable=False,
+                )
             if resp.status_code == httpx.codes.NOT_FOUND:
                 msg = f"Recurso não encontrado: {method} {path}"
                 raise SEINotFoundError(msg)

@@ -848,6 +848,7 @@ def test_criar_processo_shaped_output_preserves_ids(monkeypatch: pytest.MonkeyPa
     result = asyncio.run(processos.sei_criar_processo("123", ctx=None))
     data = json.loads(result)
     assert data["acao"] == "criar_processo"
+    assert data["status"] == "ok"
     assert data["id_procedimento"] == "99"
     assert data["protocolo"] == "50300.000001/2026-01"
 

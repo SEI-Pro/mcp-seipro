@@ -16,7 +16,9 @@ class NextAction(BaseModel):
     """Próxima ação sugerida ao agente para continuar (paginação ou recuperação)."""
 
     tool: str = Field(description="Nome da tool a chamar em seguida, ex: 'sei_arvore_processo'")
-    args: dict = Field(description="Argumentos para a tool, ex: {'cursor': 'eyJwIjoxfQ'}")
+    args: dict[str, object] = Field(
+        description="Argumentos para a tool, ex: {'cursor': 'eyJwIjoxfQ'}"
+    )
     reason: str = Field(description="Por que esta ação, em uma linha")
 
 
@@ -81,9 +83,7 @@ class ProcessoDetalhe(BaseModel):
     protocolo: str
     tipo: str = ""
     especificacao: str = ""
-    situacao: str = ""
     nivel_acesso: str = ""
     interessados: list[str] = Field(default_factory=list)
-    unidades_abertas: list[str] = Field(default_factory=list)
     total_documentos: int = 0
     next_actions: list[NextAction] = Field(default_factory=list)

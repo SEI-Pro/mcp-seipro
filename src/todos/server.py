@@ -3,7 +3,7 @@
 import re
 import sys
 from collections.abc import Callable
-from typing import TypeAlias, TypeGuard
+from typing import TypeAlias, TypedDict, TypeGuard
 
 import httpx
 from fastmcp import Context
@@ -354,6 +354,36 @@ async def sei_resumo_processos(
 
 _DEFAULT_PESQUISA_LIMIT = 50
 
+# String filter keys that must be round-tripped through the opaque cursor.
+_PESQUISA_STR_KEYS = (
+    "palavras_chave",
+    "descricao",
+    "busca_rapida",
+    "data_inicio",
+    "data_fim",
+    "sta_tipo_data",
+    "id_unidade_geradora",
+    "id_assunto",
+    "grupo",
+)
+
+
+class _PesquisaArgs(TypedDict):
+    """Resolved search parameters after cursor decoding."""
+
+    pagina: int
+    palavras_chave: str
+    descricao: str
+    busca_rapida: str
+    data_inicio: str
+    data_fim: str
+    sta_tipo_data: str
+    id_unidade_geradora: str
+    id_assunto: str
+    grupo: str
+    limit: int
+    cursor_extra: dict
+
 
 def _pesquisa_cursor_args(
     cursor: str,
@@ -363,31 +393,52 @@ def _pesquisa_cursor_args(
     busca_rapida: str,
     data_inicio: str,
     data_fim: str,
+    sta_tipo_data: str,
+    id_unidade_geradora: str,
+    id_assunto: str,
+    grupo: str,
     limit: int,
-) -> tuple[int, str, str, str, str, str, int, dict]:
+) -> _PesquisaArgs:
     """Resolve paginação por cursor e monta cursor_extra para pesquisa de processos."""
+    vals: dict[str, str] = dict(
+        zip(
+            _PESQUISA_STR_KEYS,
+            (
+                palavras_chave,
+                descricao,
+                busca_rapida,
+                data_inicio,
+                data_fim,
+                sta_tipo_data,
+                id_unidade_geradora,
+                id_assunto,
+                grupo,
+            ),
+            strict=True,
+        )
+    )
     if cursor:
         decoded = _decode_cursor(cursor)
         pagina = decoded.get("p", pagina)
-        palavras_chave = decoded.get("palavras_chave", palavras_chave)
-        descricao = decoded.get("descricao", descricao)
-        busca_rapida = decoded.get("busca_rapida", busca_rapida)
-        data_inicio = decoded.get("data_inicio", data_inicio)
-        data_fim = decoded.get("data_fim", data_fim)
         limit = decoded.get("limit", limit)
-    extra: dict = {}
-    if palavras_chave:
-        extra["palavras_chave"] = palavras_chave
-    if descricao:
-        extra["descricao"] = descricao
-    if busca_rapida:
-        extra["busca_rapida"] = busca_rapida
-    if data_inicio:
-        extra["data_inicio"] = data_inicio
-    if data_fim:
-        extra["data_fim"] = data_fim
+        for k in _PESQUISA_STR_KEYS:
+            vals[k] = decoded.get(k, vals[k])
+    extra: dict = {k: v for k, v in vals.items() if v}
     extra["limit"] = limit
-    return pagina, palavras_chave, descricao, busca_rapida, data_inicio, data_fim, limit, extra
+    return _PesquisaArgs(
+        pagina=pagina,
+        palavras_chave=vals["palavras_chave"],
+        descricao=vals["descricao"],
+        busca_rapida=vals["busca_rapida"],
+        data_inicio=vals["data_inicio"],
+        data_fim=vals["data_fim"],
+        sta_tipo_data=vals["sta_tipo_data"],
+        id_unidade_geradora=vals["id_unidade_geradora"],
+        id_assunto=vals["id_assunto"],
+        grupo=vals["grupo"],
+        limit=limit,
+        cursor_extra=extra,
+    )
 
 
 def _wrap_pesquisa(
@@ -452,26 +503,38 @@ async def sei_pesquisar_processos(
 
     Use include_raw=true para o payload bruto sem envelope de paginação.
     """
-    pagina, palavras_chave, descricao, busca_rapida, data_inicio, data_fim, limit, cursor_extra = (
-        _pesquisa_cursor_args(
-            cursor, pagina, palavras_chave, descricao, busca_rapida, data_inicio, data_fim, limit
-        )
+    args = _pesquisa_cursor_args(
+        cursor,
+        pagina,
+        palavras_chave,
+        descricao,
+        busca_rapida,
+        data_inicio,
+        data_fim,
+        sta_tipo_data,
+        id_unidade_geradora,
+        id_assunto,
+        grupo,
+        limit,
     )
+    pagina = args["pagina"]
+    limit = args["limit"]
+    cursor_extra = args["cursor_extra"]
 
     _rest_unavailable = False
     try:
         client = await _get_client(ctx)
         result = await client.pesquisar_processos(
             FiltrosPesquisaProcessos(
-                palavras_chave=palavras_chave,
-                descricao=descricao,
-                busca_rapida=busca_rapida,
-                data_inicio=data_inicio,
-                data_fim=data_fim,
-                sta_tipo_data=sta_tipo_data,
-                id_unidade_geradora=id_unidade_geradora,
-                id_assunto=id_assunto,
-                grupo=grupo,
+                palavras_chave=args["palavras_chave"],
+                descricao=args["descricao"],
+                busca_rapida=args["busca_rapida"],
+                data_inicio=args["data_inicio"],
+                data_fim=args["data_fim"],
+                sta_tipo_data=args["sta_tipo_data"],
+                id_unidade_geradora=args["id_unidade_geradora"],
+                id_assunto=args["id_assunto"],
+                grupo=args["grupo"],
                 limit=limit,
                 pagina=pagina,
             )
@@ -492,24 +555,17 @@ async def sei_pesquisar_processos(
         raise SEIConnectionError(msg) from e
 
     # Fallback via web scraper (instâncias sem mod-wssei)
-    q_web = " ".join(filter(None, [palavras_chave, busca_rapida]))
+    q_web = " ".join(filter(None, [args["palavras_chave"], args["busca_rapida"]]))
     dropped = [
-        n
-        for n, v in [
-            ("sta_tipo_data", sta_tipo_data),
-            ("id_unidade_geradora", id_unidade_geradora),
-            ("id_assunto", id_assunto),
-            ("grupo", grupo),
-        ]
-        if v
+        n for n in ("sta_tipo_data", "id_unidade_geradora", "id_assunto", "grupo") if args[n]
     ]
     try:
         web = await _get_web_client(ctx)
         result_dict = await web.pesquisar_processos_web(
             q=q_web,
-            descricao=descricao,
-            data_inicio=data_inicio,
-            data_fim=data_fim,
+            descricao=args["descricao"],
+            data_inicio=args["data_inicio"],
+            data_fim=args["data_fim"],
             pagina=pagina,
         )
         items = result_dict["processos"]
