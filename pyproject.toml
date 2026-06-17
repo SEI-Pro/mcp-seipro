@@ -69,8 +69,6 @@ ignore = [
     # ── Intentional project-wide decisions ────────────────────────────────
     "RUF001", "RUF002", "RUF003",    # ambiguous unicode — Portuguese text is intentional
     "CPY001",                        # no copyright headers
-    "FIX001", "FIX002", "FIX003", "FIX004",  # FIXME/HACK markers ok
-    "TD001", "TD002", "TD003", "TD004", "TD005", "TD006", "TD007",  # TODO tracking
     "S104",   # 0.0.0.0 intentional — Railway/container deploy (same as bandit skip)
 ]
 
