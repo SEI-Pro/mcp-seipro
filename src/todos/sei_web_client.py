@@ -36,6 +36,12 @@ from bs4 import BeautifulSoup, Tag
 if TYPE_CHECKING:
     from types import ModuleType
 
+from todos.backends.models import (
+    DocumentoExternoInclusaoWeb,
+    NovoProcessoWeb,
+    OpcoesTramitacaoWeb,
+    SEIWebClientConfig,
+)
 from todos.exceptions import (
     SEIAuthError,
     SEICaptchaError,
@@ -246,25 +252,14 @@ class SEIWebClient:
     ~3 s mas listagens subsequentes custam ~600 ms cada.
     """
 
-    def __init__(
-        self,
-        *,
-        sei_url: str = "",
-        sei_web_url: str = "",
-        sei_usuario: str = "",
-        sei_senha: str = "",
-        sei_orgao: str = "",
-        sei_sigla_orgao: str = "",
-        sei_sigla_sistema: str = "",
-        sei_sigla_orgao_sistema: str = "",
-        sei_verify_ssl: str | bool | None = None,
-    ) -> None:
-        """Initialise from keyword args (sei_web_url, sei_usuario, sei_senha, …) or env vars."""
+    def __init__(self, config: SEIWebClientConfig | None = None) -> None:
+        """Initialise from a SEIWebClientConfig (or env vars when config is None/default)."""
+        cfg = config or SEIWebClientConfig()
         # Reusa as mesmas env vars do SEIClient REST
-        _sei_url = sei_url or os.environ.get("SEI_URL", "")
+        _sei_url = cfg.sei_url or os.environ.get("SEI_URL", "")
         # SEI_WEB_URL permite modo web-only (sem mod-wssei) apontando direto para
         # a raiz do SEI (ex: https://sei.orgao.gov.br). Tem precedência sobre SEI_URL.
-        _sei_web_url = sei_web_url or os.environ.get("SEI_WEB_URL", "")
+        _sei_web_url = cfg.sei_web_url or os.environ.get("SEI_WEB_URL", "")
         if _sei_web_url:
             self.sei_root = _sei_web_url.rstrip("/")
         elif "/sei/" in _sei_url:
@@ -274,14 +269,14 @@ class SEIWebClient:
         else:
             self.sei_root = _sei_url.rstrip("/")
 
-        self._usuario = sei_usuario or os.environ.get("SEI_USUARIO", "")
+        self._usuario = cfg.sei_usuario or os.environ.get("SEI_USUARIO", "")
 
         _env_senha = os.environ.get("SEI_SENHA", "")
-        self._senha = sei_senha or _env_senha
+        self._senha = cfg.sei_senha or _env_senha
         # Rastreia a fonte da senha para mensagem de erro acionável
         self._senha_source_hint = (
             "SEI_SENHA (variável de ambiente)"
-            if (not sei_senha and _env_senha)
+            if (not cfg.sei_senha and _env_senha)
             else "senha configurada"
         )
         # Pre-compute keyring key so login() can do the actual lookup in a thread
@@ -303,21 +298,23 @@ class SEIWebClient:
 
         # SEI_ORGAO no .env é o id da REST (geralmente "0"). O selOrgao do SIP
         # é descoberto dinamicamente do <select> na página de login.
-        self._sei_orgao = sei_orgao  # stored for API parity with SEIClient; not used by web flow
-        self._sigla_orgao = sei_sigla_orgao or os.environ.get("SEI_SIGLA_ORGAO", "ANTAQ")
-        self._sigla_sistema = sei_sigla_sistema or os.environ.get("SEI_SIGLA_SISTEMA", "SEI")
+        self._sei_orgao = (
+            cfg.sei_orgao
+        )  # stored for API parity with SEIClient; not used by web flow
+        self._sigla_orgao = cfg.sei_sigla_orgao or os.environ.get("SEI_SIGLA_ORGAO", "ANTAQ")
+        self._sigla_sistema = cfg.sei_sigla_sistema or os.environ.get("SEI_SIGLA_SISTEMA", "SEI")
         # SEI_SIGLA_ORGAO_SISTEMA: parâmetro da URL do SIP login (ex: "RO" para Rondônia).
         # Quando não definido, usa SEI_SIGLA_ORGAO (mantém compatibilidade p/ instâncias
         # onde sigla_orgao_sistema == sigla do órgão no selOrgao, ex: ANTAQ).
         _sigla_orgao_sistema = (
-            sei_sigla_orgao_sistema
+            cfg.sei_sigla_orgao_sistema
             or os.environ.get("SEI_SIGLA_ORGAO_SISTEMA", "")
             or self._sigla_orgao
         )
 
         _raw_verify: str | bool = (
-            sei_verify_ssl
-            if sei_verify_ssl is not None
+            cfg.sei_verify_ssl
+            if cfg.sei_verify_ssl is not None
             else os.environ.get("SEI_VERIFY_SSL", "true")
         )
         _verify: bool = (
@@ -2327,17 +2324,14 @@ class SEIWebClient:
         self,
         protocolo: str,
         unidades_ids: list[str],
-        manter_aberto: str = "N",
-        remover_anotacao: str = "N",
-        enviar_email: str = "N",
-        data_retorno: str = "",
-        dias_retorno: str = "",
+        opcoes: OpcoesTramitacaoWeb | None = None,
     ) -> dict:
         """Envia (tramita) um processo via scraper web do SEI.
 
         Fluxo: trabalhar → arvore → link(procedimento_tramitar) → GET form → POST.
         As `unidades_ids` devem ser IDs numéricos já resolvidos.
         """
+        _op = opcoes or OpcoesTramitacaoWeb()
         await self.ensure_authenticated()
 
         html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
@@ -2388,16 +2382,16 @@ class SEIWebClient:
         post_data.extend(("hdnIdUnidadeEnvio", uid) for uid in unidades_ids)
 
         # Opções de tramitação — usa os nomes padrão do SEI
-        if manter_aberto.upper() == "S":
+        if _op.manter_aberto.upper() == "S":
             post_data.append(("chkSinManterAberto", "S"))
-        if remover_anotacao.upper() == "S":
+        if _op.remover_anotacao.upper() == "S":
             post_data.append(("chkSinRemoverAnotacoes", "S"))
-        if enviar_email.upper() == "S":
+        if _op.enviar_email.upper() == "S":
             post_data.append(("chkSinEnviarEmailNotificacao", "S"))
-        if data_retorno:
-            post_data.append(("dtaRetorno", data_retorno))
-        if dias_retorno:
-            post_data.append(("numDiasRetorno", dias_retorno))
+        if _op.data_retorno:
+            post_data.append(("dtaRetorno", _op.data_retorno))
+        if _op.dias_retorno:
+            post_data.append(("numDiasRetorno", _op.dias_retorno))
 
         r2 = await self._http.post(
             post_url,
@@ -3213,15 +3207,7 @@ class SEIWebClient:
             itens = list(opcoes.items())
         return "¥".join(f"{aid}±{texto}" for aid, texto in itens)
 
-    async def criar_processo_web(
-        self,
-        tipo_processo: str,
-        especificacao: str = "",
-        assuntos_ids: list[str] | None = None,
-        interessados_ids: list[str] | None = None,
-        nivel_acesso: str = "0",
-        hipotese_legal: str = "",
-    ) -> dict:
+    async def criar_processo_web(self, dados: NovoProcessoWeb) -> dict:
         """Cria novo processo via scraper web do SEI.
 
         Fluxo: toolbar(escolher_tipo|cadastrar) → form de cadastro → POST salvar.
@@ -3236,30 +3222,32 @@ class SEIWebClient:
         """
         await self.ensure_authenticated()
 
-        form, url_atual = await self._abrir_form_cadastro_processo(tipo_processo)
+        form, url_atual = await self._abrir_form_cadastro_processo(dados.tipo_processo)
 
         overrides: dict[str, str] = {
             _FIELD_FLAG_PROC_CADASTRO: "2",
-            _FIELD_NIVEL_ACESSO: nivel_acesso,
-            _FIELD_ASSUNTOS: self._serializar_assuntos(form, assuntos_ids or []),
+            _FIELD_NIVEL_ACESSO: dados.nivel_acesso,
+            _FIELD_ASSUNTOS: self._serializar_assuntos(form, dados.assuntos_ids or []),
             # Comunica o tipo nos dois fluxos: no escolher_tipo o
             # _FIELD_ID_TIPO_PROC já vem setado; no form direto
             # (procedimento_cadastrar, instâncias antigas) o servidor lê
             # selTipoProcedimento. Setar ambos é inócuo no fluxo moderno.
-            "selTipoProcedimento": tipo_processo,
-            _FIELD_ID_TIPO_PROC: tipo_processo,
+            "selTipoProcedimento": dados.tipo_processo,
+            _FIELD_ID_TIPO_PROC: dados.tipo_processo,
         }
-        if especificacao:
-            overrides[_FIELD_DESCRICAO] = especificacao
-        if hipotese_legal and nivel_acesso in ("1", "2"):
-            overrides["selHipoteseLegal"] = hipotese_legal
-        if interessados_ids:
+        if dados.especificacao:
+            overrides[_FIELD_DESCRICAO] = dados.especificacao
+        if dados.hipotese_legal and dados.nivel_acesso in ("1", "2"):
+            overrides["selHipoteseLegal"] = dados.hipotese_legal
+        if dados.interessados_ids:
             # Interessados usam o mesmo infraLupaSelect dos assuntos
             # (selInteressadosProcedimento → _FIELD_INTERESSADOS): itens
             # `id±rótulo` separados por `¥`. O servidor vincula pelo id (o rótulo
             # é re-derivado), então usamos o id como rótulo. Um POST malformado é
             # detectado abaixo (form re-exibido) — nunca é silencioso.
-            overrides[_FIELD_INTERESSADOS] = "¥".join(f"{iid}±{iid}" for iid in interessados_ids)
+            overrides[_FIELD_INTERESSADOS] = "¥".join(
+                f"{iid}±{iid}" for iid in dados.interessados_ids
+            )
 
         sbm = next((b for b in form.find_all("button") if _tag_str(b, "name") == "btnSalvar"), None)
         if sbm is not None:
@@ -3562,13 +3550,7 @@ class SEIWebClient:
     async def incluir_documento_externo(
         self,
         protocolo_formatado: str,
-        arquivo_path: str | None = None,
-        nome_arquivo: str | None = None,
-        id_serie: str | None = None,
-        data_elaboracao: str = "",
-        nivel_acesso: str = "0",
-        hipotese_legal: str = "",
-        conteudo: bytes | None = None,
+        dados: DocumentoExternoInclusaoWeb | None = None,
     ) -> dict:
         """Inclui documento externo (upload de arquivo) em processo SEI via web.
 
@@ -3586,6 +3568,15 @@ class SEIWebClient:
             {"sucesso": True, "url_final": str}
             ou {"tipos_disponiveis": [{id, nome}, ...]} se id_serie=None
         """
+        _d = dados or DocumentoExternoInclusaoWeb()
+        arquivo_path = _d.arquivo_path
+        nome_arquivo = _d.nome_arquivo
+        id_serie = _d.id_serie
+        data_elaboracao = _d.data_elaboracao
+        nivel_acesso = _d.nivel_acesso
+        hipotese_legal = _d.hipotese_legal
+        conteudo = _d.conteudo
+
         await self.ensure_authenticated()
 
         async with self._form_lock:
@@ -3607,16 +3598,7 @@ class SEIWebClient:
             async with self._form_lock:
                 self._form_action = None
             await self.login()
-            return await self.incluir_documento_externo(
-                protocolo_formatado,
-                arquivo_path,
-                nome_arquivo,
-                id_serie,
-                data_elaboracao,
-                nivel_acesso,
-                hipotese_legal,
-                conteudo,
-            )
+            return await self.incluir_documento_externo(protocolo_formatado, dados)
 
         soup_fs = BeautifulSoup(r1.text, "html.parser")
         ifr = soup_fs.find("iframe", id="ifrArvore")

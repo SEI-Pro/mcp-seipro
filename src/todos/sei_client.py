@@ -18,8 +18,10 @@ from todos.backends.models import (
     EnvioProcesso,
     FiltroListagemProcessos,
     FiltrosPesquisaProcessos,
+    NovoDocumentoExterno,
     NovoDocumentoInterno,
     NovoProcesso,
+    SEIClientConfig,
 )
 from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import (
@@ -78,24 +80,15 @@ _CAMPOS_PESQUISA_PROCESSO: dict[str, str] = {
 class SEIClient:
     """Cliente REST assíncrono para qualquer instância do SEI com mod-wssei v2."""
 
-    def __init__(
-        self,
-        *,
-        sei_url: str = "",
-        sei_web_url: str = "",
-        sei_usuario: str = "",
-        sei_senha: str = "",
-        sei_orgao: str = "",
-        sei_contexto: str = "",
-        sei_verify_ssl: str | bool | None = None,
-    ) -> None:
-        """Initialise from keyword args (sei_url, sei_usuario, sei_senha, …) or env vars."""
-        self.base_url = (sei_url or os.environ.get("SEI_URL", "")).rstrip("/")
-        self._usuario = sei_usuario or os.environ.get("SEI_USUARIO", "")
+    def __init__(self, config: SEIClientConfig | None = None) -> None:
+        """Initialise from a SEIClientConfig (or env vars when config is None/default)."""
+        cfg = config or SEIClientConfig()
+        self.base_url = (cfg.sei_url or os.environ.get("SEI_URL", "")).rstrip("/")
+        self._usuario = cfg.sei_usuario or os.environ.get("SEI_USUARIO", "")
 
         # Resolve o sei_root de forma consistente com SEIWebClient para namespace do keyring.
         # §1.1: usa urlparse para extrair scheme://host sem assumir componentes do path.
-        _sei_web_url = sei_web_url or os.environ.get("SEI_WEB_URL", "")
+        _sei_web_url = cfg.sei_web_url or os.environ.get("SEI_WEB_URL", "")
         if _sei_web_url:
             self.sei_root = _sei_web_url.rstrip("/")
         elif self.base_url:
@@ -113,7 +106,7 @@ class SEIClient:
         else:
             self.sei_root = self.base_url.rstrip("/")
 
-        self._senha = sei_senha or os.environ.get("SEI_SENHA", "")
+        self._senha = cfg.sei_senha or os.environ.get("SEI_SENHA", "")
         # Pre-compute keyring key so autenticar() can do the actual lookup in a thread.
         # §1.5: usa apenas netloc (host+port) para chave estável, nunca a URL completa.
         self._keyring_user: str | None = None
@@ -124,8 +117,8 @@ class SEIClient:
                 f"{self._usuario}@{instance_host}" if instance_host else self._usuario
             )
 
-        self._orgao = sei_orgao or os.environ.get("SEI_ORGAO", "0")
-        self._contexto = sei_contexto or os.environ.get("SEI_CONTEXTO", "")
+        self._orgao = cfg.sei_orgao or os.environ.get("SEI_ORGAO", "0")
+        self._contexto = cfg.sei_contexto or os.environ.get("SEI_CONTEXTO", "")
         self._token: str | None = None
         self._unidade_ativa: str | None = None
         self._id_usuario: str | None = None
@@ -139,8 +132,8 @@ class SEIClient:
         }
 
         _raw_verify: str | bool = (
-            sei_verify_ssl
-            if sei_verify_ssl is not None
+            cfg.sei_verify_ssl
+            if cfg.sei_verify_ssl is not None
             else os.environ.get("SEI_VERIFY_SSL", "true")
         )
         _verify: bool = (
@@ -1847,37 +1840,32 @@ class SEIClient:
     async def criar_documento_externo(
         self,
         id_procedimento: str,
-        id_serie: str,
-        arquivo_path: str,
-        descricao: str = "",
-        nivel_acesso: str = "0",
-        id_unidade: str = "",
+        dados: NovoDocumentoExterno,
     ) -> dict:
         """Cria documento externo com upload de arquivo em um processo SEI.
 
-        arquivo_path: caminho local do arquivo (PDF, imagem, etc.)
         Retorna: {idDocumento, protocoloDocumentoFormatado}
         """
-        if not await asyncio.to_thread(Path(arquivo_path).exists):
-            msg = f"Arquivo não encontrado: {arquivo_path}"
+        if not await asyncio.to_thread(Path(dados.arquivo_path).exists):
+            msg = f"Arquivo não encontrado: {dados.arquivo_path}"
             raise SEIError(msg)
 
-        nome_arquivo = Path(arquivo_path).name
+        nome_arquivo = Path(dados.arquivo_path).name
         data_hoje = datetime.now(tz=UTC).astimezone().strftime("%d/%m/%Y")
 
         resp = await self._post_with_file_reopen(
             url=f"{self.base_url}/documento/{id_procedimento}/externo/criar",
-            arquivo_path=arquivo_path,
+            arquivo_path=dados.arquivo_path,
             nome_arquivo=nome_arquivo,
             data={
-                "idSerie": id_serie,
+                "idSerie": dados.id_serie,
                 "numero": "",
-                "descricao": descricao,
+                "descricao": dados.descricao,
                 "dataElaboracao": data_hoje,
-                "nivelAcesso": nivel_acesso,
+                "nivelAcesso": dados.nivel_acesso,
                 "idHipoteseLegal": "",
                 "grauSigilo": "",
-                "idUnidadeGeradoraProtocolo": id_unidade,
+                "idUnidadeGeradoraProtocolo": dados.id_unidade,
                 "assuntos": "",
                 "interessados": "",
                 "remetente": "",

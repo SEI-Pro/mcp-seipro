@@ -11,6 +11,7 @@ import base64
 import logging
 from typing import TYPE_CHECKING
 
+from todos.backends.models import DocumentoExternoInclusaoWeb
 from todos.backends.web._session import _WebMixin
 from todos.exceptions import SEINotImplementedError
 
@@ -133,14 +134,16 @@ class DocumentosWeb(_WebMixin):
         if dados.arquivo_base64:
             conteudo = base64.b64decode(dados.arquivo_base64, validate=True)
         return await self._web.incluir_documento_externo(
-            protocolo_formatado=processo,
-            arquivo_path=dados.arquivo_path or None,
-            nome_arquivo=dados.nome_arquivo or None,
-            id_serie=dados.id_serie or None,
-            data_elaboracao=dados.data_elaboracao,
-            nivel_acesso=dados.nivel_acesso,
-            hipotese_legal=dados.hipotese_legal,
-            conteudo=conteudo,
+            processo,
+            DocumentoExternoInclusaoWeb(
+                arquivo_path=dados.arquivo_path or None,
+                nome_arquivo=dados.nome_arquivo or None,
+                id_serie=dados.id_serie or None,
+                data_elaboracao=dados.data_elaboracao,
+                nivel_acesso=dados.nivel_acesso,
+                hipotese_legal=dados.hipotese_legal,
+                conteudo=conteudo,
+            ),
         )
 
     async def listar_assinaturas(

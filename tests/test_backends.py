@@ -20,6 +20,7 @@ import pytest
 from todos.backends import NovoDocumentoExterno
 from todos.backends.base import SEIBackend
 from todos.backends.composite import CompositeBackend, build_backend
+from todos.backends.models import SEIClientConfig
 from todos.backends.rest import SEIRestBackend
 from todos.backends.web import SEIWebBackend
 from todos.exceptions import (
@@ -375,7 +376,7 @@ def test_build_backend_web_only_without_base_url() -> None:
 
 
 def test_build_backend_includes_rest_with_base_url() -> None:
-    client = SEIClient(sei_url="https://example.gov.br/sei/modulos/wssei/api/v2")
+    client = SEIClient(SEIClientConfig(sei_url="https://example.gov.br/sei/modulos/wssei/api/v2"))
     backend = build_backend(client, SEIWebClient())
     assert isinstance(backend, CompositeBackend)
     assert backend._rest is not None

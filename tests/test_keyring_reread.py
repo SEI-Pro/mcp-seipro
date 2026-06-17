@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import keyring as _keyring
 
+from todos.backends.models import SEIWebClientConfig
 from todos.sei_web_client import SEIWebClient
 
 if TYPE_CHECKING:
@@ -14,7 +15,9 @@ if TYPE_CHECKING:
 
 
 def _client(senha: str = "") -> SEIWebClient:
-    return SEIWebClient(sei_web_url="https://sei.gov.br", sei_usuario="u", sei_senha=senha)
+    return SEIWebClient(
+        SEIWebClientConfig(sei_web_url="https://sei.gov.br", sei_usuario="u", sei_senha=senha)
+    )
 
 
 def test_keyring_user_persist_set_when_no_password() -> None:

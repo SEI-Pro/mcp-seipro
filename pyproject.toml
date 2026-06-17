@@ -79,16 +79,9 @@ ignore = [
     # subprocess calls use sys.executable or controlled Path objects — not shell injection
     "S603",
 ]
-"src/todos/sei_client.py" = [
-    # __init__ has 7 keyword-only config params (URL + credential fields) — a dataclass
-    # would break the env-var-based constructor contract used everywhere.
-    # criar_documento_externo has 6 params; NovoDocumentoExterno model mismatch (id_unidade
-    # vs arquivo_base64/nome_arquivo) prevents a clean migration in this wave.
-    "PLR0913",
-]
 "src/todos/sei_web_client.py" = [
     # Scraper methods are inherently complex (multi-step web flows, branching HTML layouts)
-    "C901", "PLR0912", "PLR0913", "PLR0915",
+    "C901", "PLR0912", "PLR0915",
 ]
 "src/todos/server.py" = [
     "PLR0913",  # MCP tools need ctx + ≥4 business params; grouping into dataclasses hides the MCP schema

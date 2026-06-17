@@ -19,7 +19,7 @@ from todos.backends import SEIBackend as _SEIBackendV2
 from todos.backends import (
     build_backend,
 )
-from todos.backends.models import FiltrosPesquisaProcessos
+from todos.backends.models import FiltrosPesquisaProcessos, SEIClientConfig, SEIWebClientConfig
 from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import (
     SEIConnectionError,
@@ -119,7 +119,7 @@ async def _get_client(ctx: Context | None) -> SEIClient:
             if client is not None:
                 return client
             evicted = _evict_oldest(clients, max_sessions)
-            client = SEIClient(**creds)
+            client = SEIClient(SEIClientConfig(**creds))
             clients[ctx.session_id] = client
 
         if evicted is not None:
@@ -162,7 +162,7 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
             if client is not None:
                 return client
             evicted = _evict_oldest(clients, max_sessions)
-            client = SEIWebClient(**creds)
+            client = SEIWebClient(SEIWebClientConfig(**creds))
             clients[ctx.session_id] = client
 
         if evicted is not None:

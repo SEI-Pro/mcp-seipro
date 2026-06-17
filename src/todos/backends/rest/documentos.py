@@ -105,13 +105,7 @@ class DocumentosRest(_RestMixin):
     async def criar_documento_externo(self, processo: str, dados: NovoDocumentoExterno) -> dict:
         """Cria um documento externo (upload de arquivo) em um processo."""
         id_proc = await self._resolver_processo(processo)
-        return await self._rest.criar_documento_externo(
-            id_procedimento=id_proc,
-            id_serie=dados.id_serie,
-            arquivo_path=dados.arquivo_path,
-            descricao=dados.descricao,
-            nivel_acesso=dados.nivel_acesso,
-        )
+        return await self._rest.criar_documento_externo(id_proc, dados)
 
     async def alterar_documento_interno(
         self,
