@@ -795,6 +795,13 @@ _TOOLS_WITHOUT_ROUTING: frozenset[str] = frozenset(
         "sei_listar_usuarios",  # backend.listar_usuarios(filtro=, ...) — args opcionais
         "sei_listar_grupos_modelos",  # backend.listar_grupos_modelos() sem args
         "sei_listar_modelos",  # backend.listar_modelos(id_grupo=) — ver catalogos.py
+        # --- tools de orquestração em server.py (multi-estratégia, REST-only) ---
+        "sei_buscar_documento",  # multi-estratégia Solr + árvore web
+        "sei_resumo_processos",  # agregação REST por tipo/responsável/situação
+        "sei_pesquisar_processos",  # pesquisa Solr + paginação REST
+        "sei_enviar_processo",  # resolve sigla→id + tramita (multi-step)
+        "sei_atribuir_processo",  # resolve nome→id + atribui (multi-step)
+        "sei_sobrestar_processo",  # compõe verificação + sobrestamento
     }
 )
 

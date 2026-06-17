@@ -1,6 +1,8 @@
 """MCP Server genérico para o SEI (Sistema Eletrônico de Informações)."""
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import os
@@ -25,6 +27,7 @@ from todos.exceptions import (
     SEIConnectionError,
     SEIError,
     SEINotFoundError,
+    SEIValidationError,
 )
 from todos.sei_client import SEIClient
 from todos.sei_styles import (
@@ -296,7 +299,7 @@ mcp = FastMCP(
         "Se total_volumes > 1, separe por volume.\n"
         # ── Compatibilidade ──────────────────────────────────────────────────
         "=== COMPATIBILIDADE ===\n"
-        "Todos os 121 tools funcionam em qualquer SEI 4.0+ (com ou sem mod-wssei). "
+        "Todos os 124 tools funcionam em qualquer SEI 4.0+ (com ou sem mod-wssei). "
         "Exceção: sei_listar_relacionamentos requer mod-wssei 3.0.2+ (SEI 5.0.x). "
         "Assinatura (sei_assinar_documento, sei_assinar_bloco) requer mod-wssei. "
         "Se endpoint falhar inesperadamente, use sei_versao para diagnosticar.\n"
@@ -656,6 +659,30 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
 
 def _json(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
+def _encode_cursor(pagina: int, **extra: object) -> str:
+    """Codifica página + filtros opcionais como cursor opaco base64url."""
+    payload = json.dumps({"p": pagina, **extra}, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(payload).decode()
+
+
+def _decode_cursor(cursor: str) -> dict:
+    """Decodifica cursor opaco retornado por _encode_cursor.
+
+    Levanta SEIValidationError com hint de recuperação se o cursor for inválido
+    em vez de propagar binascii.Error/JSONDecodeError como 'internal error'.
+    """
+    if not cursor:
+        return {}
+    try:
+        return json.loads(base64.urlsafe_b64decode(cursor.encode()))
+    except (binascii.Error, ValueError, UnicodeDecodeError) as e:
+        msg = (
+            "Cursor de paginação inválido. Use o `proximo_cursor` retornado pela "
+            "última chamada, ou omita `cursor` para começar da primeira página."
+        )
+        raise SEIValidationError(msg) from e
 
 
 # Tool annotation profiles
