@@ -19,6 +19,7 @@ import httpx
 import keyring as _keyring
 from bs4 import BeautifulSoup
 
+from todos.backends.models import SEIWebClientConfig
 from todos.exceptions import SEIAuthError, SEICredenciaisError
 from todos.sei_web_client import SEIWebClient
 
@@ -315,13 +316,15 @@ def _validate_credentials(conn: _SEIConnConfig) -> None:
     logging.getLogger("todos").setLevel(logging.WARNING)
 
     web_client = SEIWebClient(
-        sei_web_url=conn.sei_root,
-        sei_usuario=conn.usuario,
-        sei_senha=conn.senha,
-        sei_sigla_orgao=conn.sigla_orgao,
-        sei_sigla_orgao_sistema=conn.sigla_orgao_sistema,
-        sei_sigla_sistema=conn.sigla_sistema,
-        sei_verify_ssl=not conn.verify_ssl_disabled,
+        SEIWebClientConfig(
+            sei_web_url=conn.sei_root,
+            sei_usuario=conn.usuario,
+            sei_senha=conn.senha,
+            sei_sigla_orgao=conn.sigla_orgao,
+            sei_sigla_orgao_sistema=conn.sigla_orgao_sistema,
+            sei_sigla_sistema=conn.sigla_sistema,
+            sei_verify_ssl=not conn.verify_ssl_disabled,
+        )
     )
 
     async def do_test_login() -> dict:

@@ -87,6 +87,7 @@ class NovoDocumentoExterno:
     data_elaboracao: str = ""
     nivel_acesso: str = "0"
     hipotese_legal: str = ""
+    id_unidade: str = ""
 
 
 @dataclass(frozen=True)
@@ -119,3 +120,67 @@ class CredenciaisAssinatura:
     cargo: str
     orgao: str = ""
     id_usuario: str = ""
+
+
+@dataclass(frozen=True)
+class SEIClientConfig:
+    """Parâmetros de conexão do SEIClient REST."""
+
+    sei_url: str = ""
+    sei_web_url: str = ""
+    sei_usuario: str = ""
+    sei_senha: str = ""
+    sei_orgao: str = ""
+    sei_contexto: str = ""
+    sei_verify_ssl: str | bool | None = None
+
+
+@dataclass(frozen=True)
+class SEIWebClientConfig:
+    """Parâmetros de conexão do SEIWebClient (scraper)."""
+
+    sei_url: str = ""
+    sei_web_url: str = ""
+    sei_usuario: str = ""
+    sei_senha: str = ""
+    sei_orgao: str = ""
+    sei_sigla_orgao: str = ""
+    sei_sigla_sistema: str = ""
+    sei_sigla_orgao_sistema: str = ""
+    sei_verify_ssl: str | bool | None = None
+
+
+@dataclass
+class NovoProcessoWeb:
+    """Dados para criação de processo via scraper web."""
+
+    tipo_processo: str
+    especificacao: str = ""
+    assuntos_ids: list[str] | None = None
+    interessados_ids: list[str] | None = None
+    nivel_acesso: str = "0"
+    hipotese_legal: str = ""
+
+
+@dataclass(frozen=True)
+class OpcoesTramitacaoWeb:
+    """Opções de tramitação de processo via scraper web."""
+
+    manter_aberto: str = "N"
+    remover_anotacao: str = "N"
+    enviar_email: str = "N"
+    data_retorno: str = ""
+    dias_retorno: str = ""
+
+
+@dataclass
+class DocumentoExternoInclusaoWeb:
+    """Parâmetros de inclusão de documento externo via scraper web."""
+
+    arquivo_path: str | None = None
+    nome_arquivo: str | None = None
+    id_serie: str | None = None
+    data_elaboracao: str = ""
+    nivel_acesso: str = "0"
+    hipotese_legal: str = ""
+    conteudo: bytes | None = None

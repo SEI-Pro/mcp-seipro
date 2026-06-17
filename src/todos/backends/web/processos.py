@@ -10,6 +10,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from todos.backends.models import NovoProcessoWeb, OpcoesTramitacaoWeb
 from todos.backends.web._session import _WebMixin
 from todos.exceptions import SEIConnectionError, SEIValidationError
 
@@ -116,12 +117,14 @@ class ProcessosWeb(_WebMixin):
             raise SEIValidationError(msg)
         interessados_ids = [i.strip() for i in dados.interessados.split(",") if i.strip()]
         return await self._web.criar_processo_web(
-            tipo_processo=dados.tipo_processo,
-            especificacao=dados.especificacao,
-            assuntos_ids=assuntos_ids,
-            interessados_ids=interessados_ids,
-            nivel_acesso=dados.nivel_acesso,
-            hipotese_legal=dados.hipotese_legal,
+            NovoProcessoWeb(
+                tipo_processo=dados.tipo_processo,
+                especificacao=dados.especificacao,
+                assuntos_ids=assuntos_ids,
+                interessados_ids=interessados_ids,
+                nivel_acesso=dados.nivel_acesso,
+                hipotese_legal=dados.hipotese_legal,
+            )
         )
 
     async def alterar_processo(
@@ -166,13 +169,15 @@ class ProcessosWeb(_WebMixin):
                 raise SEIValidationError(msg)
             ids_resolvidos.append(exact["id"])
         return await self._web.enviar_processo_web(
-            protocolo=processo,
-            unidades_ids=ids_resolvidos,
-            manter_aberto=dados.manter_aberto,
-            remover_anotacao=dados.remover_anotacao,
-            enviar_email=dados.enviar_email,
-            data_retorno=dados.data_retorno,
-            dias_retorno=dados.dias_retorno,
+            processo,
+            ids_resolvidos,
+            OpcoesTramitacaoWeb(
+                manter_aberto=dados.manter_aberto,
+                remover_anotacao=dados.remover_anotacao,
+                enviar_email=dados.enviar_email,
+                data_retorno=dados.data_retorno,
+                dias_retorno=dados.dias_retorno,
+            ),
         )
 
     async def concluir_processo(self, processo: str) -> dict:

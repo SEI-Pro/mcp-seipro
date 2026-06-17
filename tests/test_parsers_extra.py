@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl
 import httpx
 from bs4 import BeautifulSoup, Tag
 
+from todos.backends.models import SEIWebClientConfig
 from todos.sei_web_client import (
     SEIWebClient,
     _extract_tooltip,
@@ -712,7 +713,9 @@ class TestParseProcedimentoConsultar:
 
 
 def make_client() -> SEIWebClient:
-    return SEIWebClient(sei_web_url="http://sei.test", sei_usuario="u", sei_senha="p")
+    return SEIWebClient(
+        SEIWebClientConfig(sei_web_url="http://sei.test", sei_usuario="u", sei_senha="p")
+    )
 
 
 # ---------------------------------------------------------------------------
