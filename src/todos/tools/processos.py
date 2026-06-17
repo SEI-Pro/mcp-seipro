@@ -53,7 +53,16 @@ def _to_str_list(items: list) -> list[str]:
         if isinstance(item, str):
             out.append(item)
         elif isinstance(item, dict):
-            out.append(item.get("nome") or item.get("sigla") or item.get("unidade") or str(item))
+            label = (
+                item.get("nome")
+                or item.get("sigla")
+                or item.get("unidade")
+                or item.get("codigo")
+                or item.get("descricao")
+                or ""
+            )
+            if label:
+                out.append(label)
     return out
 
 
@@ -97,7 +106,8 @@ def _shape_lista_documentos(result: dict, protocolo: str, *, tool_name: str) -> 
 def _shape_atividades(result: dict, *, ordem: str = "desc") -> dict:
     """Retorna andamentos em formato shaped a partir do payload bruto de listar_atividades."""
     andamentos: list = list(result.get("andamentos", []))
-    if ordem == "desc":
+    # Raw list from web scraper is newest-first; reverse only when ascending order is requested.
+    if ordem == "asc":
         andamentos.reverse()
     total = result.get("total_andamentos", len(andamentos))
     truncated = andamentos[:_ATIVIDADES_LIMIT]
@@ -118,7 +128,6 @@ def _shape_consultar_processo(merged: dict, protocolo: str) -> dict:
     total_docs = merged.get("total_documentos", len(merged.get("documentos", [])))
 
     interessados = _to_str_list(merged.get("interessados", []))
-    unidades = _to_str_list(merged.get("unidades_abertas", []))
 
     actions: list[NextAction] = []
     if total_docs > 0:
@@ -136,10 +145,8 @@ def _shape_consultar_processo(merged: dict, protocolo: str) -> dict:
         or merged.get("protocolo", protocolo),
         tipo=merged.get("NomeTipoProcedimento") or merged.get("tipo", ""),
         especificacao=merged.get("especificacao", ""),
-        situacao=merged.get("situacao", ""),
         nivel_acesso=merged.get("nivelAcesso", merged.get("nivel_acesso", "")),
         interessados=interessados,
-        unidades_abertas=unidades,
         total_documentos=total_docs,
         next_actions=actions,
     )
@@ -253,7 +260,16 @@ async def sei_listar_documentos(
                 "id": str(d.get("id", "")),
                 "numero_sei": d.get("atributos", {}).get("protocoloFormatado", ""),
                 "tipo_documento": d.get("atributos", {}).get("tipoDocumento", ""),
-                "nome_composto": d.get("atributos", {}).get("tipoDocumento", ""),
+                "nome_composto": " ".join(
+                    filter(
+                        None,
+                        [
+                            d.get("atributos", {}).get("tipoDocumento", ""),
+                            d.get("atributos", {}).get("siglaUnidade", ""),
+                            str(d.get("id", "")),
+                        ],
+                    )
+                ),
                 "sigla_unidade": d.get("atributos", {}).get("siglaUnidade", ""),
             }
             for d in raw
