@@ -53,6 +53,7 @@ from todos.mcp_app import (
     _http_mode,
     _json,
     _resolver_documento,
+    _shape_resposta_escrita,
     mcp,
 )
 from todos.sei_styles import (
@@ -316,7 +317,7 @@ async def sei_criar_documento(
         id_unidade=id_unidade,
     )
     result = await (await _backend(ctx)).criar_documento_interno(processo, dados)
-    return _json(result)
+    return _json(_shape_resposta_escrita(result, "criar_documento"))
 
 
 @mcp.tool(annotations=_READ)
@@ -523,7 +524,7 @@ async def sei_criar_documento_externo(
         nivel_acesso=nivel_acesso,
     )
     result = await (await _backend(ctx)).criar_documento_externo(processo, dados)
-    return _json(result)
+    return _json(_shape_resposta_escrita(result, "criar_documento_externo"))
 
 
 @mcp.tool(annotations=_READ)
@@ -626,7 +627,7 @@ async def sei_alterar_documento_externo(
         hipotese_legal=hipotese_legal,
         arquivo_path=arquivo_path,
     )
-    return _json(result)
+    return _json(_shape_resposta_escrita(result, "alterar_documento_externo"))
 
 
 @mcp.tool(annotations=_READ)
@@ -730,7 +731,7 @@ async def sei_incluir_documento_externo(
             hipotese_legal=hipotese_legal,
         )
         result = await (await _backend(ctx)).criar_documento_externo(processo, dados)
-        return _json(result)
+        return _json(_shape_resposta_escrita(result, "incluir_documento_externo"))
     except httpx.RequestError as e:
         msg = f"SEI inacessível: {e}"
         raise SEIConnectionError(msg) from e

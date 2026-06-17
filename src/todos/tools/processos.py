@@ -31,6 +31,7 @@ from todos.mcp_app import (
     _WRITE,
     _backend,
     _json,
+    _shape_resposta_escrita,
     access_control,
     mcp,
 )
@@ -508,7 +509,7 @@ async def sei_criar_processo(
             hipotese_legal=hipotese_legal,
         )
     )
-    return _json(result)
+    return _json(_shape_resposta_escrita(result, "criar_processo"))
 
 
 @mcp.tool(annotations=_WRITE)
@@ -540,7 +541,7 @@ async def sei_alterar_processo(
         hipotese_legal=hipotese_legal,
         observacao=observacao,
     )
-    return _json(result)
+    return _json(_shape_resposta_escrita(result, "alterar_processo"))
 
 
 # sei_enviar_processo permanece em server.py: a resolução sigla→id da unidade de

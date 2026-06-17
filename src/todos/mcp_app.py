@@ -29,7 +29,7 @@ from todos.exceptions import (
     SEINotFoundError,
     SEIValidationError,
 )
-from todos.responses import NextAction
+from todos.responses import NextAction, RespostaEscrita
 from todos.sei_client import SEIClient
 from todos.sei_styles import (
     SEI_STYLES,
@@ -660,6 +660,25 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
 
 def _json(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
+def _shape_resposta_escrita(result: dict, acao: str) -> dict:
+    """Retorna RespostaEscrita normalizada para operações de escrita."""
+    return RespostaEscrita(
+        acao=acao,
+        id_procedimento=result.get("IdProcedimento")
+        or result.get("idProcedimento")
+        or result.get("id_procedimento"),
+        protocolo=(
+            result.get("ProtocoloProcedimentoFormatado")
+            or result.get("ProtocoloFormatado")
+            or result.get("protocoloFormatado")
+            or result.get("protocolo")
+        ),
+        id_documento=result.get("idDocumento") or result.get("id_documento"),
+        numero_sei=result.get("protocoloDocumentoFormatado") or result.get("numero_sei"),
+        mensagem=result.get("mensagem"),
+    ).model_dump(exclude_none=True)
 
 
 def _encode_cursor(pagina: int, **extra: object) -> str:
