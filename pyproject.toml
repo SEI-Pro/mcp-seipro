@@ -67,9 +67,7 @@ ignore = [
     "D203",   # keep D211 (no blank line before class)
     "D213",   # keep D212 (summary on first line)
     # ── Intentional project-wide decisions ────────────────────────────────
-    "RUF001", "RUF002", "RUF003",    # ambiguous unicode — Portuguese text is intentional
     "CPY001",                        # no copyright headers
-    "S104",   # 0.0.0.0 intentional — Railway/container deploy (same as bandit skip)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -79,6 +77,9 @@ ignore = [
 "src/todos/setup_wizard.py" = [
     # subprocess calls use sys.executable or controlled Path objects — not shell injection
     "S603",
+]
+"src/todos/remote.py" = [
+    "S104",  # 0.0.0.0 string comparison is intentional — detects Railway/container binding and warns
 ]
 "src/todos/sei_web_client.py" = [
     # Scraper methods are inherently complex (multi-step web flows, branching HTML layouts)

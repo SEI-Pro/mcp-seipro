@@ -302,7 +302,7 @@ async def sei_resumo_processos(
     Exemplos:
     - agrupar_por="tipo" → quantidade por tipo processual
     - agrupar_por="atribuido" → distribuição por pessoa
-    - agrupar_por="tipo", agrupar_por_2="atribuido" → cruzamento tipo × pessoa
+    - agrupar_por="tipo", agrupar_por_2="atribuido" → cruzamento tipo x pessoa
     - agrupar_por="retorno" → processos com prazo vencido
     """
     try:
@@ -337,7 +337,7 @@ async def sei_resumo_processos(
 
         header = str(campo1["desc"])
         if campo2:
-            header += f" × {campo2['desc']}"
+            header += f" x {campo2['desc']}"
 
         return _json(
             {

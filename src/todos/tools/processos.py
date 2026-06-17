@@ -212,7 +212,7 @@ async def sei_arvore_processo(
 ) -> str:
     """Mostra a árvore completa de documentos de um processo SEI.
 
-    Implementação via scraper web (~10× mais rápido que REST: ~1 s vs ~12 s).
+    Implementação via scraper web (~10x mais rápido que REST: ~1 s vs ~12 s).
     Parseia arvore_montar.php para extrair id, tipo, sigla da unidade geradora
     e número SEI de cada documento.
 
@@ -246,7 +246,7 @@ async def sei_listar_documentos(
 ) -> str:
     """Lista todos os documentos de um processo SEI.
 
-    Implementação via scraper web (~10× mais rápido que REST).
+    Implementação via scraper web (~10x mais rápido que REST).
     Aceita o protocolo formatado (ex: 50300.000123/2025-00).
 
     Retorno padrão (include_raw=false): até 50 documentos shaped
@@ -446,7 +446,7 @@ async def sei_listar_processos(
 ) -> str:
     """Lista processos da caixa da unidade atual no SEI (Controle de Processos).
 
-    Implementação via scraper do frontend web (~20× mais rápida que a REST API).
+    Implementação via scraper do frontend web (~20x mais rápida que a REST API).
     O SEI pagina em até 500 processos por página; use `pagina` para navegar.
 
     Parâmetros:
