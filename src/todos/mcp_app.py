@@ -29,6 +29,7 @@ from todos.exceptions import (
     SEINotFoundError,
     SEIValidationError,
 )
+from todos.responses import NextAction
 from todos.sei_client import SEIClient
 from todos.sei_styles import (
     SEI_STYLES,
@@ -683,6 +684,60 @@ def _decode_cursor(cursor: str) -> dict:
             "última chamada, ou omita `cursor` para começar da primeira página."
         )
         raise SEIValidationError(msg) from e
+
+
+def _add_cursor(
+    result: dict,
+    *,
+    pagina: int,
+    limit: int,
+    tool_name: str,
+    cursor_extra: dict | None = None,
+) -> dict:
+    """Enriquece resultado paginado com proximo_cursor e next_actions (RFC 0007 §2).
+
+    Honestidade: marca tem_proxima_inferida=True quando a presença de mais páginas
+    só pode ser inferida de len(itens) >= limit (sem total real do servidor).
+
+    Distingue total real do servidor de total-fallback (len(items)):
+    - total > itens_pagina: o servidor retornou um total real — exato.
+    - total == itens_pagina: backend usou len(items) como fallback — inferido;
+      delega para flag `tem_proxima` (len(items) >= limit).
+    """
+    itens_count = result.get("itens_pagina", 0)
+    total = result.get("total_itens")
+
+    if total is not None and itens_count > 0 and total > itens_count:
+        # REST response with a real server total bigger than one page — exact
+        items_seen = pagina * limit + itens_count
+        has_more = total > items_seen
+        inferida = False
+    else:
+        # No itens_pagina (web client), or total == len(items) (REST fallback) —
+        # use tem_proxima flag (len(items) >= limit heuristic) and mark as inferred
+        has_more = bool(result.get("tem_proxima", False))
+        inferida = has_more
+
+    extra = cursor_extra or {}
+    if has_more:
+        proximo_cursor: str | None = _encode_cursor(pagina + 1, **extra)
+        actions: list[NextAction] = [
+            NextAction(
+                tool=tool_name,
+                args={"cursor": proximo_cursor},
+                reason=f"Há mais resultados; passe cursor para obter a página {pagina + 1}.",
+            )
+        ]
+    else:
+        proximo_cursor = None
+        actions = []
+
+    return {
+        **result,
+        "proximo_cursor": proximo_cursor,
+        "tem_proxima_inferida": inferida,
+        "next_actions": [a.model_dump() for a in actions],
+    }
 
 
 # Tool annotation profiles

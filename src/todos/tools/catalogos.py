@@ -12,7 +12,7 @@ ser objetos reais (não strings adiadas).
 
 from fastmcp import Context
 
-from todos.mcp_app import _READ, _WRITE, _backend, _json, mcp
+from todos.mcp_app import _READ, _WRITE, _add_cursor, _backend, _decode_cursor, _json, mcp
 
 _DEFAULT_LIMIT = 50
 
@@ -22,6 +22,7 @@ async def sei_pesquisar_hipoteses_legais(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa hipóteses legais disponíveis no SEI.
@@ -32,14 +33,35 @@ async def sei_pesquisar_hipoteses_legais(
 
     Exemplos: "pessoal", "controle interno", "sigilo fiscal"
 
+    Paginação: passe `cursor` = `proximo_cursor` da resposta anterior para
+    avançar páginas. Omita para começar do início.
+
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        filtro = decoded.get("filtro", filtro)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.pesquisar_hipoteses_legais(
         filtro=filtro,
         limit=limit,
         pagina=pagina,
     )
-    return _json(result)
+    extra: dict = {}
+    if filtro:
+        extra["filtro"] = filtro
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_hipoteses_legais",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -48,6 +70,7 @@ async def sei_pesquisar_tipos_processo(
     favoritos: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa tipos de processo disponíveis no SEI.
@@ -56,10 +79,17 @@ async def sei_pesquisar_tipos_processo(
     - filtro: texto para filtrar por nome (ex: "Plano Anual", "Fiscalização")
     - favoritos: "S" para apenas favoritos (REST apenas)
     - limit/pagina: paginação (REST apenas)
+    - cursor: cursor opaco de paginação — passe `proximo_cursor` da resposta anterior
 
     Use o 'id' retornado como tipo_processo em sei_criar_processo.
 
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        filtro = decoded.get("filtro", filtro)
+        favoritos = decoded.get("favoritos", favoritos)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.pesquisar_tipos_processo(
         filtro=filtro,
@@ -67,7 +97,22 @@ async def sei_pesquisar_tipos_processo(
         limit=limit,
         pagina=pagina,
     )
-    return _json(result)
+    extra: dict = {}
+    if filtro:
+        extra["filtro"] = filtro
+    if favoritos:
+        extra["favoritos"] = favoritos
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_tipos_processo",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -77,6 +122,7 @@ async def sei_pesquisar_tipos_documento(
     aplicabilidade: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa tipos de documento (séries) disponíveis no SEI.
@@ -87,10 +133,18 @@ async def sei_pesquisar_tipos_documento(
     - aplicabilidade: "I" para internos, "F" para externos (REST apenas)
     - limit: quantidade por página (REST apenas)
     - pagina: número da página (REST apenas)
+    - cursor: cursor opaco de paginação — passe `proximo_cursor` da resposta anterior
 
     Use o 'id' retornado como id_serie em sei_criar_documento.
 
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        filtro = decoded.get("filtro", filtro)
+        favoritos = decoded.get("favoritos", favoritos)
+        aplicabilidade = decoded.get("aplicabilidade", aplicabilidade)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.pesquisar_tipos_documento(
         filtro=filtro,
@@ -99,7 +153,24 @@ async def sei_pesquisar_tipos_documento(
         limit=limit,
         pagina=pagina,
     )
-    return _json(result)
+    extra: dict = {}
+    if filtro:
+        extra["filtro"] = filtro
+    if favoritos:
+        extra["favoritos"] = favoritos
+    if aplicabilidade:
+        extra["aplicabilidade"] = aplicabilidade
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_tipos_documento",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -107,6 +178,7 @@ async def sei_pesquisar_tipos_documento_externo(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa tipos de documento para documentos externos (séries externas).
@@ -116,14 +188,34 @@ async def sei_pesquisar_tipos_documento_externo(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
+    Paginação: passe `cursor` = `proximo_cursor` da resposta anterior.
+
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        filtro = decoded.get("filtro", filtro)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.pesquisar_tipos_documento_externo(
         filtro=filtro,
         limit=limit,
         pagina=pagina,
     )
-    return _json(result)
+    extra: dict = {}
+    if filtro:
+        extra["filtro"] = filtro
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_tipos_documento_externo",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -131,6 +223,7 @@ async def sei_pesquisar_tipos_conferencia(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa tipos de conferência para documentos externos.
@@ -140,14 +233,34 @@ async def sei_pesquisar_tipos_conferencia(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
+    Paginação: passe `cursor` = `proximo_cursor` da resposta anterior.
+
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        filtro = decoded.get("filtro", filtro)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.pesquisar_tipos_conferencia(
         filtro=filtro,
         limit=limit,
         pagina=pagina,
     )
-    return _json(result)
+    extra: dict = {}
+    if filtro:
+        extra["filtro"] = filtro
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_tipos_conferencia",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -155,6 +268,7 @@ async def sei_pesquisar_assuntos(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa assuntos disponíveis para processos.
@@ -163,14 +277,34 @@ async def sei_pesquisar_assuntos(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
+    Paginação: passe `cursor` = `proximo_cursor` da resposta anterior.
+
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        filtro = decoded.get("filtro", filtro)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.pesquisar_assuntos(
         filtro=filtro,
         limit=limit,
         pagina=pagina,
     )
-    return _json(result)
+    extra: dict = {}
+    if filtro:
+        extra["filtro"] = filtro
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_assuntos",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -211,6 +345,7 @@ async def sei_pesquisar_textos_padrao(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa textos padrão internos disponíveis na unidade.
@@ -220,20 +355,41 @@ async def sei_pesquisar_textos_padrao(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
+    Paginação: passe `cursor` = `proximo_cursor` da resposta anterior.
+
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        filtro = decoded.get("filtro", filtro)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.pesquisar_textos_padrao(
         filtro=filtro,
         limit=limit,
         pagina=pagina,
     )
-    return _json(result)
+    extra: dict = {}
+    if filtro:
+        extra["filtro"] = filtro
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_textos_padrao",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_grupos_modelos(
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Lista grupos de modelos de documento disponíveis.
@@ -241,10 +397,27 @@ async def sei_listar_grupos_modelos(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
+    Paginação: passe `cursor` = `proximo_cursor` da resposta anterior.
+
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.listar_grupos_modelos(limit=limit, pagina=pagina)
-    return _json(result)
+    extra: dict = {}
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_listar_grupos_modelos",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -253,17 +426,25 @@ async def sei_listar_modelos(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Lista modelos de documento disponíveis.
 
     - id_grupo: filtrar por grupo (use sei_listar_grupos_modelos)
     - filtro: texto para filtrar por nome
+    - cursor: cursor opaco de paginação — passe `proximo_cursor` da resposta anterior
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        id_grupo = decoded.get("id_grupo", id_grupo)
+        filtro = decoded.get("filtro", filtro)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.listar_modelos(
         id_grupo=id_grupo,
@@ -271,7 +452,18 @@ async def sei_listar_modelos(
         limit=limit,
         pagina=pagina,
     )
-    return _json(result)
+    extra: dict = {}
+    if id_grupo:
+        extra["id_grupo"] = id_grupo
+    if filtro:
+        extra["filtro"] = filtro
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result, pagina=pagina, limit=limit, tool_name="sei_listar_modelos", cursor_extra=extra
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)

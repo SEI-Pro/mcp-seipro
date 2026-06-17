@@ -12,7 +12,7 @@ ser objetos reais (não strings adiadas).
 
 from fastmcp import Context
 
-from todos.mcp_app import _IDEM, _READ, _backend, _json, mcp
+from todos.mcp_app import _IDEM, _READ, _add_cursor, _backend, _decode_cursor, _json, mcp
 
 _DEFAULT_LIMIT = 50
 
@@ -60,17 +60,39 @@ async def sei_pesquisar_unidades(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa unidades disponíveis no SEI por nome ou sigla.
 
     Útil para encontrar o ID de uma unidade destino ao tramitar processos.
-    Paginação: pagina=0 é a primeira página, pagina=1 a segunda, etc.
     Em instâncias sem mod-wssei, requer filtro não-vazio (busca via autocomplete AJAX).
+
+    Paginação: passe `cursor` = `proximo_cursor` da resposta anterior, ou use
+    `pagina` (0-indexado) para acesso direto.
+
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        filtro = decoded.get("filtro", filtro)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.pesquisar_unidades(filtro=filtro, limit=limit, pagina=pagina)
-    return _json(result)
+    extra: dict = {}
+    if filtro:
+        extra["filtro"] = filtro
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_unidades",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -137,6 +159,7 @@ async def sei_pesquisar_usuarios(
     id_orgao: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa usuários por palavra-chave no órgão.
@@ -146,12 +169,35 @@ async def sei_pesquisar_usuarios(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
+    Paginação: passe `cursor` = `proximo_cursor` da resposta anterior.
+
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        filtro = decoded.get("filtro", filtro)
+        id_orgao = decoded.get("id_orgao", id_orgao)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.pesquisar_usuarios(
         filtro=filtro, id_orgao=id_orgao, limit=limit, pagina=pagina
     )
-    return _json(result)
+    extra: dict = {}
+    if filtro:
+        extra["filtro"] = filtro
+    if id_orgao:
+        extra["id_orgao"] = id_orgao
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_usuarios",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -159,6 +205,7 @@ async def sei_pesquisar_outras_unidades(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa unidades excluindo a unidade atual.
@@ -167,10 +214,30 @@ async def sei_pesquisar_outras_unidades(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
 
+    Paginação: passe `cursor` = `proximo_cursor` da resposta anterior.
+
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        filtro = decoded.get("filtro", filtro)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.pesquisar_outras_unidades(filtro=filtro, limit=limit, pagina=pagina)
-    return _json(result)
+    extra: dict = {}
+    if filtro:
+        extra["filtro"] = filtro
+    if limit != _DEFAULT_LIMIT:
+        extra["limit"] = limit
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_outras_unidades",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
