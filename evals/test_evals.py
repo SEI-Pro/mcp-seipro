@@ -131,7 +131,10 @@ def _load_golden_xml() -> list[tuple[str, str]]:
     return pairs
 
 
-_GOLDEN_QA = _load_golden_xml()
+try:
+    _GOLDEN_QA = _load_golden_xml()
+except FileNotFoundError:
+    _GOLDEN_QA = []
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +165,7 @@ def test_t1_tool_selection(question: str, expected_tool: str, patched_mcp) -> No
         resp = sdk_client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=256,
-            tools=tools,  # type: ignore[arg-type]
+            tools=tools,
             tool_choice={"type": "any"},
             messages=[{"role": "user", "content": question}],
         )

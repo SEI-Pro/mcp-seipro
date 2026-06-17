@@ -241,7 +241,6 @@ class FixtureBackend:
     """
 
     name = "fixture"
-    has_rest = True
 
     async def consultar_processo(self, _processo: str) -> dict:
         """Return fixture processo data."""
@@ -339,9 +338,11 @@ class FixtureBackend:
     async def pesquisar_tipos_processo(
         self,
         filtro: str = "",
-        _limit: int = 50,
-        _pagina: int = 0,
-        _cursor: str = "",
+        favoritos: str = "",
+        limit: int = 50,
+        pagina: int = 0,
+        cursor: str = "",
+        **_kwargs: object,
     ) -> dict:
         """Return fixture tipos de processo filtered by name."""
         filtro_lower = filtro.lower()
@@ -356,10 +357,13 @@ class FixtureBackend:
 
     async def pesquisar_tipos_documento(
         self,
-        _filtro: str = "",
-        _limit: int = 50,
-        _pagina: int = 0,
-        _cursor: str = "",
+        filtro: str = "",
+        favoritos: str = "",
+        aplicabilidade: str = "",
+        limit: int = 50,
+        pagina: int = 0,
+        cursor: str = "",
+        **_kwargs: object,
     ) -> dict:
         """Return empty tipos de documento for eval fixture."""
         return {"tipos": [], "total": 0, "proximo_cursor": None}
@@ -385,9 +389,9 @@ class FixtureBackend:
 
     async def pesquisar_unidades(
         self,
-        _filtro: str = "",
-        _limit: int = 50,
-        _pagina: int = 0,
+        filtro: str = "",
+        limit: int = 50,
+        pagina: int = 0,
     ) -> dict:
         """Return fixture units search."""
         return {
@@ -395,7 +399,7 @@ class FixtureBackend:
             "total": 1,
         }
 
-    async def pesquisar_marcadores(self, _filtro: str = "") -> list[dict]:
+    async def pesquisar_marcadores(self, filtro: str = "") -> list[dict]:
         """Return fixture marcadores."""
         return [
             {"id": "1", "nome": "Urgente", "cor": "Vermelho"},
@@ -404,11 +408,11 @@ class FixtureBackend:
 
     async def pesquisar_usuarios(
         self,
-        _filtro: str = "",
-        _id_orgao: str = "",
-        _limit: int = 50,
-        _pagina: int = 0,
-        _cursor: str = "",
+        filtro: str = "",
+        id_orgao: str = "",
+        limit: int = 50,
+        pagina: int = 0,
+        cursor: str = "",
     ) -> dict:
         """Return fixture usuarios search."""
         return {
@@ -418,9 +422,9 @@ class FixtureBackend:
 
     async def listar_usuarios(
         self,
-        _filtro: str = "",
+        filtro: str = "",
         *,
-        _apenas_unidade: bool = True,
+        apenas_unidade: bool = True,
     ) -> dict:
         """Return fixture user list."""
         return {
@@ -447,7 +451,7 @@ class FakeRESTClient:
 
     base_url = "http://fake-sei.test/api/v2"
 
-    async def listar_processos(self, _filtros: object = None) -> dict:
+    async def listar_processos(self, filtros: object = None) -> dict:
         """Return fixture process list for resumo_processos aggregation."""
         return {
             "processos": list(_FIXTURE_PROCESSOS_CAIXA),

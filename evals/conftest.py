@@ -65,11 +65,16 @@ def patched_mcp(fixture_backend: FixtureBackend, fake_rest_client: FakeRESTClien
     async def _fake_get_client(_ctx: object) -> FakeRESTClient:
         return fake_rest_client
 
+    async def _fake_has_rest(_ctx: object) -> bool:
+        return True
+
     for mod_name in _TOOL_MODULES:
         mod = importlib.import_module(mod_name)
         if hasattr(mod, "_backend"):
             monkeypatch.setattr(mod, "_backend", _fake_backend)
         if hasattr(mod, "_get_client"):
             monkeypatch.setattr(mod, "_get_client", _fake_get_client)
+        if hasattr(mod, "_has_rest"):
+            monkeypatch.setattr(mod, "_has_rest", _fake_has_rest)
 
     return mcp

@@ -110,7 +110,7 @@ ignore = [
     "PLR0913",  # sei_criar_processo (7 business fields) + sei_alterar_processo: MCP API surface
 ]
 "tests/**" = ["S101", "ANN", "D", "PLR2004", "SLF001", "FBT003"]  # assert/no-annot/no-docstring/magic-vals/bool-args ok in tests
-"evals/**" = ["S101", "ANN", "D", "PLR2004", "SLF001", "FBT003", "INP001"]  # same relaxations as tests/
+"evals/**" = ["S101", "ANN", "D", "PLR2004", "PLR0913", "SLF001", "FBT003", "INP001", "ARG"]  # same relaxations as tests/
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "evals"]

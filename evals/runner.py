@@ -14,10 +14,12 @@ from typing import TYPE_CHECKING
 import anthropic
 from fastmcp.client import Client, FastMCPTransport
 from fastmcp.exceptions import ToolError
+from mcp.types import TextContent
 
 from todos.mcp_app import mcp as _default_mcp
 
 if TYPE_CHECKING:
+    from anthropic.types import MessageParam, ToolParam, ToolResultBlockParam, ToolUseBlock
     from fastmcp import FastMCP
 
 _TOOL_MODULES = [
@@ -35,6 +37,7 @@ _TOOL_MODULES = [
 ]
 
 _MAX_TURNS = 15
+_sdk_client = anthropic.AsyncAnthropic()
 
 
 def _ensure_tools_registered() -> None:
@@ -43,7 +46,7 @@ def _ensure_tools_registered() -> None:
         importlib.import_module(mod_name)
 
 
-def _to_anthropic_tools(mcp_tools: list) -> list[dict]:
+def _to_anthropic_tools(mcp_tools: list) -> list[ToolParam]:
     """Convert FastMCP tool list to Anthropic SDK tool format."""
     return [
         {
@@ -82,34 +85,34 @@ async def run_agent(
         _ensure_tools_registered()
         mcp_server = _default_mcp
 
-    sdk_client = anthropic.AsyncAnthropic()
-
     async with Client(FastMCPTransport(mcp_server)) as fastmcp_client:
         mcp_tools = await fastmcp_client.list_tools()
-        tools = _to_anthropic_tools(mcp_tools)
+        tools: list[ToolParam] = _to_anthropic_tools(mcp_tools)
 
-        messages: list[dict] = [{"role": "user", "content": question}]
+        messages: list[MessageParam] = [{"role": "user", "content": question}]
 
         for _ in range(max_turns):
-            response = await sdk_client.messages.create(
+            response = await _sdk_client.messages.create(
                 model=model,
                 max_tokens=4096,
-                tools=tools,  # type: ignore[arg-type]
-                messages=messages,  # type: ignore[arg-type]
+                tools=tools,
+                messages=messages,
                 temperature=0,
             )
 
-            messages.append({"role": "assistant", "content": response.content})  # type: ignore[arg-type]
+            messages.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason == "end_turn":
                 texts = [b.text for b in response.content if b.type == "text"]
                 return " ".join(texts)
 
             if response.stop_reason == "tool_use":
-                tool_uses = [b for b in response.content if b.type == "tool_use"]
+                tool_uses: list[ToolUseBlock] = [
+                    b for b in response.content if b.type == "tool_use"
+                ]
                 tasks = [_call_tool(fastmcp_client, block) for block in tool_uses]
                 call_results = await asyncio.gather(*tasks, return_exceptions=True)
-                tool_results = [
+                tool_results: list[ToolResultBlockParam] = [
                     {
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -117,20 +120,23 @@ async def run_agent(
                     }
                     for block, r in zip(tool_uses, call_results, strict=True)
                 ]
-                messages.append({"role": "user", "content": tool_results})  # type: ignore[arg-type]
+                messages.append({"role": "user", "content": tool_results})
             else:
                 break
 
-    return ""
+    msg = f"Agent did not finish in {max_turns} turns."
+    raise RuntimeError(msg)
 
 
-async def _call_tool(client: Client, block: object) -> str:
+async def _call_tool(client: Client, block: ToolUseBlock) -> str:
     """Execute a single tool call and return the text result."""
     try:
-        result = await client.call_tool(block.name, block.input or {})  # type: ignore[attr-defined]
+        result = await client.call_tool(block.name, block.input or {})
     except ToolError as exc:
         return f"Erro: {exc}"
     else:
         if result.content:
-            return result.content[0].text  # type: ignore[attr-defined]
+            first = result.content[0]
+            if isinstance(first, TextContent):
+                return first.text
         return ""
