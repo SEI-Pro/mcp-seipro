@@ -18,10 +18,11 @@ ser objetos reais (não strings adiadas).
 
 import base64
 import html as html_module
-from typing import Literal
+from typing import Annotated, Literal
 
 import httpx
 from fastmcp import Context
+from pydantic import Field
 
 from todos import access_control
 from todos.backends import NovoDocumentoExterno, NovoDocumentoInterno
@@ -62,6 +63,9 @@ from todos.sei_styles import (
     STYLE_SHORTCUTS,
     html_referencia_sei,
 )
+
+# Nível de acesso: 0=público, 1=restrito, 2=sigiloso
+_NIVEL_ACESSO = r"^[012]$"
 
 
 def _aplicar_disclaimer(conteudo: str, disclaimer: dict | None, formato: str) -> str:
@@ -284,7 +288,7 @@ async def sei_criar_documento(
     processo: str,
     id_serie: str = "",
     descricao: str = "",
-    nivel_acesso: str = "0",
+    nivel_acesso: Annotated[str, Field(pattern=_NIVEL_ACESSO)] = "0",
     hipotese_legal: str = "",
     id_unidade: str = "",
     ctx: Context | None = None,
@@ -507,7 +511,7 @@ async def sei_criar_documento_externo(
     id_serie: str,
     arquivo_path: str,
     descricao: str = "",
-    nivel_acesso: str = "0",
+    nivel_acesso: Annotated[str, Field(pattern=_NIVEL_ACESSO)] = "0",
     ctx: Context | None = None,
 ) -> RespostaEscrita:
     """Cria um documento externo (upload de arquivo) em um processo SEI.
@@ -668,7 +672,7 @@ async def sei_incluir_documento_externo(
     nome_arquivo: str = "",
     id_serie: str = "",
     data_elaboracao: str = "",
-    nivel_acesso: str = "0",
+    nivel_acesso: Annotated[str, Field(pattern=_NIVEL_ACESSO)] = "0",
     hipotese_legal: str = "",
     ctx: Context | None = None,
 ) -> RespostaEscrita:
