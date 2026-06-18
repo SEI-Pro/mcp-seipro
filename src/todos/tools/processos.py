@@ -16,12 +16,14 @@ ser objetos reais (não strings adiadas).
 import base64
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastmcp import Context
 from pydantic import Field
+from pydantic_core import SchemaError as _SchemaError
 
 from todos.backends import EnvioProcesso, NovoProcesso
 from todos.exceptions import SEIValidationError
@@ -53,11 +55,18 @@ _SEI_PROTOCOLO_PATTERN = os.environ.get("SEI_PROTOCOLO_PATTERN", "")
 _PROTOCOLO_DESC = (
     "Número de protocolo SEI no formato NNNNN.NNNNNN/AAAA-DD, ex: 50300.000123/2025-00"
 )
-_ProtocoloFormatado = (
-    Annotated[str, Field(pattern=_SEI_PROTOCOLO_PATTERN, description=_PROTOCOLO_DESC)]
-    if _SEI_PROTOCOLO_PATTERN
-    else Annotated[str, Field(description=_PROTOCOLO_DESC)]
-)
+try:
+    _ProtocoloFormatado = (
+        Annotated[str, Field(pattern=_SEI_PROTOCOLO_PATTERN, description=_PROTOCOLO_DESC)]
+        if _SEI_PROTOCOLO_PATTERN
+        else Annotated[str, Field(description=_PROTOCOLO_DESC)]
+    )
+except _SchemaError:
+    sys.stderr.write(
+        f"[todos] SEI_PROTOCOLO_PATTERN={_SEI_PROTOCOLO_PATTERN!r} é um regex inválido "
+        "para o motor Pydantic/Rust — constraint ignorado, qualquer string será aceita.\n"
+    )
+    _ProtocoloFormatado = Annotated[str, Field(description=_PROTOCOLO_DESC)]
 # Nível de acesso: 0=público, 1=restrito, 2=sigiloso
 _NIVEL_ACESSO = r"^[012]$"
 
