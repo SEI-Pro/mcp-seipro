@@ -24,6 +24,7 @@ from pydantic import Field
 
 from todos.backends import EnvioProcesso, NovoProcesso
 from todos.exceptions import SEIValidationError
+from todos.hints import get_hints
 from todos.mcp_app import (
     _IDEM,
     _MAX_PDF_MB,
@@ -492,6 +493,7 @@ async def sei_listar_processos(
         tipo=tipo,
         filtro=filtro,
     )
+    result["_hints"] = get_hints()
     return _json(result)
 
 

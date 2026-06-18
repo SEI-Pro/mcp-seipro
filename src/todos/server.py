@@ -15,6 +15,7 @@ from todos.exceptions import (
     SEIError,
     SEIValidationError,
 )
+from todos.hints import get_hints
 from todos.mcp_app import (
     _IDEM,
     _MAX_GRUPO_INLINE,
@@ -345,6 +346,7 @@ async def sei_resumo_processos(
                 "total_processos": len(todos),
                 "total_grupos": len(resumo),
                 "grupos": resumo,
+                "_hints": get_hints(),
             }
         )
     except httpx.RequestError as e:
