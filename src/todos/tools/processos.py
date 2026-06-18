@@ -14,6 +14,7 @@ ser objetos reais (não strings adiadas).
 """
 
 import base64
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -45,8 +46,13 @@ from todos.responses import (
     RespostaEscrita,
 )
 
-# Padrão do protocolo SEI: N…N.NNNNNN/YYYY-NN — prefixo de órgão varia de 4 a 6 dígitos
-_PROTOCOLO_FORMATADO = r"^\d{4,6}\.\d{6}/\d{4}-\d{2}$"
+# Padrão de validação lido da env var SEI_PROTOCOLO_PATTERN (opcional).
+# Cada instância do SEI pode usar um formato diferente; sem a env var nenhum
+# constraint é aplicado e qualquer string é aceita.
+_SEI_PROTOCOLO_PATTERN = os.environ.get("SEI_PROTOCOLO_PATTERN", "")
+_ProtocoloFormatado = (
+    Annotated[str, Field(pattern=_SEI_PROTOCOLO_PATTERN)] if _SEI_PROTOCOLO_PATTERN else str
+)
 # Nível de acesso: 0=público, 1=restrito, 2=sigiloso
 _NIVEL_ACESSO = r"^[012]$"
 
@@ -173,7 +179,7 @@ def _shape_consultar_processo(merged: dict, protocolo: str) -> dict:
 
 @mcp.tool(annotations=_READ)
 async def sei_consultar_processo(
-    protocolo_formatado: Annotated[str, Field(pattern=_PROTOCOLO_FORMATADO)],
+    protocolo_formatado: _ProtocoloFormatado,
     ctx: Context,
     *,
     include_raw: bool = False,
@@ -212,7 +218,7 @@ async def sei_consultar_processo(
 
 @mcp.tool(annotations=_READ)
 async def sei_arvore_processo(
-    protocolo_formatado: Annotated[str, Field(pattern=_PROTOCOLO_FORMATADO)],
+    protocolo_formatado: _ProtocoloFormatado,
     ctx: Context | None = None,
     *,
     include_raw: bool = False,
@@ -246,7 +252,7 @@ async def sei_arvore_processo(
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_documentos(
-    protocolo_formatado: Annotated[str, Field(pattern=_PROTOCOLO_FORMATADO)],
+    protocolo_formatado: _ProtocoloFormatado,
     ctx: Context | None = None,
     *,
     include_raw: bool = False,
