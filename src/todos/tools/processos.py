@@ -1046,9 +1046,12 @@ async def sei_detectar_formato_protocolo(
     if _keyring_mod is not None and host:
         key = _keyring_pattern_key(host)
         try:
-            await asyncio.to_thread(_keyring_mod.set_password, _KEYRING_SERVICE, key, padrao)
+            await asyncio.wait_for(
+                asyncio.to_thread(_keyring_mod.set_password, _KEYRING_SERVICE, key, padrao),
+                timeout=2.0,
+            )
             persistido = True
-        except (OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
+        except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
             persistido = False
 
     return _json(
@@ -1093,8 +1096,13 @@ async def sei_redefinir_formato_protocolo(
             "Se você configurou SEI_PROTOCOLO_PATTERN manualmente, remova a env var."
         )
         raise SEIValidationError(msg)
-    with contextlib.suppress(OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
-        await asyncio.to_thread(_keyring_mod.delete_password, _KEYRING_SERVICE, key)
+    with contextlib.suppress(
+        TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError
+    ):
+        await asyncio.wait_for(
+            asyncio.to_thread(_keyring_mod.delete_password, _KEYRING_SERVICE, key),
+            timeout=2.0,
+        )
     return _json(
         {
             "mensagem": f"Padrão removido do keyring (chave: {key}). "
