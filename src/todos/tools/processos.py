@@ -16,7 +16,6 @@ ser objetos reais (não strings adiadas).
 import asyncio
 import base64
 import concurrent.futures
-import contextlib
 import os
 import re
 import sys
@@ -1096,17 +1095,29 @@ async def sei_redefinir_formato_protocolo(
             "Se você configurou SEI_PROTOCOLO_PATTERN manualmente, remova a env var."
         )
         raise SEIValidationError(msg)
-    with contextlib.suppress(
-        TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError
-    ):
+    removido = False
+    try:
         await asyncio.wait_for(
             asyncio.to_thread(_keyring_mod.delete_password, _KEYRING_SERVICE, key),
             timeout=2.0,
         )
+        removido = True
+    except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
+        removido = False
     return _json(
         {
-            "mensagem": f"Padrão removido do keyring (chave: {key}). "
-            "Na próxima sessão, chame sei_detectar_formato_protocolo para redescobrir.",
+            "removido": removido,
             "chave_keyring": key,
+            "mensagem": (
+                f"Padrão removido do keyring (chave: {key}). "
+                "Na próxima sessão, chame sei_detectar_formato_protocolo para redescobrir."
+            )
+            if removido
+            else (
+                f"Falha ao remover o padrão do keyring (chave: {key}) — "
+                "keyring bloqueado, indisponível ou timeout. "
+                "O padrão anterior ainda será carregado na próxima sessão. "
+                "Tente novamente ou remova SEI_PROTOCOLO_PATTERN manualmente."
+            ),
         }
     )
