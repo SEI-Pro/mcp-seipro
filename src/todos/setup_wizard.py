@@ -611,6 +611,7 @@ class _SEIInstanceConfig:
     sigla_sistema: str
     orgao_id: str
     verify_ssl_disabled: bool
+    protocolo_pattern: str = ""
 
 
 def _infer_sigla_orgao_sistema(hostname: str) -> str:
@@ -694,6 +695,36 @@ def _detect_modsei_url(sei_root: str, *, verify_ssl: bool) -> _ModseiDetection:
     return _ModseiDetection(url="", confirmed=False)
 
 
+def _setup_protocolo_pattern() -> str:
+    """Pergunta opcionalmente por um regex de validação do número de processo.
+
+    Cada instância SEI pode usar um formato diferente — federais, estaduais e
+    municipais variam no comprimento do código de órgão. Deixar em branco
+    desativa a validação (qualquer string é aceita).
+    """
+    sys.stdout.write("\n")
+    print_yellow("[*] Padrão do número de processo (opcional)")
+    sys.stdout.write(
+        "    Cada instância SEI usa um formato diferente; sem configuração qualquer\n"
+        "    string é aceita. Informe um regex para rejeitar entradas malformadas.\n"
+        "    Exemplos:\n"
+        "      Federal/ANTAQ (5 dígitos): ^\\d{5}\\.\\d{6}/\\d{4}-\\d{2}$\n"
+        "      Estadual/RO   (4 dígitos): ^\\d{4}\\.\\d{6}/\\d{4}-\\d{2}$\n"
+        "      Qualquer SEI  (4-6 dig.):  ^\\d{4,6}\\.\\d{6}/\\d{4}-\\d{2}$\n"
+    )
+    while True:
+        raw = input("Regex (Enter para pular): ").strip()
+        if not raw:
+            return ""
+        try:
+            re.compile(raw)
+        except re.error as exc:
+            print_red(f"[ERRO] Regex inválido: {exc}. Tente novamente.")
+            continue
+        print_green(f"[+] Padrão configurado: {raw}")
+        return raw
+
+
 def _setup_sei_instance() -> _SEIInstanceConfig:
     """Prompt the user for the SEI URL and organ, returning a resolved instance config."""
     print_yellow("[*] Configuração da URL e Instância do SEI")
@@ -772,6 +803,8 @@ def _setup_sei_instance() -> _SEIInstanceConfig:
             "Digite a URL REST do mod-wssei manualmente (ou deixe em branco se não instalado): "
         ).strip()
 
+    protocolo_pattern = _setup_protocolo_pattern()
+
     return _SEIInstanceConfig(
         sei_root=sei_root,
         rest_url=rest_url,
@@ -780,6 +813,7 @@ def _setup_sei_instance() -> _SEIInstanceConfig:
         sigla_sistema=sigla_sistema,
         orgao_id=orgao_id,
         verify_ssl_disabled=verify_ssl_disabled,
+        protocolo_pattern=protocolo_pattern,
     )
 
 
@@ -870,6 +904,8 @@ def run_setup_wizard(*, force: bool = False) -> None:
     }
     if inst.verify_ssl_disabled:
         mcp_env["SEI_VERIFY_SSL"] = "false"
+    if inst.protocolo_pattern:
+        mcp_env["SEI_PROTOCOLO_PATTERN"] = inst.protocolo_pattern
     using_plaintext_password = bool(mcp_env["SEI_SENHA"])
     senha = ""
     del senha
