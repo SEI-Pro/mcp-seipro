@@ -14,13 +14,16 @@ ser objetos reais (não strings adiadas).
 """
 
 import base64
+import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastmcp import Context
-from pydantic import Field
+from pydantic import Field, TypeAdapter
+from pydantic_core import SchemaError as _SchemaError
 
 from todos.backends import EnvioProcesso, NovoProcesso
 from todos.exceptions import SEIValidationError
@@ -45,8 +48,26 @@ from todos.responses import (
     RespostaEscrita,
 )
 
-# Padrão do protocolo SEI: NNNNN.NNNNNN/YYYY-NN (ex: 50300.000123/2025-00)
-_PROTOCOLO_FORMATADO = r"^\d{5}\.\d{6}/\d{4}-\d{2}$"
+# Padrão de validação lido da env var SEI_PROTOCOLO_PATTERN (opcional).
+# Cada instância do SEI pode usar um formato diferente; sem a env var nenhum
+# constraint é aplicado e qualquer string é aceita.
+_SEI_PROTOCOLO_PATTERN = os.environ.get("SEI_PROTOCOLO_PATTERN", "")
+_PROTOCOLO_DESC = (
+    "Número de protocolo SEI no formato NNNNN.NNNNNN/AAAA-DD, ex: 50300.000123/2025-00"
+)
+if _SEI_PROTOCOLO_PATTERN:
+    _candidate = Annotated[str, Field(pattern=_SEI_PROTOCOLO_PATTERN, description=_PROTOCOLO_DESC)]
+    try:
+        TypeAdapter(_candidate)  # forces Pydantic/Rust to compile the regex now
+        _ProtocoloFormatado = _candidate
+    except _SchemaError:
+        sys.stderr.write(
+            f"[todos] SEI_PROTOCOLO_PATTERN={_SEI_PROTOCOLO_PATTERN!r} é um regex inválido "
+            "para o motor Pydantic/Rust — constraint ignorado, qualquer string será aceita.\n"
+        )
+        _ProtocoloFormatado = Annotated[str, Field(description=_PROTOCOLO_DESC)]
+else:
+    _ProtocoloFormatado = Annotated[str, Field(description=_PROTOCOLO_DESC)]
 # Nível de acesso: 0=público, 1=restrito, 2=sigiloso
 _NIVEL_ACESSO = r"^[012]$"
 
@@ -173,7 +194,7 @@ def _shape_consultar_processo(merged: dict, protocolo: str) -> dict:
 
 @mcp.tool(annotations=_READ)
 async def sei_consultar_processo(
-    protocolo_formatado: Annotated[str, Field(pattern=_PROTOCOLO_FORMATADO)],
+    protocolo_formatado: _ProtocoloFormatado,
     ctx: Context,
     *,
     include_raw: bool = False,
@@ -212,7 +233,7 @@ async def sei_consultar_processo(
 
 @mcp.tool(annotations=_READ)
 async def sei_arvore_processo(
-    protocolo_formatado: Annotated[str, Field(pattern=_PROTOCOLO_FORMATADO)],
+    protocolo_formatado: _ProtocoloFormatado,
     ctx: Context | None = None,
     *,
     include_raw: bool = False,
@@ -246,7 +267,7 @@ async def sei_arvore_processo(
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_documentos(
-    protocolo_formatado: Annotated[str, Field(pattern=_PROTOCOLO_FORMATADO)],
+    protocolo_formatado: _ProtocoloFormatado,
     ctx: Context | None = None,
     *,
     include_raw: bool = False,
