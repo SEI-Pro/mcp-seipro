@@ -113,12 +113,9 @@ async def sei_cancelar_assinatura(
 
     # Editar derruba a assinatura se o documento ainda puder ser editado. Se
     # estiver travado (processo lido/enviado), o SEI rejeita e o erro propaga.
-    result = await backend.alterar_secoes(doc_id, secoes_enviar, versao, processo=processo)
+    await backend.alterar_secoes(doc_id, secoes_enviar, versao, processo=processo)
     return _json(
-        {
-            "mensagem": "Assinatura cancelada com sucesso. O documento foi editado (nova versão).",
-            "versao": result,
-        }
+        {"mensagem": "Assinatura cancelada com sucesso. O documento foi editado (nova versão)."}
     )
 
 

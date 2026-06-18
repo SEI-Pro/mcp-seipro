@@ -1992,7 +1992,7 @@ class SEIWebClient:
             {
                 "id": ta.get("name", ""),
                 "idSecaoModelo": ta.get("name", ""),
-                "conteudo": ta.get_text(),
+                "conteudo": ta.decode_contents(),
                 "somenteLeitura": False,
             }
             for ta in textareas
@@ -2042,7 +2042,7 @@ class SEIWebClient:
         for ta in soup.select("div#divEditores textarea"):
             nome = str(ta.get("name", ""))
             if nome:
-                post_data.append((nome, alteracoes.get(nome, ta.get_text())))
+                post_data.append((nome, alteracoes.get(nome, ta.decode_contents())))
 
         r2 = await self._http.post(
             save_url,
