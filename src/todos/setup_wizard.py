@@ -13,11 +13,14 @@ import subprocess as _sp
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import keyring as _keyring
 from bs4 import BeautifulSoup
+from pydantic import Field, TypeAdapter
+from pydantic_core import SchemaError as _PydanticSchemaError
 
 from todos.backends.models import SEIWebClientConfig
 from todos.exceptions import SEIAuthError, SEICredenciaisError
@@ -717,9 +720,9 @@ def _setup_protocolo_pattern() -> str:
         if not raw:
             return ""
         try:
-            re.compile(raw)
-        except re.error as exc:
-            print_red(f"[ERRO] Regex inválido: {exc}. Tente novamente.")
+            TypeAdapter(Annotated[str, Field(pattern=raw)])
+        except _PydanticSchemaError as exc:
+            print_red(f"[ERRO] Padrão rejeitado pelo motor de validação: {exc}. Tente novamente.")
             continue
         print_green(f"[+] Padrão configurado: {raw}")
         return raw
