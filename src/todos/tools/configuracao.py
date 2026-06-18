@@ -93,8 +93,10 @@ def _read_keyring_pattern_sync(host: str) -> str:
 
 
 _host = _sei_host()
-_SEI_PROTOCOLO_PATTERN = _read_keyring_pattern_sync(_host) or os.environ.get(
-    "SEI_PROTOCOLO_PATTERN", ""
+# Env var takes priority so an explicit SEI_PROTOCOLO_PATTERN always overrides a stale
+# keyring entry without requiring sei_redefinir_formato_protocolo to be run first.
+_SEI_PROTOCOLO_PATTERN = os.environ.get("SEI_PROTOCOLO_PATTERN", "") or _read_keyring_pattern_sync(
+    _host
 )
 if _SEI_PROTOCOLO_PATTERN:
     _candidate = Annotated[str, Field(pattern=_SEI_PROTOCOLO_PATTERN, description=_PROTOCOLO_DESC)]
