@@ -1,46 +1,68 @@
-# RFC 0009 — Guard de paridade, constraints de schema e guidance de domínio
+# RFC 0009 — Cobertura de backend, constraints de schema e guidance de domínio
 
 **Status**: Proposta · **Atualizado**: 2026-06-18
 **Data**: 2026-06-17
 **Autores**: Claude (com Franklin Baldo)
-**RFCs relacionados**: RFC 0003 (ergonomia FastMCP), RFC 0007 (response shaping/paginação)
+**RFCs relacionados**: RFC 0003 (ergonomia FastMCP), RFC 0006 (backend abstrato), RFC 0007 (response shaping/paginação)
 
-## 1. Contexto
+## 1. Contexto e design pattern
 
-`mcp-sei` já está à frente em vários eixos de qualidade MCP (annotations — RFC
-0003; paginação + `next_actions` — RFC 0007; keyring — RFC 0002; backend
-abstrato — RFC 0006). Este RFC aborda lacunas que se tornaram riscos reais na
-escala atual de **118 tools** (em `src/todos/tools/`, roteadas pelo
-`SEIBackend`): drift silencioso entre assinatura de tool e backend, entrada
-malformada que só falha no SEI, e ausência de orientação dinâmica para o agente
-navegar entre as tools.
+### 1.1 Arquitetura atual
+
+O projeto usa **Chain of Responsibility + Strategy** com implementação por mixins:
+
+| Componente | Papel |
+|---|---|
+| `SEIBackend` | Contrato com 125 métodos async (sem `@abstractmethod`) |
+| `SEIRestBackend` | Strategy REST — implementa 111/125 (88%) via mixins por domínio |
+| `SEIWebBackend` | Strategy Web — implementa 81/125 (64%) via mixins por domínio |
+| `CompositeBackend` | Chain of Responsibility — REST-first com fallback web; web-first para 3 operações; composição paralela para `consultar_processo` |
+
+Este padrão é **apropriado para o use case**: dois backends com capacidades
+assimétricas, preferência configurável por operação (`_WEB_FIRST`), e
+degradação graciosa quando o mod-wssei não está disponível.
+
+### 1.2 Pontos de atenção na implementação
+
+Três áreas onde a implementação pode melhorar — sem trocar o padrão:
+
+1. **`_install_dispatchers()` opaco.** Gera ~100 métodos delegadores por
+   introspecção no nível de módulo. IDE não navega para a implementação e
+   stack traces ficam confusos. `__getattr__` em `CompositeBackend` faria o
+   mesmo de forma transparente.
+
+2. **`SEIBackend` sem `@abstractmethod`.** Justificado (subclasses implementam
+   só o que suportam), mas o custo é que um backend incompleto só falha em
+   runtime. `typing.Protocol` eliminaria o problema sem perder a flexibilidade.
+
+3. **4 métodos sem implementação em nenhum backend:** `cancelar_assinatura`,
+   `gerar_referencia`, `marcar_nao_lido`, `resumo_processos`. Ou o contrato
+   está desatualizado ou esses métodos fazem bypass do contrato nas tools.
+
+Os itens 1 e 2 são melhorias incrementais de RFC futuro. O item 3 é resolvido
+pela proposta 2.1 abaixo.
 
 ## 2. Propostas
 
-### 2.1 (Alta) Guard de paridade tool↔serviço no CI
+### 2.1 (Alta) Testes de cobertura de contrato por backend
 
-Com **118 tools** distribuídas em 10 módulos, divergência entre a assinatura de
-uma tool e o método correspondente no `SEIBackend` é um risco silencioso —
-detectado em produção, não no commit.
+A cobertura atual do contrato `SEIBackend` (125 métodos) não está medida nem
+protegida pelo CI. Uma regressão silenciosa — remover um método de um mixin ou
+renomear sem atualizar o outro backend — não quebra nenhum teste.
 
-**Mecanismo de paridade:** cada tool `sei_X` corresponde, por convenção, ao
-método `SEIBackend.X` (ex.: `sei_consultar_processo` →
-`SEIBackend.consultar_processo`). O guard verifica:
+**Proposta:** dois testes de cobertura de contrato:
 
-1. Toda tool `sei_X` tem método correspondente em `SEIBackend` (ou está
-   declarada como exceção — ver abaixo).
-2. Nenhum parâmetro obrigatório do método de backend está ausente na tool
-   (parâmetros opcionais do backend podem ser omitidos na tool).
+- `tests/test_rest_backend.py` — verifica via introspecção quais métodos do
+  `SEIRestBackend` sobrescrevem o stub base; falha se a cobertura cair abaixo
+  do limiar atual (88 %, 111/125) ou se um método previously implementado
+  desaparecer.
+- `tests/test_web_backend.py` — idem para `SEIWebBackend` (limiar: 64 %,
+  81/125).
 
-**Exceções documentadas** (não têm método `SEIBackend` correspondente):
-- `sei_estilos` — utilitário local, sem chamada de backend.
-- `sei_versao` — REST-only, chama diretamente o cliente REST.
-- `sei_editar_secao` — mapeia para `alterar_secoes` (nome diverge por convenção
-  de UX).
-
-**Proposta:** `tests/test_tool_parity.py` que enumera via introspecção todas as
-funções decoradas com `@mcp.tool()` nos módulos de tools, aplica as regras
-acima e quebra o CI no commit que introduz o drift.
+Os testes também reportam os 4 métodos sem implementação em nenhum backend
+(`cancelar_assinatura`, `gerar_referencia`, `marcar_nao_lido`,
+`resumo_processos`), para forçar decisão explícita: implementar ou remover do
+contrato.
 
 ### 2.2 (Alta) Constraints de parâmetro no schema, não só na prosa
 
@@ -86,7 +108,7 @@ existentes (esforço alto; registrar como direção, não compromisso).
 
 | Prioridade | Item | Esforço | Risco que mitiga |
 |---|---|---|---|
-| **Alta** | 2.1 Guard de paridade | Baixo | Drift tool↔backend em 118 tools |
+| **Alta** | 2.1 Cobertura de backend | Baixo | Regressão silenciosa no contrato |
 | **Alta** | 2.2 Constraints de schema | Médio | Entrada malformada chega ao SEI |
 | Média | 2.3 Guidance de domínio | Médio | Curva de escolha entre 118 tools |
 | Média | 2.4 Error-boundary no CI | Médio | Envelope de erro inconsistente |
@@ -100,8 +122,8 @@ existentes (esforço alto; registrar como direção, não compromisso).
 
 ## 5. Plano de implementação
 
-1. **PR 1 — guard de paridade** (2.1): `tests/test_tool_parity.py` + CI
-   workflow, sem mudança de runtime.
+1. **PR 1 — cobertura de backend** (2.1): `tests/test_rest_backend.py` +
+   `tests/test_web_backend.py` + CI workflow, sem mudança de runtime.
 2. **PR 2 — constraints de schema** (2.2): `Field(pattern=…)` nas tools de maior
    uso, incremental tool a tool.
 3. **PR 3 — guidance de domínio** (2.3) + **error-boundary check** (2.4).
