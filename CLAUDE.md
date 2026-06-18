@@ -3,7 +3,7 @@
 ## O que é
 
 **TOdos Domina O Sei** — MCP Server para o SEI (Sistema Eletrônico de Informações) com arquitetura web-first.
-124 tools cobrindo processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais.
+126 tools cobrindo processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais.
 Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. Funciona em qualquer instância SEI 4.0+ — inclusive sem mod-wssei instalado.
 
 ## Stack
@@ -14,7 +14,7 @@ Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. F
 
 ## Arquivos principais
 
-- `src/todos/server.py` — FastMCP server com 124 tools + helpers (_resolver_documento, _resolver_processo)
+- `src/todos/server.py` — FastMCP server com 126 tools + helpers (_resolver_documento, _resolver_processo)
 - `src/todos/sei_backend.py` — SEIBackend: wrapper que expõe `.rest` (SEIClient), `.web` (SEIWebClient), `.has_rest` — roteia para o backend adequado
 - `src/todos/sei_client.py` — Cliente REST assíncrono para mod-wssei v2 (auth automática, auto-reauth 401/403, cache de metadados TTL 1h)
 - `src/todos/sei_web_client.py` — Cliente HTTP scraper do frontend web do SEI (login SIP, sessão persistente, parser de inbox/árvore/histórico, upload de documentos externos)
@@ -44,7 +44,7 @@ Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. F
 - `sei_editar_secao` preenche seções somenteLeitura automaticamente
 
 ### Compatibilidade de versão do mod-wssei
-- **Todos os 124 tools funcionam em qualquer SEI 4.0+** — os endpoints REST existem desde o mod-wssei 2.0.0
+- **Todos os 126 tools funcionam em qualquer SEI 4.0+** — os endpoints REST existem desde o mod-wssei 2.0.0
 - Única exceção: `sei_listar_relacionamentos` (`GET /processo/{id}/relacionamentos`) requer **mod-wssei 3.0.2+** (SEI 5.0.x)
 - Tabela de compatibilidade SEI ↔ mod-wssei:
   - SEI 4.0.x → mod-wssei 2.0.x (131 endpoints)

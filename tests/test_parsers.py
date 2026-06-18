@@ -6,13 +6,20 @@ no live SEI server required.
 
 from __future__ import annotations
 
+import pytest
 from bs4 import BeautifulSoup, Tag
 
+from todos.exceptions import SEIValidationError
 from todos.sei_web_client import (
     SEIWebClient,
     _parse_doc_label,
     parse_arvore_nos,
     parse_inbox,
+)
+from todos.tools.configuracao import (
+    _CANONICAL_PROTOCOLO_RE,
+    _inferir_padrao_protocolo,
+    _keyring_pattern_key,
 )
 
 # ---------------------------------------------------------------------------
@@ -296,3 +303,60 @@ class TestParseArvoreNos:
         assert "Processo" in result[0]["label"], f"label do nó raiz inesperado: {result[0]!r}"
         assert result[1]["tipo_no"] == "doc", f"tipo_no do nó documento inesperado: {result[1]!r}"
         assert result[1]["id"] == "doc456", f"id do nó documento inesperado: {result[1]!r}"
+
+
+# ---------------------------------------------------------------------------
+# _inferir_padrao_protocolo (RFC 0010)
+# ---------------------------------------------------------------------------
+
+
+class TestInferirPadraoProtocolo:
+    def test_uniform_prefix_5_digits(self) -> None:
+        amostras = [f"50300.{i:06d}/2024-01" for i in range(10)]
+        padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
+        assert min_len == max_len == 5
+        assert r"\d{5}" in padrao
+        assert "/\\d{4}-\\d{2}$" in padrao
+
+    def test_uniform_prefix_4_digits(self) -> None:
+        amostras = [f"0007.{i:06d}/2025-00" for i in range(10)]
+        padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
+        assert min_len == max_len == 4
+        assert r"\d{4}" in padrao
+
+    def test_variable_prefix_range(self) -> None:
+        amostras = [f"50300.{i:06d}/2024-01" for i in range(8)] + [
+            f"0007.{i:06d}/2024-01" for i in range(2)
+        ]
+        padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
+        assert min_len == 4
+        assert max_len == 5
+        assert r"\d{4,5}" in padrao
+
+    def test_no_valid_samples_raises(self) -> None:
+        with pytest.raises(SEIValidationError, match="Nenhum protocolo"):
+            _inferir_padrao_protocolo(["garbage", "no-match"])
+
+    def test_mixed_valid_and_invalid(self) -> None:
+        amostras = [f"50300.{i:06d}/2024-01" for i in range(10)] + [
+            "garbage",
+            "not-a-protocol",
+        ]
+        _padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
+        assert min_len == max_len == 5
+
+    def test_canonical_re_filters_non_protocol_strings(self) -> None:
+        # Simulate what sei_detectar_formato_protocolo does: filter before counting
+        todas = [f"50300.{i:06d}/2024-01" for i in range(10)] + [
+            "garbage",
+            "legacy-row",
+            "123",
+        ]
+        amostras = [s for s in todas if _CANONICAL_PROTOCOLO_RE.match(s)]
+        assert len(amostras) == 10
+        _padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
+        assert min_len == max_len == 5
+
+    def test_key_format(self) -> None:
+        key = _keyring_pattern_key("sei.orgao.gov.br")
+        assert key == "SEI_PROTOCOLO_PATTERN@sei.orgao.gov.br"

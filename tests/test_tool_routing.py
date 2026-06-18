@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 # Import every tool module + todos.server so the @mcp.tool functions exist as
-# plain coroutines and all 124 tools (including the 6 in server.py) are
+# plain coroutines and all 126 tools (including the 6 in server.py) are
 # registered — making test_all_mcp_tools_have_routing_entry deterministic
 # regardless of pytest collection order with test_tool_count.py.
 _MODULES = [
@@ -42,6 +42,7 @@ _MODULES = [
     "todos.tools.blocos_assinatura",
     "todos.tools.blocos_internos",
     "todos.tools.catalogos",
+    "todos.tools.configuracao",
     "todos.tools.credenciamento",
     "todos.tools.documentos",
     "todos.tools.marcadores",
@@ -810,6 +811,9 @@ _TOOLS_WITHOUT_ROUTING: frozenset[str] = frozenset(
         "sei_enviar_processo",  # resolve sigla→id + tramita (multi-step)
         "sei_atribuir_processo",  # resolve nome→id + atribui (multi-step)
         "sei_sobrestar_processo",  # compõe verificação + sobrestamento
+        # --- configuracao.py: keyring + descoberta (RFC 0010) ---
+        "sei_detectar_formato_protocolo",  # orquestra listar_processos + inferência + keyring
+        "sei_redefinir_formato_protocolo",  # remove entrada keyring (sem op de backend)
     }
 )
 

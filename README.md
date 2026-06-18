@@ -2,7 +2,7 @@
 
 **TOdos Domina O Sei** — MCP Server para o SEI (Sistema Eletrônico de Informações) com arquitetura **web-first**: scraper HTTP do frontend + REST mod-wssei v2 quando disponível. Funciona em qualquer instância SEI 4.0+ — **inclusive sem mod-wssei instalado**.
 
-**124 tools** para gerenciar processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais. Operações de leitura críticas usam scraper web (**23×** mais rápido que REST). Catálogos estáticos usam cache em disco com TTL de 24h.
+**126 tools** para gerenciar processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais. Operações de leitura críticas usam scraper web (**23×** mais rápido que REST). Catálogos estáticos usam cache em disco com TTL de 24h.
 
 ## Origem
 
@@ -10,7 +10,7 @@ Este projeto é um fork de [**mcp-seipro**](https://github.com/SEI-Pro/mcp-seipr
 
 Um agradecimento especial ao Pedro Soares pela dedicação em construir o mcp-seipro do zero — sem esse trabalho pioneiro, este fork não existiria.
 
-**Por que o fork?** O mcp-seipro depende exclusivamente da API REST mod-wssei — um módulo opcional que precisa ser instalado pelo administrador do SEI. O [SEI de Rondônia](https://sei.sistemas.ro.gov.br) (e diversas outras instâncias públicas) não tem o mod-wssei instalado, tornando todas as 124 tools inoperantes nessas instâncias.
+**Por que o fork?** O mcp-seipro depende exclusivamente da API REST mod-wssei — um módulo opcional que precisa ser instalado pelo administrador do SEI. O [SEI de Rondônia](https://sei.sistemas.ro.gov.br) (e diversas outras instâncias públicas) não tem o mod-wssei instalado, tornando todas as 126 tools inoperantes nessas instâncias.
 
 A solução foi implementar um **scraper HTTP do próprio frontend web do SEI** como backend primário: sem dependência de módulo extra, sem configuração no servidor, funciona em qualquer instância que o usuário consiga acessar pelo navegador. O projeto upstream está focado na API REST; este fork mantém compatibilidade total com ela quando disponível e adiciona paridade web completa para quem não tem.
 
@@ -143,7 +143,7 @@ Com o todos configurado, basta conversar com o Claude em linguagem natural:
 - *"Quais processos da unidade GPF estão sem movimentação há mais de 30 dias?"*
 - *"Compare o conteúdo dos documentos 2843449 e 2843450"*
 
-## Tools disponíveis (124)
+## Tools disponíveis (126)
 
 ### Sistema e metadados (3)
 
@@ -365,7 +365,7 @@ Para instâncias sem mod-wssei, configure `SEI_WEB_URL` (raiz do SEI, ex: `https
 
 ### Versões do SEI
 
-Todos os **124 endpoints funcionam desde o mod-wssei 2.0.0** (SEI 4.0.x), exceto um:
+Todos os **126 endpoints funcionam desde o mod-wssei 2.0.0** (SEI 4.0.x), exceto um:
 
 | Tool | Versão mínima |
 |------|---------------|
