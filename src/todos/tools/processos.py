@@ -45,8 +45,8 @@ from todos.responses import (
     RespostaEscrita,
 )
 
-# Padrão do protocolo SEI: NNNNN.NNNNNN/YYYY-NN (ex: 50300.000123/2025-00)
-_PROTOCOLO_FORMATADO = r"^\d{5}\.\d{6}/\d{4}-\d{2}$"
+# Padrão do protocolo SEI: N…N.NNNNNN/YYYY-NN — prefixo de órgão varia de 4 a 6 dígitos
+_PROTOCOLO_FORMATADO = r"^\d{4,6}\.\d{6}/\d{4}-\d{2}$"
 # Nível de acesso: 0=público, 1=restrito, 2=sigiloso
 _NIVEL_ACESSO = r"^[012]$"
 
