@@ -54,8 +54,13 @@ from todos.responses import (
 )
 
 _keyring_mod: ModuleType | None = None
+# _KeyringError captures keyring.errors.KeyringError when keyring is installed so that
+# KeyringLocked and other backend-specific errors (not subclasses of any builtin) are
+# caught alongside the standard OS/runtime errors. Falls back to a never-matched sentinel.
+_KeyringError: type[Exception] = type("_NullError", (Exception,), {})
 try:
     import keyring as _keyring_mod
+    from keyring.errors import KeyringError as _KeyringError  # type: ignore[assignment]
 except ImportError:
     sys.stderr.write("[todos] keyring not available — use SEI_PROTOCOLO_PATTERN env var.\n")
 
@@ -90,12 +95,16 @@ def _read_keyring_pattern_sync(host: str) -> str:
     if _keyring_mod is None or not host:
         return ""
     key = _keyring_pattern_key(host)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_keyring_mod.get_password, _KEYRING_SERVICE, key)
-            return future.result(timeout=2.0) or ""
-    except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError):
+        future = pool.submit(_keyring_mod.get_password, _KEYRING_SERVICE, key)
+        return future.result(timeout=2.0) or ""
+    except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
         return ""
+    finally:
+        # cancel_futures=True (Python 3.9+) abandons the thread if get_password is
+        # still running after the timeout — avoids blocking server startup.
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 _host = _sei_host()
@@ -1039,7 +1048,7 @@ async def sei_detectar_formato_protocolo(
         try:
             await asyncio.to_thread(_keyring_mod.set_password, _KEYRING_SERVICE, key, padrao)
             persistido = True
-        except (OSError, RuntimeError, AttributeError, ValueError):
+        except (OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
             persistido = False
 
     return _json(
@@ -1084,7 +1093,7 @@ async def sei_redefinir_formato_protocolo(
             "Se você configurou SEI_PROTOCOLO_PATTERN manualmente, remova a env var."
         )
         raise SEIValidationError(msg)
-    with contextlib.suppress(OSError, RuntimeError, AttributeError, ValueError):
+    with contextlib.suppress(OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
         await asyncio.to_thread(_keyring_mod.delete_password, _KEYRING_SERVICE, key)
     return _json(
         {
