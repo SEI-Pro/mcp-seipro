@@ -5,7 +5,7 @@
 **Autores**: Claude (com Franklin Baldo)
 **RFCs relacionados**: RFC 0003 (ergonomia FastMCP), RFC 0006 (backend abstrato), RFC 0007 (response shaping/paginação)
 
-## 1. Diagnóstico: interface monolítica gorda
+## 1. Diagnóstico
 
 ### 1.1 Arquitetura atual
 
@@ -16,123 +16,152 @@ O projeto usa **Chain of Responsibility + Strategy** com implementação por mix
 | `SEIBackend` | 125 métodos async, todos levantando `NotImplementedError` |
 | `SEIRestBackend` | Strategy REST — implementa 111/125 (88%) via mixins por domínio |
 | `SEIWebBackend` | Strategy Web — implementa 81/125 (64%) via mixins por domínio |
-| `CompositeBackend` | Chain of Responsibility — REST-first com fallback web; composição paralela para `consultar_processo` |
+| `CompositeBackend` | Router dinâmico — 3 métodos explícitos + ~55 gerados por `_install_dispatchers` |
 
-O padrão de roteamento é **apropriado para o use case**: dois backends com
-capacidades assimétricas, preferência configurável por operação (`_WEB_FIRST`),
-e degradação graciosa quando o mod-wssei não está disponível. O problema não é
-o padrão — é a forma como o contrato está modelado.
+O padrão de roteamento é **apropriado para o use case**. Os problemas são de
+implementação, não de escolha de padrão.
 
-### 1.2 O problema: interface única monolítica
+### 1.2 Dois problemas raiz
 
+**Problema 1 — Interface monolítica gorda.**
 `SEIBackend` tenta ser o contrato de dois backends com capacidades muito
-diferentes usando um único vetor de 125 métodos. Isso força uma cadeia de
-consequências negativas:
+diferentes usando um único vetor de 125 métodos. Isso força stubs
+`raise NotImplementedError` em todo lugar, o que força `try/except
+NotImplementedError` no `CompositeBackend`, o que criou a necessidade de
+`_install_dispatchers()`. É uma cadeia de consequências do mesmo problema.
+A ausência de `@abstractmethod` não é uma feature — é a consequência inevitável
+de uma interface gorda: com 125 abstratos, cada backend seria obrigado a
+implementar tudo.
 
-1. **Stubs `raise NotImplementedError` em todo lugar** — backends precisam
-   herdar 14–44 stubs do contrato para cada domínio que não suportam.
+**Problema 2 — Roteamento REST-first otimista.**
+Para 65 das 71 operações que ambos os backends implementam, o Composite tenta
+REST primeiro e cai para Web se falhar — o inverso do que a realidade exige.
+Web é o baseline garantido (funciona em qualquer SEI 4.0+, sem mod-wssei).
+REST é uma camada de enhancement disponível em algumas instalações. Tratar Web
+como fallback é modelar a incerteza ao contrário.
 
-2. **`try/except NotImplementedError` no `CompositeBackend`** — o mecanismo de
-   fallback depende de capturar a exceção do stub como sinal de "este backend
-   não atende". Erro de implementação e "feature ausente" usam o mesmo canal.
+Evidência: o conjunto `_WEB_FIRST` tem apenas 3 operações (exceções à regra
+REST-first). Na prática, Web deveria ser o default e REST a exceção explícita.
 
-3. **`_install_dispatchers()`** — geração de ~55 métodos delegadores por
-   introspecção no nível de módulo, para evitar escrever a delegação manualmente.
-   IDE não navega para a implementação; stack traces ficam confusos.
+**Problema 3 — CompositeBackend como router especial.**
+As 3 operações com lógica própria no Composite (`consultar_processo`,
+`trocar_unidade`, `criar_documento_externo`) são tratadas como casos especiais
+do router. São, na realidade, **implementações de Protocol** para operações que
+precisam coordenar dois backends — e deveriam ser modeladas como tal.
 
-4. **Contrato desatualizado** — 4 métodos (`cancelar_assinatura`,
-   `gerar_referencia`, `marcar_nao_lido`, `resumo_processos`) não têm
-   implementação em nenhum backend: as tools os contornam compondo outros
-   métodos ou chamando o REST client diretamente. O contrato perdeu sincronia
-   com a realidade sem que nenhum CI detectasse.
-
-5. **Ausência de `@abstractmethod` não é feature** — a justificativa no
-   docstring ("subclasses sobrescrevem só o que suportam") é a consequência do
-   problema 1, não a solução. Com uma interface gorda, `@abstractmethod`
-   obrigaria 125 implementações em cada backend — por isso foi omitido. O fix
-   correto é enxugar o contrato, não abrir mão da verificação estática.
-
-### 1.3 Direção: Protocol por domínio
-
-O contrato já está naturalmente dividido em **10 seções** no `base.py`
-(unidades/sessão, processos-leitura, processos-escrita, documentos, catálogos,
-marcadores, acompanhamento, blocos internos, blocos assinatura, credenciamento).
-Essas seções são os Protocols naturais do sistema.
-
-Com `typing.Protocol`:
-
-- Backends **não herdam de `SEIBackend`** — implementam os Protocols dos
-  domínios que realmente suportam.
-- O compilador estático (mypy/ty) verifica conformidade; `@abstractmethod`
-  torna-se desnecessário.
-- `CompositeBackend` roteia por `isinstance(backend, XProtocol)` — sem
-  `try/except NotImplementedError`, sem `_install_dispatchers`.
-- Métodos mortos desaparecem: o contrato só tem o que algum backend implementa.
+**Efeito colateral dos 3 problemas:** 4 métodos do contrato (`cancelar_assinatura`,
+`gerar_referencia`, `marcar_nao_lido`, `resumo_processos`) não têm implementação
+em nenhum backend — as tools os contornam compondo outros métodos ou chamando o
+REST client diretamente. O contrato perdeu sincronia com a realidade sem que
+nenhum CI detectasse.
 
 ## 2. Propostas
 
-### 2.1 (Alta) Protocol split: substituir `SEIBackend` monolítico por Protocols por domínio
+### 2.1 (Alta) Protocol split + roteamento estático no startup
 
-**O que muda:**
+Resolve os três problemas raiz de uma vez.
 
-```python
-# Antes: um contrato com 125 stubs
-class SEIBackend:
-    async def consultar_processo(self, processo: str) -> dict:
-        raise NotImplementedError
+#### Contratos: 10 Protocols por domínio
 
-# Depois: 10 Protocols pequenos
-class ProcessosProtocol(Protocol):
-    async def consultar_processo(self, processo: str) -> dict: ...
-    async def criar_processo(self, dados: NovoProcesso) -> dict: ...
-    # (~34 métodos)
+Substituir `SEIBackend` monolítico por 10 `typing.Protocol` espelhando as
+seções já existentes no `base.py`:
 
-class DocumentosProtocol(Protocol):
-    async def criar_documento_interno(self, ...) -> dict: ...
-    # (~19 métodos)
+```
+UnidadesProtocol      (~13 métodos)   ProcessosLeituraProtocol  (~15 métodos)
+ProcessosEscritaProtocol (~19 métodos)  DocumentosProtocol      (~19 métodos)
+CatalogosProtocol     (~11 métodos)   MarcadoresProtocol         (~10 métodos)
+AcompanhamentoProtocol (~8 métodos)   BlocosInternosProtocol     (~10 métodos)
+BlocosAssinaturaProtocol (~16 métodos) CredenciamentoProtocol    (~4 métodos)
 ```
 
-`SEIRestBackend` e `SEIWebBackend` deixam de herdar de `SEIBackend` e
-implementam apenas os Protocols de cada domínio que suportam. `CompositeBackend`
-roteia por `isinstance`:
+Com `typing.Protocol`, implementação é por estrutura — não por herança. Mypy/ty
+verifica conformidade estaticamente. `@abstractmethod` torna-se desnecessário.
 
-```python
-class CompositeBackend:
-    async def consultar_processo(self, processo: str) -> dict:
-        if self._rest and isinstance(self._rest, ProcessosProtocol):
-            try:
-                return await self._rest.consultar_processo(processo)
-            except (SEINotFoundError, SEIParseError, SEIConnectionError):
-                pass
-        return await self._web.consultar_processo(processo)
+#### Três implementadores, não dois
+
+```
+SEIRestBackend   → implementa os Protocols das operações que a REST suporta
+SEIWebBackend    → implementa os Protocols das operações que o Web suporta
+CompositeBackend → implementa os Protocols das operações que precisam de AMBOS
 ```
 
-**O que desaparece:** `_install_dispatchers()`, stubs `raise NotImplementedError`,
-`try/except NotImplementedError` no fallback, 4 métodos mortos do contrato.
+`CompositeBackend` deixa de ser um router e se torna um implementador legítimo:
 
-**O que fica:** lógica de roteamento REST-first/web-first/composição paralela —
-apenas explicitada em vez de gerada.
+```python
+class CompositeBackend(ProcessosLeituraProtocol, UnidadesProtocol, DocumentosProtocol):
 
-**Esforço estimado:** médio — é refator estrutural sem mudança de comportamento
-observável. Os mixins existentes (`ProcessosRest`, `ProcessosWeb`, etc.) já
-organizam o código na estrutura correta; a mudança é na camada de tipos.
+    async def consultar_processo(self, processo: str) -> dict:
+        """Fusão paralela: REST (metadata) + Web (árvore de documentos)."""
+
+    async def trocar_unidade(self, id_unidade: str) -> dict:
+        """Troca no Web (sessão primária) e sincroniza REST (best-effort)."""
+
+    async def criar_documento_externo(self, processo: str, dados: ...) -> dict:
+        """Roteia por tipo de upload: base64 → web, caminho de arquivo → REST."""
+```
+
+#### Roteamento estático no startup
+
+Em vez de `try/except NotImplementedError` a cada chamada, uma tabela
+construída uma vez na inicialização:
+
+```python
+def _build_routing(
+    rest: SEIRestBackend | None,
+    web: SEIWebBackend,
+    composite: CompositeBackend,
+) -> dict[str, SEIBackend]:
+    routing = {}
+
+    # Web é o default: cobre todas as operações que implementa
+    for op in web.CAPABILITIES:
+        routing[op] = web
+
+    # REST sobrescreve onde é explicitamente preferido (e está disponível)
+    if rest is not None:
+        for op in REST_PREFERRED:  # conjunto curado e documentado
+            routing[op] = rest
+
+    # CompositeBackend para operações que precisam de coordenação
+    for op in ("consultar_processo", "trocar_unidade", "criar_documento_externo"):
+        routing[op] = composite
+
+    return routing
+```
+
+`CompositeBackend.__getattr__` consulta a tabela:
+
+```python
+def __getattr__(self, name: str) -> Callable:
+    backend = self._routing.get(name)
+    if backend is None:
+        raise SEINotImplementedError(f"Operação '{name}' não suportada.")
+    return getattr(backend, name)
+```
+
+**O que desaparece:** `_install_dispatchers()`, `_WEB_FIRST`, stubs
+`raise NotImplementedError`, `try/except NotImplementedError` no fallback,
+4 métodos mortos do contrato.
+
+**O que fica com comportamento inalterado:** toda a lógica de roteamento,
+fusão de dados, sincronização de sessão e preferências por operação — apenas
+expressa de forma explícita em vez de gerada.
 
 ### 2.2 (Alta) Testes de conformidade de Protocol por backend
 
-Com o Protocol split (2.1), conformidade de backend vira verificação estática:
-mypy/ty reporta qual backend não implementa qual Protocol. Sem 2.1, a cobertura
+Com o Protocol split (2.1), conformidade é verificação estática: mypy/ty
+reporta qual backend não implementa qual Protocol. Sem 2.1, a cobertura
 precisa ser medida por introspecção em runtime.
 
-**Proposta (independente de 2.1):** dois testes que medem e protegem a cobertura
-atual do contrato `SEIBackend` enquanto o Protocol split não é feito:
+**Proposta (independente de 2.1, como rede de segurança interim):**
 
 - `tests/test_rest_backend.py` — verifica via introspecção quais métodos do
   `SEIRestBackend` sobrescrevem o stub base; falha se a cobertura cair abaixo
   do limiar atual (88%, 111/125).
 - `tests/test_web_backend.py` — idem para `SEIWebBackend` (64%, 81/125).
 
-Esses testes são descartados quando 2.1 for concluído — a cobertura passa a ser
-verificada estaticamente.
+Esses testes são descartados quando 2.1 for concluído — a cobertura passa a
+ser verificada estaticamente.
 
 ### 2.3 (Alta) Constraints de parâmetro no schema, não só na prosa
 
@@ -178,8 +207,8 @@ existentes (esforço alto; registrar como direção, não compromisso).
 
 | Prioridade | Item | Esforço | Valor |
 |---|---|---|---|
-| **Alta** | 2.1 Protocol split | Médio | Remove débito arquitetural raiz |
-| **Alta** | 2.2 Cobertura de backend (interim) | Baixo | Rede de segurança até 2.1 |
+| **Alta** | 2.2 Cobertura interim | Baixo | Rede de segurança até 2.1 |
+| **Alta** | 2.1 Protocol split | Médio | Remove os 3 problemas raiz |
 | **Alta** | 2.3 Constraints de schema | Médio | Rejeita entrada malformada antes do SEI |
 | Média | 2.4 Guidance de domínio | Médio | Orienta navegação entre 118 tools |
 | Média | 2.5 Error-boundary no CI | Médio | Garante envelope de erro consistente |
@@ -187,17 +216,17 @@ existentes (esforço alto; registrar como direção, não compromisso).
 
 ## 4. Não-objetivos
 
-- Mudar o padrão de roteamento (REST-first/web-fallback/composição paralela) — esse é o correto.
+- Mudar o padrão de roteamento (Web baseline + REST enhancement) — esse é o correto.
 - Re-fazer annotations/paginação/keyring — já existem (RFC 0003/0007/0002).
 - Renomear ou remover tools.
 
 ## 5. Plano de implementação
 
 1. **PR 1 — cobertura interim** (2.2): `tests/test_rest_backend.py` +
-   `tests/test_web_backend.py` + CI workflow. Sem mudança de runtime. Serve de
-   rede de segurança durante o Protocol split.
-2. **PR 2 — Protocol split** (2.1): substitui `SEIBackend` monolítico por 10
-   Protocols de domínio; deleta `_install_dispatchers`; torna 2.2 estático.
+   `tests/test_web_backend.py` + CI workflow. Sem mudança de runtime.
+2. **PR 2 — Protocol split** (2.1): 10 Protocols de domínio; `CompositeBackend`
+   como implementador; tabela de roteamento no startup; deleta
+   `_install_dispatchers`, stubs e `_WEB_FIRST`.
 3. **PR 3 — constraints de schema** (2.3): `Field(pattern=…)` nas tools de
    maior uso, incremental tool a tool.
 4. **PR 4 — guidance de domínio** (2.4) + **error-boundary check** (2.5).
