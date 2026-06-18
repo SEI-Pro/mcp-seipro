@@ -623,8 +623,8 @@ def test_informative_not_implemented_preserved_over_base_stub() -> None:
 # decision (add a comment explaining why a method was removed/moved).
 # ---------------------------------------------------------------------------
 
-_REST_COVERAGE_MIN = 0.88  # 111/125 when written
-_WEB_COVERAGE_MIN = 0.64  # 81/125 when written
+_REST_COVERAGE_MIN = 111 / 125  # exact fraction; one drop → 110/125 = 0.880 < 0.888 → fails
+_WEB_COVERAGE_MIN = 81 / 125  # exact fraction; one drop → 80/125 = 0.640 < 0.648 → fails
 
 
 def _contract_ops() -> set[str]:
