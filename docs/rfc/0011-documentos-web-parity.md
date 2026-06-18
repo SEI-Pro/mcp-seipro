@@ -99,7 +99,9 @@ async def listar_secoes(self, id_documento: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     textareas = soup.select("div#divEditores textarea")
     secoes = [
-        {"idSecaoModelo": ta["name"], "conteudo": ta.get_text(), "somenteLeitura": False}
+        # "id" deve ser preenchido (mesmo valor que idSecaoModelo) para que
+        # sei_editar_secao não descarte a seção no filtro `sid = s.get("id") or ...`.
+        {"id": ta["name"], "idSecaoModelo": ta["name"], "conteudo": ta.get_text(), "somenteLeitura": False}
         for ta in textareas
     ]
     return {"secoes": secoes, "ultimaVersaoDocumento": _extrair_versao(soup)}
@@ -174,7 +176,13 @@ async def _resolver_documento_web(self, numero_sei: str) -> tuple[str, str]:
             suggested_args={"protocolo_formatado": "<processo>"},
         )
     doc = result["documento"]
-    return doc["id"], doc.get("tipo_documento", "auto")
+    # tipo_documento do scraper web é o label humano (ex: "Despacho", "Relatório"),
+    # não os códigos "I"/"X" que _ler_documento_via_backend espera. Normalizar:
+    # só propagar se já vier como código; caso contrário usar "auto" para que a
+    # tool tente interno e caia para externo se falhar (comportamento seguro).
+    raw_tipo = doc.get("tipo_documento", "")
+    tipo = raw_tipo if raw_tipo in ("I", "X") else "auto"
+    return doc["id"], tipo
 ```
 
 Em `tools/documentos.py`, substituir:
