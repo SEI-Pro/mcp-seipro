@@ -37,6 +37,11 @@ precisar da API JavaScript do TinyMCE/CKEditor. O fluxo é:
 O editor é um formulário HTML convencional. O CKEditor serializa o conteúdo em textareas
 antes do submit — o scraper trabalha com o HTML resultante, não com a API do editor.
 
+> **Nota de estimativa**: o editor foi inicialmente classificado como "Hard" antes desta
+> pesquisa, por se assumir que a API JavaScript do TinyMCE seria necessária. A pesquisa
+> no SEI-Pro corrigiu esse diagnóstico — é **Medium**, igual às outras ops de scraping.
+> A evidência que suporta essa revisão está documentada acima e em §5.
+
 ---
 
 ## 1. Problema
@@ -86,11 +91,24 @@ Fora de escopo: alterar o comportamento de qualquer tool já funcional em modo R
 
 O fluxo descoberto no SEI-Pro mapeia diretamente para as duas ops:
 
-**`listar_secoes(id_documento)`**:
+**Contrato atualizado**: `listar_secoes` e `alterar_secoes` ganham `processo: str | None = None`
+no contrato (`backends/base.py`) — necessário para que o web backend obtenha `id_procedimento`
+via `consultar_documento_web(processo, id_documento)`. O REST backend ignora o parâmetro
+(nunca precisou dele). O composite repassa. As tools `sei_listar_secoes` e `sei_editar_secao`
+expõem `processo` como parâmetro opcional (mesmo padrão de `sei_baixar_anexo`).
+
+**`listar_secoes(id_documento, processo=None)`**:
 ```python
-async def listar_secoes(self, id_documento: str) -> dict:
-    # Precisa do id_procedimento; busca via consultar_documento_web se não fornecido.
-    # O editor_montar requer ambos os parâmetros.
+async def listar_secoes(self, id_documento: str, processo: str | None = None) -> dict:
+    if processo is None:
+        msg = (
+            "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
+            "para listar seções de documento."
+        )
+        raise SEINotImplementedError(msg)
+    # id_procedimento vem dos metadados do documento (campo 'id_procedimento')
+    meta = await self._web.consultar_documento_web(processo, id_documento)
+    id_procedimento = meta.get("id_procedimento") or meta.get("idProcedimento", "")
     html = await self._web.get("controlador.php", params={
         "acao": "editor_montar",
         "id_procedimento": id_procedimento,
@@ -107,10 +125,15 @@ async def listar_secoes(self, id_documento: str) -> dict:
     return {"secoes": secoes, "ultimaVersaoDocumento": _extrair_versao(soup)}
 ```
 
-**`alterar_secoes(id_documento, secoes, versao)`**:
+**`alterar_secoes(id_documento, secoes, versao, processo=None)`**:
 ```python
-async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str = "") -> dict:
-    html = await self._web.get("controlador.php", params={...})  # mesmo GET
+async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str = "", processo: str | None = None) -> dict:
+    if processo is None:
+        msg = "Em instâncias sem mod-wssei, forneça 'processo' para editar seções."
+        raise SEINotImplementedError(msg)
+    meta = await self._web.consultar_documento_web(processo, id_documento)
+    id_procedimento = meta.get("id_procedimento") or meta.get("idProcedimento", "")
+    html = await self._web.get("controlador.php", params={"acao": "editor_montar", "id_procedimento": id_procedimento, "id_documento": id_documento})  # mesmo GET que listar_secoes
     soup = BeautifulSoup(html, "html.parser")
     form = soup.find("form", id="frmEditor")
     save_url = form["action"]
@@ -191,11 +214,18 @@ Em `tools/documentos.py`, substituir:
 if await _has_rest(ctx) and tipo_documento == "auto":
     id_documento, tipo_doc = await _resolver_documento(await _get_client(ctx), id_documento)
 
-# DEPOIS
+# DEPOIS — o resolver só é chamado quando id_documento NÃO é já um ID interno
+# (IDs internos são puramente numéricos; números SEI formatados contêm traços ou barras).
 backend = await _backend(ctx)
-if tipo_documento == "auto":
+if tipo_documento == "auto" and not id_documento.isdigit():
     id_documento, tipo_doc = await backend.resolver_documento(id_documento)
 ```
+
+**Invariante**: quando `id_documento.isdigit()` é verdadeiro, o valor já é um ID interno —
+não há o que resolver. O composite só é chamado para numero SEI formatados (ex:
+`"2843449"` é ambíguo se for curto; o critério real é `isdigit()` — se for numérico puro,
+trata como id interno). Quando `processo` também é fornecido, o `_ler_documento_via_backend`
+já usa o id+processo diretamente sem resolver. Esse comportamento é preservado.
 
 O composite implementa `resolver_documento`: REST-first (`_resolver_documento` Solr, rápido),
 fallback web (`_resolver_documento_web`, mais lento — pesquisa múltiplos processos). A tool
@@ -208,13 +238,25 @@ vs O(1)). Documentada na descrição da tool: `processo=` acelera a busca quando
 
 ## 4. `tools/documentos.py` após a migração
 
-Os três pontos de `_get_client`/`_has_rest` desaparecem:
+Os usos de `_get_client`/`_has_rest` para **resolução de documento** desaparecem.
+**Atenção**: a guarda de validação em `sei_criar_documento` (linha 311) **permanece**:
+
+```python
+# PRESERVAR — não é roteamento, é validação de entrada:
+if await _has_rest(ctx) and not id_serie:
+    raise SEIValidationError("id_serie é obrigatório no modo REST. ...")
+```
+
+Esta guarda verifica a capacidade do backend para dar uma mensagem útil ao agente. Ela
+será migrada para `backend.requer_id_serie()` (método no composite que retorna `True`
+quando REST está ativo) em Fase 4 — não removida.
 
 | Antes | Depois |
 |---|---|
-| `_get_client`, `_has_rest` importados de `mcp_app` | removidos do import |
-| Resolução Solr condicional em `sei_ler_documento`, `sei_baixar_anexo` | `await backend.resolver_documento(id_documento)` incondicionalmente |
+| `_get_client` importado de `mcp_app` | removido do import |
+| `_has_rest` para resolução em `sei_ler_documento`, `sei_baixar_anexo` | `await backend.resolver_documento(id_documento)` (com guarda `isdigit`) |
 | `sei_gerar_referencia` usa `_get_client` direto | usa `backend.resolver_documento` |
+| `_has_rest` para validação em `sei_criar_documento` | `await backend.requer_id_serie()` |
 
 Resultado: `tools/documentos.py` não referencia mais clientes crus — apenas `_backend(ctx)`.
 Fecha o item pendente da RFC 0006.
@@ -223,10 +265,17 @@ Fecha o item pendente da RFC 0006.
 
 ## 5. Plano de implantação
 
+| Fase | Esforço | Confiança | Evidência de suporte |
+|---|---|---|---|
+| 1 — editor_montar (listar/alterar_secoes) | Médio | Alta | SEI-Pro faz exatamente esse fluxo; form HTML confirmado na análise da extensão |
+| 2 — alterar_documento_interno | Médio | Média | Mesmo padrão de `criar_documento_interno_web` (GET form → substituir campos → POST); URL/acao precisa de confirmação ao vivo |
+| 3 — listar_blocos + sugestao_assuntos | Médio | Média | Padrão de scraping de tabela; URLs desconhecidas mas padrão do SEI previsível |
+| 4 — resolver_documento + limpeza | Baixo | Alta | Refactor interno puro; sem novo scraping; `_resolver_documento` REST existe e funciona |
+
 ### Fase 1 — `listar_secoes` + `alterar_secoes` web (maior impacto, menor risco)
-1. Implementar em `backends/web/documentos.py`.
+1. Implementar em `backends/web/documentos.py` com o parâmetro `processo` adicionado ao contrato.
 2. Confirmar HTML do `editor_montar` contra SEI ao vivo: nomes de textarea, campo versão,
-   URL de save (ver §6).
+   URL de save, campo `id_procedimento` nos metadados do documento (ver §6).
 3. Teste: mock de GET `editor_montar` + assert POST com conteúdo correto.
 4. `sei_listar_secoes` e `sei_editar_secao` passam a funcionar em modo web-only.
 
@@ -241,11 +290,12 @@ Fecha o item pendente da RFC 0006.
 3. Testes mock.
 
 ### Fase 4 — `resolver_documento` no composite + limpeza de `tools/documentos.py`
-1. Adicionar `resolver_documento` ao contrato (`backends/base.py`).
+1. Adicionar `resolver_documento` e `requer_id_serie` ao contrato (`backends/base.py`).
 2. Implementar no `SEIRestBackend` (delega para `_resolver_documento` Solr existente) e no
    `SEIWebBackend` (delega para `_resolver_documento_web`).
 3. Implementar no `CompositeBackend` (REST-first, fallback web).
-4. Remover `_get_client`, `_has_rest` de `tools/documentos.py`.
+4. Migrar os três usos de resolução em `tools/documentos.py`; migrar guarda de validação
+   de `_has_rest` para `backend.requer_id_serie()`.
 5. Testes: resolver com REST mock, com web mock, e composite com REST indisponível.
 
 ### Sequência
@@ -261,17 +311,19 @@ Fases 1–3 exigem validação ao vivo. Fase 4 é puramente interna (sem scrapin
 
 ## 6. Incógnitas que requerem SEI ao vivo
 
-| Incógnita | Impacto se diferente do esperado |
-|---|---|
-| `editor_montar` usa `id_procedimento` + `id_documento` como params? | Ajustar GET; `id_procedimento` pode ser opcional |
-| Textareas em `div#divEditores` têm `data-*` com ID numérico de seção? | Usar atributo real em vez de nome de textarea como `idSecaoModelo` |
-| URL de save do `#frmEditor` é `editor_salvar` ou outro? | Nenhum — é lida dinamicamente do atributo `action` |
-| Form `documento_alterar` existe com esse nome de `acao`? | Ajustar `acao=` |
-| `listar_blocos_documento` web: tela `bloco_disponibilizar` ou `bloco_listar`? | Ajustar URL |
-| Versão do documento: campo `hdnVersao` ou `hdnUltimaVersaoDocumento`? | Ajustar parser |
+| Incógnita | Fonte | Confiança | Impacto se diferente do esperado |
+|---|---|---|---|
+| `editor_montar` usa `id_procedimento` + `id_documento` como params? | SEI-Pro usa esses params no JS | Alta | Ajustar GET; `id_procedimento` pode ser opcional |
+| `div#divEditores` existe com textareas `txaEditor_N`? | SEI-Pro seleciona exatamente esse seletor | Alta | Ajustar seletor |
+| Textareas têm `data-*` com ID numérico de seção? | Não confirmado no código SEI-Pro | Baixa | Usar atributo real em vez de nome de textarea como `idSecaoModelo` |
+| URL de save lida dinamicamente do atributo `action` do `#frmEditor`? | Padrão confirmado no SEI-Pro | Alta | Nenhum — estratégia é robusta por ser dinâmica |
+| Metadados de documento incluem `id_procedimento` / `idProcedimento`? | Inferido de `consultar_documento_web`; campo precisa de verificação | Média | Buscar `id_procedimento` por outra rota (ex: regex na URL da página) |
+| Form `documento_alterar` existe com esse nome de `acao`? | Inferido do padrão `criar`/`alterar` do SEI | Média | Ajustar `acao=` |
+| `listar_blocos_documento` web: tela `bloco_disponibilizar` ou `bloco_listar`? | Não confirmado | Baixa | Ajustar URL |
+| Campo de versão: `hdnVersao` ou `hdnUltimaVersaoDocumento`? | Não confirmado | Baixa | Ajustar parser |
 
-Nenhuma dessas incógnitas bloqueia o design — todas são detalhes de URL/campo que se
-resolvem com uma sessão de inspeção de rede (DevTools) contra qualquer instância SEI 4.0+.
+Itens de confiança Alta podem ser implementados com base na análise do SEI-Pro.
+Itens de confiança Baixa requerem uma sessão de DevTools contra SEI ao vivo antes de implementar.
 
 ---
 
@@ -279,8 +331,11 @@ resolvem com uma sessão de inspeção de rede (DevTools) contra qualquer instâ
 
 | Risco | Prob. | Mitigação |
 |---|---|---|
+| `id_procedimento` não disponível nos metadados do documento | Médio | `consultar_documento_web` pode não retornar esse campo; fallback: regex na URL de resposta ou campo adicional em `listar_documentos` web |
 | Editor com múltiplos iframes (CKEditor em subframe) | Médio | SEI-Pro parseia `frmEditor` no frame principal; o conteúdo serializado já está nas textareas do DOM antes do submit. Confirmar ao vivo. |
+| `resolver_documento_web` chamado com ID interno numérico | Baixo | Guarda `isdigit()` no §3.5 impede chamada desnecessária; testes cobrem o caso |
 | `resolver_documento_web` lento para docs sem `processo` | Alto | Documentar na description da tool; a tool já recomenda `processo=` para web-only |
+| `_has_rest` removido mas guarda de `id_serie` perdida | Baixo | §4 preserva a guarda via `backend.requer_id_serie()` explicitamente |
 | `idSecaoModelo` numérico vs nome de textarea incompatível com REST | Baixo | Composite isola; tool usa o valor como chave opaca; testes cobrem os dois caminhos |
 | Form `editor_montar` muda entre SEI 4.x e 5.x | Médio | SEI-Pro já lida com SEI 5.x (`infra-editor__editor-completo`); testar contra ambas as versões |
 | Salvamento silencioso falha (response não começa com "OK") | Baixo | Verificação explícita + `SEIError` com mensagem da resposta |
