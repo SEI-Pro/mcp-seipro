@@ -722,7 +722,10 @@ def _setup_protocolo_pattern() -> str:
         try:
             TypeAdapter(Annotated[str, Field(pattern=raw)])
         except _PydanticSchemaError as exc:
-            print_red(f"[ERRO] Padrão rejeitado pelo motor de validação: {exc}. Tente novamente.")
+            first_line = str(exc).split("\n")[0]
+            print_red(
+                f"[ERRO] Padrão rejeitado pelo motor de validação: {first_line}. Tente novamente."
+            )
             continue
         print_green(f"[+] Padrão configurado: {raw}")
         return raw
