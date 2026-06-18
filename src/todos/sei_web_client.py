@@ -2040,7 +2040,7 @@ class SEIWebClient:
         # Substituir conteúdos das textareas; seções não alteradas são reenviadas intactas
         alteracoes = {s["idSecaoModelo"]: s["conteudo"] for s in secoes}
         for ta in soup.select("div#divEditores textarea"):
-            nome = ta.get("name", "")
+            nome = str(ta.get("name", ""))
             if nome:
                 post_data.append((nome, alteracoes.get(nome, ta.get_text())))
 
