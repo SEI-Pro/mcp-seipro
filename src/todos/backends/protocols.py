@@ -13,7 +13,7 @@ startup.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from todos.backends.models import (
@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     )
 
 
-@runtime_checkable
 class UnidadesProtocol(Protocol):
     """Sessão, unidades e usuários (13 ops)."""
 
@@ -90,7 +89,6 @@ class UnidadesProtocol(Protocol):
         ...
 
 
-@runtime_checkable
 class ProcessosLeituraProtocol(Protocol):
     """Leitura de processos (15 ops)."""
 
@@ -167,7 +165,6 @@ class ProcessosLeituraProtocol(Protocol):
         ...
 
 
-@runtime_checkable
 class ProcessosEscritaProtocol(Protocol):
     """Escrita / tramitação de processos (19 ops)."""
 
@@ -257,7 +254,6 @@ class ProcessosEscritaProtocol(Protocol):
         ...
 
 
-@runtime_checkable
 class DocumentosProtocol(Protocol):
     """Documentos — criação, consulta e assinatura (19 ops)."""
 
@@ -364,7 +360,6 @@ class DocumentosProtocol(Protocol):
         ...
 
 
-@runtime_checkable
 class CatalogosProtocol(Protocol):
     """Catálogos de tipos, assuntos, contatos e modelos (11 ops)."""
 
@@ -446,7 +441,6 @@ class CatalogosProtocol(Protocol):
         ...
 
 
-@runtime_checkable
 class MarcadoresProtocol(Protocol):
     """Marcadores de processos (10 ops)."""
 
@@ -491,7 +485,6 @@ class MarcadoresProtocol(Protocol):
         ...
 
 
-@runtime_checkable
 class AcompanhamentoProtocol(Protocol):
     """Acompanhamento especial (8 ops)."""
 
@@ -532,7 +525,6 @@ class AcompanhamentoProtocol(Protocol):
         ...
 
 
-@runtime_checkable
 class BlocoInternoProtocol(Protocol):
     """Bloco interno (10 ops)."""
 
@@ -581,7 +573,6 @@ class BlocoInternoProtocol(Protocol):
         ...
 
 
-@runtime_checkable
 class BlocoAssinaturaProtocol(Protocol):
     """Bloco de assinatura (16 ops)."""
 
@@ -656,7 +647,6 @@ class BlocoAssinaturaProtocol(Protocol):
         ...
 
 
-@runtime_checkable
 class CredenciamentoProtocol(Protocol):
     """Credenciamento de processos sigilosos (4 ops)."""
 
