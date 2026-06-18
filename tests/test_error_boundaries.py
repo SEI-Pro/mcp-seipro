@@ -5,6 +5,7 @@ domain code without being wrapped in a SEIError:
 
 1. `raise httpx.SomeError(...)` — direct construction in tools/server
 2. `except httpx.*: raise` — bare re-raise inside an httpx handler
+   (including under if/for/with/try-body, but NOT inside nested handlers)
 3. `except httpx.* as e: raise e` — explicit re-raise of the bound var
 """
 
@@ -42,24 +43,31 @@ def _catches_httpx(handler: ast.ExceptHandler) -> bool:
     return False
 
 
-class _RaiseCollector(ast.NodeVisitor):
-    """Collect all ast.Raise nodes within a subtree."""
+def _bare_raises_not_in_nested_handler(stmts: list[ast.stmt]) -> list[int]:
+    """Line numbers of bare `raise` reachable without entering a nested handler.
 
-    def __init__(self) -> None:
-        self.raises: list[ast.Raise] = []
-
-    def visit_Raise(self, node: ast.Raise) -> None:
-        """Record the raise node."""
-        self.raises.append(node)
-        self.generic_visit(node)
+    Recurses into if/for/while/with and try-body/orelse/finalbody, but stops
+    at nested except-handler bodies so only the enclosing httpx handler's
+    exception context is considered.
+    """
+    lines: list[int] = []
+    for stmt in stmts:
+        if isinstance(stmt, ast.Raise) and stmt.exc is None:
+            lines.append(stmt.lineno)
+        elif isinstance(stmt, (ast.If, ast.For, ast.While)):
+            lines.extend(_bare_raises_not_in_nested_handler(stmt.body))
+            lines.extend(_bare_raises_not_in_nested_handler(stmt.orelse))
+        elif isinstance(stmt, ast.With):
+            lines.extend(_bare_raises_not_in_nested_handler(stmt.body))
+        elif isinstance(stmt, ast.Try):
+            lines.extend(_bare_raises_not_in_nested_handler(stmt.body))
+            lines.extend(_bare_raises_not_in_nested_handler(stmt.orelse))
+            lines.extend(_bare_raises_not_in_nested_handler(stmt.finalbody))
+    return lines
 
 
 def _httpx_reraises(path: Path) -> list[int]:
-    """Return lines where an httpx exception is re-raised from a handler.
-
-    Catches patterns 2 and 3: bare `raise` at the top level of an
-    `except httpx.*` body, and `raise <bound>` anywhere in the body.
-    """
+    """Lines where an httpx exception is re-raised from inside a handler."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     lines: list[int] = []
     for node in ast.walk(tree):
@@ -70,26 +78,24 @@ def _httpx_reraises(path: Path) -> list[int]:
                 continue
             bound = handler.name  # 'e' in `except ... as e`, or None
 
-            collector = _RaiseCollector()
-            for stmt in handler.body:
-                collector.visit(stmt)
+            lines.extend(_bare_raises_not_in_nested_handler(handler.body))
 
-            for raise_node in collector.raises:
-                exc = raise_node.exc
-                if exc is None:
-                    # bare `raise` — check only top-level stmts to avoid
-                    # false positives from nested try/except bodies
-                    if raise_node in {
-                        n for s in handler.body if isinstance(s, ast.Raise) for n in [s]
-                    }:
-                        lines.append(raise_node.lineno)
-                elif bound and isinstance(exc, ast.Name) and exc.id == bound:
-                    lines.append(raise_node.lineno)
+            if bound:
+                lines.extend(
+                    sub.lineno
+                    for sub in ast.walk(ast.Module(body=handler.body, type_ignores=[]))
+                    if (
+                        isinstance(sub, ast.Raise)
+                        and sub.exc is not None
+                        and isinstance(sub.exc, ast.Name)
+                        and sub.exc.id == bound
+                    )
+                )
     return sorted(set(lines))
 
 
 def _direct_httpx_raises(path: Path) -> list[int]:
-    """Return lines of `raise httpx.SomeError(...)` in path (pattern 1)."""
+    """Lines of `raise httpx.SomeError(...)` in path (pattern 1)."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     lines: list[int] = []
     for node in ast.walk(tree):
@@ -109,7 +115,7 @@ def _direct_httpx_raises(path: Path) -> list[int]:
 
 
 def _all_leaks(path: Path) -> list[int]:
-    """Return all boundary-violation line numbers in path."""
+    """All boundary-violation line numbers in path."""
     return sorted(set(_direct_httpx_raises(path) + _httpx_reraises(path)))
 
 
