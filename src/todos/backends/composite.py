@@ -5,8 +5,8 @@ mesmo contrato `SEIBackend`. Para cada operação:
 
 - Por padrão tenta o REST primeiro; se o REST não implementa a operação
   (`NotImplementedError`, herdado do stub da base), cai para o web.
-- Operações em `_WEB_FIRST` invertem a ordem (web primeiro) — são casos onde o
-  scraper é a fonte canônica ou muito mais rápido que a REST.
+- Operações em `_WEB_PREFERRED` invertem a ordem (web primeiro) — são casos
+  onde o scraper é a fonte canônica ou muito mais rápido que a REST.
 - Se nenhum backend disponível implementa a operação, levanta
   `SEINotImplementedError` (subclasse de `SEIError`, capturável pelas tools).
 
@@ -14,8 +14,10 @@ mesmo contrato `SEIBackend`. Para cada operação:
 REST com a árvore de documentos do web em paralelo (composição genuína de
 backends, que não cabe no padrão REST-first/web-fallback).
 
-Os dispatchers genéricos são gerados a partir do contrato `SEIBackend` em
-`_install_dispatchers`, evitando ~100 métodos de delegação idênticos.
+O roteamento é configurado em ``__init__`` (startup routing table), não em
+tempo de módulo: cada instância instala dispatchers nos atributos de instância
+com base nos backends recebidos.  Isso permite múltiplas instâncias com
+configurações diferentes e elimina efeitos colaterais no carregamento do módulo.
 """
 
 from __future__ import annotations
@@ -49,11 +51,21 @@ logger = logging.getLogger(__name__)
 
 # Operações onde o scraper web é preferido mesmo quando a REST está disponível
 # (fonte canônica da árvore/andamentos, ou desempenho muito superior ao REST).
-_WEB_FIRST = frozenset(
+_WEB_PREFERRED = frozenset(
     {
         "listar_processos",
         "listar_documentos",
         "listar_atividades",
+    }
+)
+
+# Operações implementadas explicitamente no corpo de CompositeBackend (fusão
+# real de dois backends; não devem ser substituídas pelo roteador automático).
+_COMPOSITE_EXPLICIT = frozenset(
+    {
+        "consultar_processo",
+        "criar_documento_externo",
+        "trocar_unidade",
     }
 )
 
@@ -64,9 +76,41 @@ class CompositeBackend(SEIBackend):
     name = "composite"
 
     def __init__(self, rest: SEIRestBackend | None, web: SEIWebBackend) -> None:
-        """Armazena o backend REST (opcional) e o backend web."""
+        """Armazena os backends e instala a tabela de roteamento por operação."""
         self._rest = rest
         self._web = web
+        self._setup_routing()
+
+    def _setup_routing(self) -> None:
+        """Instala dispatchers de instância com base nos backends configurados.
+
+        A tabela de roteamento é construída uma vez em ``__init__`` (startup
+        routing table):
+
+        - Web é a baseline: atende a 64 % do contrato diretamente.
+        - REST é preferido para as operações que implementa, exceto as de
+          ``_WEB_PREFERRED`` (onde o scraper é canônico ou muito mais rápido).
+        - As três operações de ``_COMPOSITE_EXPLICIT`` são fusões reais e
+          permanecem como métodos do corpo da classe — não são substituídas aqui.
+
+        Cada dispatcher é instalado como atributo de instância (não de classe),
+        portanto instâncias com REST vs. sem REST recebem tabelas diferentes.
+        """
+        rest = self._rest
+        web = self._web
+
+        contract = frozenset(
+            n
+            for n, _ in inspect.getmembers(SEIBackend, inspect.isfunction)
+            if not n.startswith("_")
+        )
+
+        for op in contract - _COMPOSITE_EXPLICIT:
+            if op in _WEB_PREFERRED:
+                ordered: tuple[SEIBackend | None, ...] = (web, rest)
+            else:
+                ordered = (rest, web)
+            setattr(self, op, _make_dispatcher(op, ordered))
 
     async def trocar_unidade(self, id_unidade: str) -> dict:
         """Troca a unidade no web (que controla a sessão) e sincroniza a REST."""
@@ -210,28 +254,18 @@ async def _dispatch_in_order(
     raise SEINotImplementedError(msg) from ultimo
 
 
-def _make_dispatcher(op_name: str) -> Callable[..., Awaitable[object]]:
-    """Cria um dispatcher REST-first (ou web-first) para uma operação do contrato."""
+def _make_dispatcher(
+    op_name: str,
+    ordered: tuple[SEIBackend | None, ...],
+) -> Callable[..., Awaitable[object]]:
+    """Cria um dispatcher com ordering fixo para uma operação do contrato."""
 
-    async def _dispatch(self: CompositeBackend, *args: object, **kwargs: object) -> object:
-        ordered = (self._web, self._rest) if op_name in _WEB_FIRST else (self._rest, self._web)
+    async def _dispatch(*args: object, **kwargs: object) -> object:
         return await _dispatch_in_order(op_name, ordered, args, kwargs)
 
     _dispatch.__name__ = op_name
     _dispatch.__qualname__ = f"CompositeBackend.{op_name}"
     return _dispatch
-
-
-def _install_dispatchers() -> None:
-    """Gera dispatchers genéricos para toda operação do contrato não sobrescrita."""
-    explicitas = {nome for nome, membro in vars(CompositeBackend).items() if callable(membro)}
-    for nome, _ in inspect.getmembers(SEIBackend, inspect.isfunction):
-        if nome.startswith("_") or nome in explicitas:
-            continue
-        setattr(CompositeBackend, nome, _make_dispatcher(nome))
-
-
-_install_dispatchers()
 
 
 def build_backend(rest_client: SEIClient, web_client: SEIWebClient) -> SEIBackend:
