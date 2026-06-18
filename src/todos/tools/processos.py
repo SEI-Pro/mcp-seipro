@@ -1018,14 +1018,18 @@ async def sei_detectar_formato_protocolo(
     backend = await _backend(ctx)
     result = await backend.listar_processos(pagina=0)
     processos = result.get("processos") or []
-    amostras = [
+    todas_strings = [
         proto
         for p in processos
         if (proto := str(p.get("protocolo") or p.get("Processo") or "").strip())
     ]
+    # Only count entries that actually match the canonical format — mixed inboxes
+    # may contain legacy or non-protocol rows that _inferir_padrao_protocolo ignores.
+    amostras = [s for s in todas_strings if _CANONICAL_PROTOCOLO_RE.match(s)]
     if len(amostras) < _MIN_AMOSTRAS:
         msg = (
-            f"Amostras insuficientes: {len(amostras)} processo(s) encontrado(s), "
+            f"Amostras válidas insuficientes: {len(amostras)} protocolo(s) no formato "
+            f"esperado (de {len(todas_strings)} linha(s) encontradas), "
             f"mínimo {_MIN_AMOSTRAS}. Verifique se há processos na caixa da unidade "
             "ou tente sei_listar_processos para confirmar."
         )

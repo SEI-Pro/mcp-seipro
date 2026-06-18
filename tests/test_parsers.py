@@ -356,3 +356,17 @@ class TestInferirPadraoProtocolo:
 
         key = _keyring_pattern_key("sei.antaq.gov.br")
         assert key == "SEI_PROTOCOLO_PATTERN@sei.antaq.gov.br"
+
+    def test_canonical_re_filters_non_protocol_strings(self) -> None:
+        from todos.tools.processos import _CANONICAL_PROTOCOLO_RE, _inferir_padrao_protocolo
+
+        # Simulate what sei_detectar_formato_protocolo does: filter before counting
+        todas = [f"50300.{i:06d}/2024-01" for i in range(10)] + [
+            "garbage",
+            "legacy-row",
+            "123",
+        ]
+        amostras = [s for s in todas if _CANONICAL_PROTOCOLO_RE.match(s)]
+        assert len(amostras) == 10
+        padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
+        assert min_len == max_len == 5
