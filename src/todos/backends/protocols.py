@@ -297,6 +297,7 @@ class DocumentosProtocol(Protocol):
         descricao: str = "",
         nivel_acesso: str = "",
         hipotese_legal: str = "",
+        processo: str | None = None,
     ) -> dict:
         """Altera metadados de um documento interno."""
         ...
@@ -312,11 +313,13 @@ class DocumentosProtocol(Protocol):
         """Altera metadados (e opcionalmente o arquivo) de um documento externo."""
         ...
 
-    async def listar_secoes(self, id_documento: str) -> dict:
+    async def listar_secoes(self, id_documento: str, processo: str | None = None) -> dict:
         """Lista as seções editáveis de um documento interno."""
         ...
 
-    async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str = "") -> dict:
+    async def alterar_secoes(
+        self, id_documento: str, secoes: list[dict], versao: str = "", processo: str | None = None
+    ) -> dict:
         """Edita seções de um documento interno."""
         ...
 

@@ -1971,6 +1971,181 @@ class SEIWebClient:
             raise SEIConnectionError(msg)
         return r.content
 
+    async def listar_secoes_web(self, protocolo: str, id_documento: str) -> dict:
+        """Lista seções editáveis de um documento interno via editor_montar."""
+        await self.ensure_authenticated()
+        editor_url, referer = await self._get_doc_signed_url(
+            protocolo, id_documento, "editor_montar"
+        )
+        r = await self._http.get(editor_url, headers={"Referer": referer})
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(body)
+        if erro:
+            msg = f"editor_montar: {erro}"
+            raise SEIConnectionError(msg)
+        soup = BeautifulSoup(body, "html.parser")
+        textareas = soup.select("div#divEditores textarea")
+        versao_inp = soup.find("input", {"name": lambda n: bool(n and "versao" in n.lower())})
+        versao = _tag_str(versao_inp, "value") if versao_inp else ""
+        secoes = [
+            {
+                "id": ta.get("name", ""),
+                "idSecaoModelo": ta.get("name", ""),
+                "conteudo": ta.decode_contents(),
+                "somenteLeitura": False,
+            }
+            for ta in textareas
+            if ta.get("name")
+        ]
+        return {"secoes": secoes, "ultimaVersaoDocumento": versao}
+
+    async def alterar_secoes_web(
+        self, protocolo: str, id_documento: str, secoes: list[dict]
+    ) -> dict:
+        """Edita seções de um documento interno via editor_montar POST."""
+        await self.ensure_authenticated()
+        sei_base = f"{self.sei_root}/sei/"
+        editor_url, referer = await self._get_doc_signed_url(
+            protocolo, id_documento, "editor_montar"
+        )
+        r = await self._http.get(editor_url, headers={"Referer": referer})
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(body)
+        if erro:
+            msg = f"editor_montar (GET): {erro}"
+            raise SEIConnectionError(msg)
+
+        soup = BeautifulSoup(body, "html.parser")
+        form = soup.find("form", id="frmEditor") or soup.find("form")
+        if form is None:
+            msg = "Formulário do editor não encontrado em editor_montar."
+            raise SEIParseError(msg)
+
+        action = _tag_str(form, "action").replace("&amp;", "&")
+        save_url = urljoin(sei_base, action) if action else editor_url
+
+        post_data: list[tuple[str, str]] = [
+            (_tag_str(inp, "name"), _tag_str(inp, "value"))
+            for inp in form.find_all("input", type="hidden")
+            if _tag_str(inp, "name") and "unidade" not in _tag_str(inp, "name").lower()
+        ]
+
+        # Submit button obrigatório — PHP ignora POST sem ele silenciosamente
+        sbm = _extrair_submit_btn(form)
+        if sbm:
+            post_data.append(sbm)
+
+        # Substituir conteúdos das textareas; seções não alteradas são reenviadas intactas
+        alteracoes = {s["idSecaoModelo"]: s["conteudo"] for s in secoes}
+        for ta in soup.select("div#divEditores textarea"):
+            nome = str(ta.get("name", ""))
+            if nome:
+                post_data.append((nome, alteracoes.get(nome, ta.decode_contents())))
+
+        r2 = await self._http.post(
+            save_url,
+            content=urlencode(post_data).encode(),
+            headers={"Referer": editor_url, "Content-Type": "application/x-www-form-urlencoded"},
+        )
+        _check(r2)
+        resp_body = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro2 = _extrair_erro_sei(resp_body)
+        if erro2:
+            msg = f"editor_montar (POST): {erro2}"
+            raise SEIConnectionError(msg)
+        return {"status": "ok", "id_documento": id_documento}
+
+    async def alterar_documento_interno_web(
+        self,
+        protocolo: str,
+        id_documento: str,
+        descricao: str = "",
+        nivel_acesso: str = "",
+        hipotese_legal: str = "",
+    ) -> dict:
+        """Altera metadados de um documento interno via documento_alterar."""
+        await self.ensure_authenticated()
+        sei_base = f"{self.sei_root}/sei/"
+        doc_url, referer = await self._get_doc_signed_url(
+            protocolo, id_documento, "documento_alterar"
+        )
+        r = await self._http.get(doc_url, headers={"Referer": referer})
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(body)
+        if erro:
+            msg = f"documento_alterar (GET): {erro}"
+            raise SEIConnectionError(msg)
+
+        soup = BeautifulSoup(body, "html.parser")
+        form = soup.find("form")
+        if form is None:
+            msg = "Formulário documento_alterar não encontrado."
+            raise SEIParseError(msg)
+
+        action = _tag_str(form, "action").replace("&amp;", "&")
+        save_url = urljoin(sei_base, action) if action else doc_url
+
+        post_data = [
+            (_tag_str(inp, "name"), _tag_str(inp, "value"))
+            for inp in form.find_all("input", type="hidden")
+            if _tag_str(inp, "name")
+        ]
+        sbm = _extrair_submit_btn(form)
+        if sbm:
+            post_data.append(sbm)
+
+        # Substituir apenas os campos informados; os demais permanecem do form original
+        campos: dict[str, str] = {}
+        if descricao:
+            campos["txtDescricao"] = descricao
+            campos["txaDescricao"] = descricao
+        if nivel_acesso:
+            campos["selNivelAcesso"] = nivel_acesso
+        if hipotese_legal and nivel_acesso in ("1", "2"):
+            campos["selHipoteseLegal"] = hipotese_legal
+
+        # Substituir ou adicionar campos conforme necessário
+        nomes_existentes = {name for name, _ in post_data}
+        updated: list[tuple[str, str]] = []
+        for name, value in post_data:
+            updated.append((name, campos.pop(name, value)))
+        for name, value in campos.items():
+            if name not in nomes_existentes:
+                updated.append((name, value))
+
+        # Campos select não aparecem em input[hidden] — garantir que os valores corretos sejam enviados
+        for sel in form.find_all("select"):
+            sel_name = _tag_str(sel, "name")
+            if not sel_name:
+                continue
+            if sel_name == "selNivelAcesso" and nivel_acesso:
+                updated = [(n, v) for n, v in updated if n != sel_name]
+                updated.append((sel_name, nivel_acesso))
+            elif sel_name == "selHipoteseLegal" and hipotese_legal and nivel_acesso in ("1", "2"):
+                updated = [(n, v) for n, v in updated if n != sel_name]
+                updated.append((sel_name, hipotese_legal))
+            elif sel_name not in {n for n, _ in updated}:
+                # Enviar o valor selecionado atual para campos não alterados
+                opt = sel.find("option", selected=True)
+                if opt:
+                    updated.append((sel_name, _tag_str(opt, "value")))
+
+        r2 = await self._http.post(
+            save_url,
+            content=urlencode(updated).encode(),
+            headers={"Referer": doc_url, "Content-Type": "application/x-www-form-urlencoded"},
+        )
+        _check(r2)
+        resp_body = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro2 = _extrair_erro_sei(resp_body)
+        if erro2:
+            msg = f"documento_alterar (POST): {erro2}"
+            raise SEIConnectionError(msg)
+        return {"status": "ok", "id_documento": id_documento}
+
     async def consultar_processo_detalhe(self, protocolo: str) -> dict:
         """Scrape de procedimento_consultar: unidades, interessados, sobrestamento.
 

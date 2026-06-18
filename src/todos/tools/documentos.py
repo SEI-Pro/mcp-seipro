@@ -49,11 +49,8 @@ from todos.mcp_app import (
     _aplicar_gate_documento,
     _backend,
     _DocumentoRef,
-    _get_client,
-    _has_rest,
     _http_mode,
     _json,
-    _resolver_documento,
     _shape_resposta_escrita,
     mcp,
 )
@@ -187,17 +184,21 @@ async def sei_ler_documento(
     try:
         backend = await _backend(ctx)
         tipo_doc = tipo_documento
-        # Auto-resolução número SEI → id interno + tipo: pesquisa Solr, REST-only.
-        # Em modo web-only o id é usado direto e o tipo continua "auto". O erro de
-        # resolução já orienta (sei_arvore_processo) e propaga.
-        if await _has_rest(ctx) and tipo_documento == "auto":
-            id_documento, tipo_doc = await _resolver_documento(await _get_client(ctx), id_documento)
-        if not await _has_rest(ctx) and processo is None:
-            msg = (
-                "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
-                "(protocolo do processo, ex: '50300.018905/2018-67') para ler documentos."
-            )
-            raise SEIValidationError(msg)
+        if tipo_documento == "auto":
+            # Tenta resolver número SEI → id interno + tipo via backend composto.
+            # REST-first (Solr, rápido); fallback web quando REST não disponível.
+            # Quando processo for fornecido, o _ler_documento_via_backend usa
+            # id+processo diretamente — resolver ainda é chamado para normalizar o tipo.
+            try:
+                id_documento, tipo_doc = await backend.resolver_documento(id_documento)
+            except (SEINotFoundError, SEINotImplementedError):
+                # Web sem processo: resolver falhou; propaga se processo também ausente
+                if processo is None:
+                    msg = (
+                        "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
+                        "(protocolo do processo, ex: '50300.018905/2018-67') para ler documentos."
+                    )
+                    raise SEIValidationError(msg) from None
         return await _ler_documento_via_backend(
             ctx,
             backend,
@@ -259,13 +260,13 @@ async def sei_baixar_anexo(
     """
     try:
         backend = await _backend(ctx)
-        # Auto-resolução número SEI → id interno (Solr, REST-only). O erro de
-        # resolução já traz orientação (sei_arvore_processo) e propaga.
-        if await _has_rest(ctx):
-            id_documento, _ = await _resolver_documento(await _get_client(ctx), id_documento)
-        elif processo is None:
-            msg = "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' para baixar anexos."
-            raise SEIValidationError(msg)
+        # Resolve número SEI → id interno via backend composto (REST-first com fallback web).
+        try:
+            id_documento, _ = await backend.resolver_documento(id_documento)
+        except (SEINotFoundError, SEINotImplementedError):
+            if processo is None:
+                msg = "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' para baixar anexos."
+                raise SEIValidationError(msg) from None
 
         acao, payload = await _aplicar_gate_documento(
             ctx,
@@ -308,7 +309,8 @@ async def sei_criar_documento(
     para inserir conteúdo.
     """
     # id_serie é obrigatório no caminho REST; no web vazio retorna os tipos.
-    if await _has_rest(ctx) and not id_serie:
+    backend = await _backend(ctx)
+    if await backend.requer_id_serie() and not id_serie:
         msg = (
             "id_serie é obrigatório no modo REST. "
             "Use sei_pesquisar_tipos_documento para listar os tipos disponíveis."
@@ -321,19 +323,25 @@ async def sei_criar_documento(
         hipotese_legal=hipotese_legal,
         id_unidade=id_unidade,
     )
-    result = await (await _backend(ctx)).criar_documento_interno(processo, dados)
+    result = await backend.criar_documento_interno(processo, dados)
     return _shape_resposta_escrita(result, "criar_documento")
 
 
 @mcp.tool(annotations=_READ)
-async def sei_listar_secoes(id_documento: str, ctx: Context | None = None) -> str:
+async def sei_listar_secoes(
+    id_documento: str,
+    processo: str | None = None,
+    ctx: Context | None = None,
+) -> str:
     """Lista as seções editáveis de um documento interno SEI.
 
     Retorna as seções com seus IDs, conteúdo atual (HTML),
     e a versão do documento (campo ultimaVersaoDocumento),
     necessária para usar sei_editar_secao.
+
+    - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
     """
-    result = await (await _backend(ctx)).listar_secoes(id_documento)
+    result = await (await _backend(ctx)).listar_secoes(id_documento, processo=processo)
     return _json(result)
 
 
@@ -361,8 +369,8 @@ async def sei_gerar_referencia(
         if id_documento:
             doc_id = id_documento.strip()
         else:
-            client = await _get_client(ctx)
-            doc_id, _ = await _resolver_documento(client, numero_sei)
+            backend = await _backend(ctx)
+            doc_id, _ = await backend.resolver_documento(numero_sei)
         snippet = html_referencia_sei(doc_id, numero_sei)
         return _json(
             {
@@ -442,6 +450,7 @@ async def sei_editar_secao(
     id_documento: str,
     secoes: list[dict],
     versao: str = "",
+    processo: str | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Altera o conteúdo de seções editáveis de um documento interno SEI.
@@ -454,6 +463,7 @@ async def sei_editar_secao(
       (não é necessário incluir seções somenteLeitura — são preenchidas
        automaticamente com o conteúdo original)
     - versao: versão do documento (se omitida, obtida automaticamente)
+    - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
 
     O conteúdo deve ser HTML com as classes CSS do SEI (ex: Texto_Justificado).
     Caracteres fora do ISO-8859-1 são convertidos automaticamente.
@@ -464,7 +474,7 @@ async def sei_editar_secao(
     backend = await _backend(ctx)
 
     # Buscar todas as seções atuais do documento
-    secoes_data = await backend.listar_secoes(id_documento)
+    secoes_data = await backend.listar_secoes(id_documento, processo=processo)
     secoes_atuais = secoes_data.get("secoes", [])
     if not versao:
         versao = str(secoes_data.get("ultimaVersaoDocumento", "1"))
@@ -501,7 +511,7 @@ async def sei_editar_secao(
             }
         )
 
-    result = await backend.alterar_secoes(id_documento, secoes_enviar, versao)
+    result = await backend.alterar_secoes(id_documento, secoes_enviar, versao, processo=processo)
     return _json(result)
 
 
@@ -583,6 +593,7 @@ async def sei_alterar_documento_interno(
     descricao: str = "",
     nivel_acesso: str = "",
     hipotese_legal: str = "",
+    processo: str | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Altera metadados de um documento interno (não o conteúdo HTML).
@@ -592,6 +603,7 @@ async def sei_alterar_documento_interno(
     - descricao: nova descrição
     - nivel_acesso: 0=público, 1=restrito, 2=sigiloso
     - hipotese_legal: ID da hipótese (obrigatório se restrito/sigiloso)
+    - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
@@ -601,6 +613,7 @@ async def sei_alterar_documento_interno(
         descricao=descricao,
         nivel_acesso=nivel_acesso,
         hipotese_legal=hipotese_legal,
+        processo=processo,
     )
     return _json(result)
 

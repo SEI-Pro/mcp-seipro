@@ -22,9 +22,7 @@ from todos.mcp_app import (
     _IDEM,
     _READ,
     _backend,
-    _get_client,
     _json,
-    _resolver_documento,
     mcp,
 )
 
@@ -58,6 +56,7 @@ async def _validar_cargo(backend: "SEIBackend", cargo: str) -> None:
 @mcp.tool(annotations=_IDEM)
 async def sei_cancelar_assinatura(
     id_documento: str,
+    processo: str | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Tenta cancelar (derrubar) a assinatura de um documento no SEI.
@@ -73,6 +72,8 @@ async def sei_cancelar_assinatura(
     Uma vez lido ou tramitado, o documento fica travado e a assinatura NÃO pode
     mais ser cancelada — por nenhum meio, nem pela interface web do SEI.
 
+    - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
+
     Orquestração: o SEI não expõe "cancelar assinatura" como op; a tool força uma
     edição mínima (derruba a assinatura) compondo listar_secoes + alterar_secoes
     pelo backend composto. Se o documento estiver travado (processo já lido/
@@ -81,10 +82,10 @@ async def sei_cancelar_assinatura(
     """
     backend = await _backend(ctx)
 
-    # Resolver número SEI → id interno (best-effort, pesquisa Solr REST-only)
+    # Resolver número SEI → id interno via backend composto (best-effort)
     doc_id = id_documento.strip()
     try:
-        doc_id, _ = await _resolver_documento(await _get_client(ctx), doc_id)
+        doc_id, _ = await backend.resolver_documento(doc_id)
     except (SEIError, httpx.HTTPError) as exc:
         logger.warning(
             "Resolução do documento falhou (%s) — usando referência original: %s",
@@ -93,7 +94,7 @@ async def sei_cancelar_assinatura(
         )
 
     # Verificar se está assinado e capturar a versão atual
-    secoes_data = await backend.listar_secoes(doc_id)
+    secoes_data = await backend.listar_secoes(doc_id, processo=processo)
     versao = str(secoes_data.get("ultimaVersaoDocumento", "1"))
 
     # Montar payload com todas as seções (mesmo conteúdo)
@@ -112,12 +113,9 @@ async def sei_cancelar_assinatura(
 
     # Editar derruba a assinatura se o documento ainda puder ser editado. Se
     # estiver travado (processo lido/enviado), o SEI rejeita e o erro propaga.
-    result = await backend.alterar_secoes(doc_id, secoes_enviar, versao)
+    await backend.alterar_secoes(doc_id, secoes_enviar, versao, processo=processo)
     return _json(
-        {
-            "mensagem": "Assinatura cancelada com sucesso. O documento foi editado (nova versão).",
-            "versao": result,
-        }
+        {"mensagem": "Assinatura cancelada com sucesso. O documento foi editado (nova versão)."}
     )
 
 
