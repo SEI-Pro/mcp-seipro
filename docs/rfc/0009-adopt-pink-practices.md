@@ -178,7 +178,7 @@ chamada**. Começar pelas tools mais usadas (`sei_consultar_processo`,
 
 ### 2.4 (Média) Guidance de domínio configurável e injetada na resposta
 
-Com 118 tools, a curva de "qual tool/qual ordem" é íngreme. As instruções do
+Com 124 tools, a curva de "qual tool/qual ordem" é íngreme. As instruções do
 servidor MCP já existem (domínio do SEI), mas são estáticas e globais.
 
 **Proposta:** um campo de instruções **configurável** (por órgão/unidade),
@@ -210,7 +210,7 @@ existentes (esforço alto; registrar como direção, não compromisso).
 | **Alta** | 2.2 Cobertura interim | Baixo | Rede de segurança até 2.1 |
 | **Alta** | 2.1 Protocol split | Médio | Remove os 3 problemas raiz |
 | **Alta** | 2.3 Constraints de schema | Médio | Rejeita entrada malformada antes do SEI |
-| Média | 2.4 Guidance de domínio | Médio | Orienta navegação entre 118 tools |
+| Média | 2.4 Guidance de domínio | Médio | Orienta navegação entre 124 tools |
 | Média | 2.5 Error-boundary no CI | Médio | Garante envelope de erro consistente |
 | Baixa | 2.6 CLI de fonte única | Alto | Debug/automação manual |
 
