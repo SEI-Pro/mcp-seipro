@@ -17,9 +17,10 @@ import base64
 import re
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastmcp import Context
+from pydantic import Field
 
 from todos.backends import EnvioProcesso, NovoProcesso
 from todos.exceptions import SEIValidationError
@@ -42,6 +43,11 @@ from todos.responses import (
     ProcessoDetalhe,
     RespostaEscrita,
 )
+
+# Padrão do protocolo SEI: NNNNN.NNNNNN/YYYY-NN (ex: 50300.000123/2025-00)
+_PROTOCOLO_FORMATADO = r"^\d{5}\.\d{6}/\d{4}-\d{2}$"
+# Nível de acesso: 0=público, 1=restrito, 2=sigiloso
+_NIVEL_ACESSO = r"^[012]$"
 
 # ---------------------------------------------------------------------------
 # Leitura
@@ -166,7 +172,7 @@ def _shape_consultar_processo(merged: dict, protocolo: str) -> dict:
 
 @mcp.tool(annotations=_READ)
 async def sei_consultar_processo(
-    protocolo_formatado: str,
+    protocolo_formatado: Annotated[str, Field(pattern=_PROTOCOLO_FORMATADO)],
     ctx: Context,
     *,
     include_raw: bool = False,
@@ -205,7 +211,7 @@ async def sei_consultar_processo(
 
 @mcp.tool(annotations=_READ)
 async def sei_arvore_processo(
-    protocolo_formatado: str,
+    protocolo_formatado: Annotated[str, Field(pattern=_PROTOCOLO_FORMATADO)],
     ctx: Context | None = None,
     *,
     include_raw: bool = False,
@@ -239,7 +245,7 @@ async def sei_arvore_processo(
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_documentos(
-    protocolo_formatado: str,
+    protocolo_formatado: Annotated[str, Field(pattern=_PROTOCOLO_FORMATADO)],
     ctx: Context | None = None,
     *,
     include_raw: bool = False,
@@ -501,7 +507,7 @@ async def sei_criar_processo(
     assuntos: str = "",
     interessados: str = "",
     observacoes: str = "",
-    nivel_acesso: str = "0",
+    nivel_acesso: Annotated[str, Field(pattern=_NIVEL_ACESSO)] = "0",
     hipotese_legal: str = "",
     ctx: Context | None = None,
 ) -> RespostaEscrita:
