@@ -13,13 +13,17 @@ tempo de execução para montar o schema de cada tool, então as anotações pre
 ser objetos reais (não strings adiadas).
 """
 
+import asyncio
 import base64
+import concurrent.futures
 import os
 import re
 import sys
 import tempfile
 from pathlib import Path
+from types import ModuleType
 from typing import Annotated, Literal
+from urllib.parse import urlparse
 
 from fastmcp import Context
 from pydantic import Field, TypeAdapter
@@ -48,12 +52,63 @@ from todos.responses import (
     RespostaEscrita,
 )
 
-# Padrão de validação lido da env var SEI_PROTOCOLO_PATTERN (opcional).
-# Cada instância do SEI pode usar um formato diferente; sem a env var nenhum
+_keyring_mod: ModuleType | None = None
+# _KeyringError captures keyring.errors.KeyringError when keyring is installed so that
+# KeyringLocked and other backend-specific errors (not subclasses of any builtin) are
+# caught alongside the standard OS/runtime errors. Falls back to a never-matched sentinel.
+_KeyringError: type[Exception] = type("_NullError", (Exception,), {})
+try:
+    import keyring as _keyring_mod
+    from keyring.errors import KeyringError as _KeyringError  # type: ignore[assignment]
+except ImportError:
+    sys.stderr.write("[todos] keyring not available — use SEI_PROTOCOLO_PATTERN env var.\n")
+
+# Padrão de validação lido do keyring (persistido por sei_detectar_formato_protocolo)
+# ou da env var SEI_PROTOCOLO_PATTERN (configuração manual).
+# Cada instância do SEI pode usar um formato diferente; sem configuração nenhum
 # constraint é aplicado e qualquer string é aceita.
-_SEI_PROTOCOLO_PATTERN = os.environ.get("SEI_PROTOCOLO_PATTERN", "")
 _PROTOCOLO_DESC = (
     "Número de protocolo SEI no formato NNNNN.NNNNNN/AAAA-DD, ex: 50300.000123/2025-00"
+)
+_CANONICAL_PROTOCOLO_RE = re.compile(r"^(\d+)\.(\d{6})/(\d{4})-(\d{2})$")
+# Keyring service name usado por todas as tools deste módulo
+_KEYRING_SERVICE = "todos-mcp"
+
+
+def _sei_host() -> str:
+    """Retorna o netloc da instância SEI configurada (SEI_WEB_URL ou SEI_URL)."""
+    for var in ("SEI_WEB_URL", "SEI_URL"):
+        url = os.environ.get(var, "").strip()
+        if url:
+            return urlparse(url).netloc
+    return ""
+
+
+def _keyring_pattern_key(host: str) -> str:
+    """Chave do keyring para o padrão de protocolo desta instância."""
+    return f"SEI_PROTOCOLO_PATTERN@{host}"
+
+
+def _read_keyring_pattern_sync(host: str) -> str:
+    """Lê SEI_PROTOCOLO_PATTERN do keyring com timeout de 2 s; retorna "" em caso de falha."""
+    if _keyring_mod is None or not host:
+        return ""
+    key = _keyring_pattern_key(host)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(_keyring_mod.get_password, _KEYRING_SERVICE, key)
+        return future.result(timeout=2.0) or ""
+    except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
+        return ""
+    finally:
+        # cancel_futures=True (Python 3.9+) abandons the thread if get_password is
+        # still running after the timeout — avoids blocking server startup.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+_host = _sei_host()
+_SEI_PROTOCOLO_PATTERN = _read_keyring_pattern_sync(_host) or os.environ.get(
+    "SEI_PROTOCOLO_PATTERN", ""
 )
 if _SEI_PROTOCOLO_PATTERN:
     _candidate = Annotated[str, Field(pattern=_SEI_PROTOCOLO_PATTERN, description=_PROTOCOLO_DESC)]
@@ -914,3 +969,159 @@ async def sei_gerar_zip_processo(
         await ctx.report_progress(100, 100)
 
     return _json(_salvar_arquivo_temp(processo, zip_bytes, "zip", _MAX_ZIP_MB))
+
+
+# ---------------------------------------------------------------------------
+# Descoberta automática do formato de protocolo (RFC 0010)
+# ---------------------------------------------------------------------------
+
+_MIN_AMOSTRAS = 10
+
+
+def _inferir_padrao_protocolo(amostras: list[str]) -> tuple[str, int, int]:
+    """Infere o regex de protocolo a partir de uma lista de protocolos reais.
+
+    Retorna (padrao, prefixo_min, prefixo_max).
+    Levanta SEIValidationError se nenhuma amostra bater no formato canônico.
+    """
+    prefix_lens = [len(m.group(1)) for s in amostras if (m := _CANONICAL_PROTOCOLO_RE.match(s))]
+    if not prefix_lens:
+        msg = (
+            "Nenhum protocolo no formato esperado (NNNNN.NNNNNN/AAAA-DD) foi encontrado "
+            "nas amostras coletadas. Verifique se há processos na caixa da unidade."
+        )
+        raise SEIValidationError(msg)
+    min_len = min(prefix_lens)
+    max_len = max(prefix_lens)
+    if min_len == max_len:
+        padrao = rf"^\d{{{min_len}}}\.\d{{6}}/\d{{4}}-\d{{2}}$"
+    else:
+        padrao = rf"^\d{{{min_len},{max_len}}}\.\d{{6}}/\d{{4}}-\d{{2}}$"
+    return padrao, min_len, max_len
+
+
+@mcp.tool(annotations=_IDEM)
+async def sei_detectar_formato_protocolo(
+    ctx: Context | None = None,
+) -> str:
+    """Detecta o formato do número de processo desta instância SEI e persiste no keyring.
+
+    Lê os processos reais da caixa de entrada, extrai os números de protocolo,
+    infere o regex e persiste no keyring para uso automático nas sessões futuras.
+
+    Use na primeira sessão com uma nova instância SEI. O padrão detectado é
+    carregado automaticamente no próximo startup, ativando validação de formato
+    em todas as tools que recebem protocolo_formatado.
+
+    Retorna o padrão detectado, o número de amostras e se foi persistido.
+    """
+    backend = await _backend(ctx)
+    result = await backend.listar_processos(pagina=0)
+    processos = result.get("processos") or []
+    todas_strings = [
+        proto
+        for p in processos
+        if (proto := str(p.get("protocolo") or p.get("Processo") or "").strip())
+    ]
+    # Only count entries that actually match the canonical format — mixed inboxes
+    # may contain legacy or non-protocol rows that _inferir_padrao_protocolo ignores.
+    amostras = [s for s in todas_strings if _CANONICAL_PROTOCOLO_RE.match(s)]
+    if len(amostras) < _MIN_AMOSTRAS:
+        msg = (
+            f"Amostras válidas insuficientes: {len(amostras)} protocolo(s) no formato "
+            f"esperado (de {len(todas_strings)} linha(s) encontradas), "
+            f"mínimo {_MIN_AMOSTRAS}. Verifique se há processos na caixa da unidade "
+            "ou tente sei_listar_processos para confirmar."
+        )
+        raise SEIValidationError(msg)
+
+    padrao, prefixo_min, prefixo_max = _inferir_padrao_protocolo(amostras)
+
+    # Valida que o Pydantic/Rust aceita o regex antes de persistir
+    try:
+        TypeAdapter(Annotated[str, Field(pattern=padrao)])
+    except _SchemaError as exc:
+        msg = f"Padrão inferido {padrao!r} é inválido para o motor Pydantic/Rust: {exc}"
+        raise SEIValidationError(msg) from exc
+
+    host = _sei_host()
+    persistido = False
+    if _keyring_mod is not None and host:
+        key = _keyring_pattern_key(host)
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(_keyring_mod.set_password, _KEYRING_SERVICE, key, padrao),
+                timeout=2.0,
+            )
+            persistido = True
+        except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
+            persistido = False
+
+    return _json(
+        {
+            "padrao": padrao,
+            "amostras": len(amostras),
+            "prefixo_min": prefixo_min,
+            "prefixo_max": prefixo_max,
+            "persistido": persistido,
+            "chave_keyring": _keyring_pattern_key(host) if host else None,
+            "aviso": (
+                None
+                if persistido
+                else "keyring indisponível — configure SEI_PROTOCOLO_PATTERN manualmente."
+            ),
+        }
+    )
+
+
+@mcp.tool(annotations=_IDEM)
+async def sei_redefinir_formato_protocolo(
+    ctx: Context | None = None,
+) -> str:
+    """Remove o padrão de protocolo persistido no keyring desta instância SEI.
+
+    Use quando a instância SEI for migrada ou o padrão detectado estiver incorreto.
+    Na próxima chamada a sei_detectar_formato_protocolo() a descoberta recomeça do zero.
+
+    Não afeta a env var SEI_PROTOCOLO_PATTERN (configuração manual).
+    """
+    del ctx
+    host = _sei_host()
+    if not host:
+        msg = (
+            "Não foi possível determinar o host da instância SEI. Configure SEI_WEB_URL ou SEI_URL."
+        )
+        raise SEIValidationError(msg)
+    key = _keyring_pattern_key(host)
+    if _keyring_mod is None:
+        msg = (
+            "keyring não está instalado — não há padrão persistido para remover. "
+            "Se você configurou SEI_PROTOCOLO_PATTERN manualmente, remova a env var."
+        )
+        raise SEIValidationError(msg)
+    removido = False
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(_keyring_mod.delete_password, _KEYRING_SERVICE, key),
+            timeout=2.0,
+        )
+        removido = True
+    except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
+        removido = False
+    return _json(
+        {
+            "removido": removido,
+            "chave_keyring": key,
+            "mensagem": (
+                f"Padrão removido do keyring (chave: {key}). "
+                "Na próxima sessão, chame sei_detectar_formato_protocolo para redescobrir."
+            )
+            if removido
+            else (
+                f"Falha ao remover o padrão do keyring (chave: {key}) — "
+                "keyring bloqueado, indisponível ou timeout. "
+                "O padrão anterior ainda será carregado na próxima sessão. "
+                "Tente novamente ou remova SEI_PROTOCOLO_PATTERN manualmente."
+            ),
+        }
+    )

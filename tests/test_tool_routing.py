@@ -810,6 +810,9 @@ _TOOLS_WITHOUT_ROUTING: frozenset[str] = frozenset(
         "sei_enviar_processo",  # resolve sigla→id + tramita (multi-step)
         "sei_atribuir_processo",  # resolve nome→id + atribui (multi-step)
         "sei_sobrestar_processo",  # compõe verificação + sobrestamento
+        # --- protocol discovery: lê keyring + backend (multi-step, stateful) ---
+        "sei_detectar_formato_protocolo",  # listar_processos + inferência + write keyring
+        "sei_redefinir_formato_protocolo",  # delete keyring — sem backend routing
     }
 )
 
