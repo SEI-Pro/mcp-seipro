@@ -25,7 +25,7 @@ from pydantic import Field, TypeAdapter
 from pydantic_core import SchemaError as _SchemaError
 
 from todos.exceptions import SEIValidationError
-from todos.mcp_app import _IDEM, _backend, _json, mcp
+from todos.mcp_app import _IDEM, _backend, _get_web_client, _json, mcp
 
 _keyring_mod: ModuleType | None = None
 # _KeyringError captures keyring.errors.KeyringError when keyring is installed so that
@@ -46,12 +46,28 @@ _KEYRING_SERVICE = "todos-mcp"
 
 
 def _sei_host() -> str:
-    """Retorna o netloc da instância SEI configurada (SEI_WEB_URL ou SEI_URL)."""
+    """Retorna o netloc da instância SEI configurada via env var (startup only)."""
     for var in ("SEI_WEB_URL", "SEI_URL"):
         url = os.environ.get(var, "").strip()
         if url:
             return urlparse(url).netloc
     return ""
+
+
+async def _sei_host_from_ctx(ctx: Context | None) -> str:
+    """Deriva o netloc da instância ativa: web client quando ctx disponível, env var como fallback.
+
+    Em modo HTTP/OAuth a URL vem dos tokens por usuário, não de env vars, por isso o web client
+    é a fonte canônica quando ctx está presente.
+    """
+    if ctx is not None:
+        try:
+            web = await _get_web_client(ctx)
+            if web.sei_root:
+                return urlparse(web.sei_root).netloc
+        except (ValueError, AttributeError, OSError, RuntimeError):
+            pass
+    return _sei_host()
 
 
 def _keyring_pattern_key(host: str) -> str:
@@ -176,7 +192,7 @@ async def sei_detectar_formato_protocolo(
         msg = f"Padrão inferido {padrao!r} é inválido para o motor Pydantic/Rust: {exc}"
         raise SEIValidationError(msg) from exc
 
-    host = _sei_host()
+    host = await _sei_host_from_ctx(ctx)
     persistido = False
     if _keyring_mod is not None and host:
         key = _keyring_pattern_key(host)
@@ -217,8 +233,7 @@ async def sei_redefinir_formato_protocolo(
 
     Não afeta a env var SEI_PROTOCOLO_PATTERN (configuração manual).
     """
-    del ctx
-    host = _sei_host()
+    host = await _sei_host_from_ctx(ctx)
     if not host:
         msg = (
             "Não foi possível determinar o host da instância SEI. Configure SEI_WEB_URL ou SEI_URL."
