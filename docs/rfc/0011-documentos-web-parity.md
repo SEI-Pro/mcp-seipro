@@ -116,13 +116,17 @@ async def listar_secoes(self, id_documento: str, processo: str | None = None) ->
     })
     soup = BeautifulSoup(html, "html.parser")
     textareas = soup.select("div#divEditores textarea")
+    # _extrair_versao: busca hdnVersao ou hdnUltimaVersaoDocumento no form
+    versao_inp = soup.find("input", {"name": lambda n: n and "versao" in n.lower()})
+    versao = versao_inp.get("value", "") if versao_inp else ""
     secoes = [
         # "id" deve ser preenchido (mesmo valor que idSecaoModelo) para que
         # sei_editar_secao não descarte a seção no filtro `sid = s.get("id") or ...`.
-        {"id": ta["name"], "idSecaoModelo": ta["name"], "conteudo": ta.get_text(), "somenteLeitura": False}
+        {"id": ta.get("name", ""), "idSecaoModelo": ta.get("name", ""), "conteudo": ta.get_text(), "somenteLeitura": False}
         for ta in textareas
+        if ta.get("name")
     ]
-    return {"secoes": secoes, "ultimaVersaoDocumento": _extrair_versao(soup)}
+    return {"secoes": secoes, "ultimaVersaoDocumento": versao}
 ```
 
 **`alterar_secoes(id_documento, secoes, versao, processo=None)`**:
@@ -136,6 +140,8 @@ async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: st
     html = await self._web.get("controlador.php", params={"acao": "editor_montar", "id_procedimento": id_procedimento, "id_documento": id_documento})  # mesmo GET que listar_secoes
     soup = BeautifulSoup(html, "html.parser")
     form = soup.find("form", id="frmEditor")
+    if form is None:
+        raise SEIError("Formulário frmEditor não encontrado na página do editor.")
     save_url = form["action"]
 
     params = {
@@ -143,10 +149,17 @@ async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: st
         for inp in form.find_all("input", type="hidden")
         if "unidade" not in inp.get("name", "").lower()
     }
+    # Botão submit obrigatório — PHP ignora POST sem ele silenciosamente
+    # (mesmo padrão de criar_documento_interno_web / _extrair_submit_btn)
+    sbm = _extrair_submit_btn(form)
+    if sbm:
+        params[sbm[0]] = sbm[1]
+
     alteracoes = {s["idSecaoModelo"]: s["conteudo"] for s in secoes}
     for ta in soup.select("div#divEditores textarea"):
-        nome = ta["name"]
-        params[nome] = sanitize_iso8859(alteracoes.get(nome, ta.get_text()))
+        nome = ta.get("name", "")
+        if nome:
+            params[nome] = sanitize_iso8859(alteracoes.get(nome, ta.get_text()))
 
     resp = await self._web.post(save_url, data=params)
     if not resp.text.startswith("OK"):
@@ -166,9 +179,16 @@ SEI ao vivo (ver §6).
 
 ### 3.2 `alterar_documento_interno` — formulário de metadados
 
+**Contrato**: `alterar_documento_interno` ganha `processo: str | None = None`, pelo mesmo
+motivo de `listar_secoes`/`alterar_secoes`: o web backend precisa de `processo` para obter
+`id_procedimento` e construir a URL assinada via `_get_doc_signed_url(processo, id_documento,
+acao)` (padrão existente em todos os leitores de documento web). O REST backend ignora o
+parâmetro.
+
 Tela `controlador.php?acao=documento_alterar&id_documento=X`. Scraping padrão:
-GET → parsear form → substituir `txaDescricao`, `selNivelAcesso`, `selHipoteseLegal` →
-POST ao action do form. Mesma estrutura de `criar_documento_interno_web`.
+GET (com `processo` para obter URL assinada) → parsear form → substituir `txaDescricao`,
+`selNivelAcesso`, `selHipoteseLegal` → POST ao action do form + submit button
+(`_extrair_submit_btn`). Mesma estrutura de `criar_documento_interno_web`.
 
 ### 3.3 `listar_blocos_documento` — página de blocos do documento
 
@@ -196,7 +216,7 @@ async def _resolver_documento_web(self, numero_sei: str) -> tuple[str, str]:
             error_code="DOCUMENTO_NAO_ENCONTRADO",
             recoverable=True,
             suggested_next_tool="sei_arvore_processo",
-            suggested_args={"protocolo_formatado": "<processo>"},
+            suggested_args={"protocolo_formatado": "protocolo_do_processo"},
         )
     doc = result["documento"]
     # tipo_documento do scraper web é o label humano (ex: "Despacho", "Relatório"),
@@ -214,18 +234,22 @@ Em `tools/documentos.py`, substituir:
 if await _has_rest(ctx) and tipo_documento == "auto":
     id_documento, tipo_doc = await _resolver_documento(await _get_client(ctx), id_documento)
 
-# DEPOIS — o resolver só é chamado quando id_documento NÃO é já um ID interno
-# (IDs internos são puramente numéricos; números SEI formatados contêm traços ou barras).
+# DEPOIS — o resolver é chamado sempre que tipo_documento == "auto".
+# O Solr REST resolve corretamente IDs internos (numérico puro) e números SEI
+# (numérico puro ou formatado) — o composite decide qual backend usar.
 backend = await _backend(ctx)
-if tipo_documento == "auto" and not id_documento.isdigit():
+if tipo_documento == "auto":
     id_documento, tipo_doc = await backend.resolver_documento(id_documento)
 ```
 
-**Invariante**: quando `id_documento.isdigit()` é verdadeiro, o valor já é um ID interno —
-não há o que resolver. O composite só é chamado para numero SEI formatados (ex:
-`"2843449"` é ambíguo se for curto; o critério real é `isdigit()` — se for numérico puro,
-trata como id interno). Quando `processo` também é fornecido, o `_ler_documento_via_backend`
-já usa o id+processo diretamente sem resolver. Esse comportamento é preservado.
+**Nota sobre discriminação interna vs. SEI**: `isdigit()` não é um discriminador confiável —
+tanto IDs internos (ex: `"3149544"`) quanto números SEI (ex: `"2874369"`) podem ser
+puramente numéricos. O Solr REST já lida com ambos via `atributos.protocoloFormatado`.
+O resolver web (`_resolver_documento_web`) deve ser chamado sempre para `tipo_documento == "auto"`;
+se o valor já for um ID interno numérico, o resolver pode retorná-lo diretamente (sem busca
+extra) após verificar que o documento existe — estratégia a ser definida na Fase 4. Quando
+`processo` também é fornecido, o `_ler_documento_via_backend` já usa o id+processo
+diretamente sem resolver. Esse comportamento é preservado.
 
 O composite implementa `resolver_documento`: REST-first (`_resolver_documento` Solr, rápido),
 fallback web (`_resolver_documento_web`, mais lento — pesquisa múltiplos processos). A tool
@@ -333,7 +357,7 @@ Itens de confiança Baixa requerem uma sessão de DevTools contra SEI ao vivo an
 |---|---|---|
 | `id_procedimento` não disponível nos metadados do documento | Médio | `consultar_documento_web` pode não retornar esse campo; fallback: regex na URL de resposta ou campo adicional em `listar_documentos` web |
 | Editor com múltiplos iframes (CKEditor em subframe) | Médio | SEI-Pro parseia `frmEditor` no frame principal; o conteúdo serializado já está nas textareas do DOM antes do submit. Confirmar ao vivo. |
-| `resolver_documento_web` chamado com ID interno numérico | Baixo | Guarda `isdigit()` no §3.5 impede chamada desnecessária; testes cobrem o caso |
+| `resolver_documento_web` chamado com ID interno numérico | Baixo | `isdigit()` não discrimina IDs internos de números SEI — ambos são numéricos puros. Resolver sempre chamado quando `tipo_documento == "auto"`; custo extra aceitável pois REST Solr é O(1) |
 | `resolver_documento_web` lento para docs sem `processo` | Alto | Documentar na description da tool; a tool já recomenda `processo=` para web-only |
 | `_has_rest` removido mas guarda de `id_serie` perdida | Baixo | §4 preserva a guarda via `backend.requer_id_serie()` explicitamente |
 | `idSecaoModelo` numérico vs nome de textarea incompatível com REST | Baixo | Composite isola; tool usa o valor como chave opaca; testes cobrem os dois caminhos |
