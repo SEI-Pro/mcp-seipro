@@ -144,7 +144,16 @@ async def sei_detectar_formato_protocolo(
     todas_strings = [
         proto
         for p in processos
-        if (proto := str(p.get("protocolo") or p.get("Processo") or "").strip())
+        if (
+            proto := str(
+                # web backend: "protocolo" or "Processo"
+                # REST backend: atributos.numero (used by sei_resumo_processos)
+                p.get("protocolo")
+                or p.get("Processo")
+                or (p.get("atributos") or {}).get("numero")
+                or ""
+            ).strip()
+        )
     ]
     # Only count entries that actually match the canonical format — mixed inboxes
     # may contain legacy or non-protocol rows that _inferir_padrao_protocolo ignores.
