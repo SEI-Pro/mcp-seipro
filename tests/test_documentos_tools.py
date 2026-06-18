@@ -14,7 +14,7 @@ import pytest
 from helpers import aconst
 
 from todos import access_control
-from todos.exceptions import SEIError, SEIValidationError
+from todos.exceptions import SEIError, SEINotImplementedError, SEIValidationError
 from todos.tools import assinatura as a
 from todos.tools import documentos as d
 
@@ -142,8 +142,8 @@ class _SecoesBackend:
         msg = f"_SecoesBackend.{op} not implemented"
         raise NotImplementedError(msg)
 
-    async def listar_secoes(self, id_documento: str) -> dict:
-        del id_documento
+    async def listar_secoes(self, id_documento: str, processo: str | None = None) -> dict:
+        del id_documento, processo
         return {
             "secoes": [
                 {"id": "10", "idSecaoModelo": "1", "conteudo": "&lt;p&gt;antigo&lt;/p&gt;"},
@@ -152,8 +152,10 @@ class _SecoesBackend:
             "ultimaVersaoDocumento": "5",
         }
 
-    async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str) -> dict:
-        del id_documento
+    async def alterar_secoes(
+        self, id_documento: str, secoes: list[dict], versao: str, processo: str | None = None
+    ) -> dict:
+        del id_documento, processo
         self.sent = (secoes, versao)
         return {"ok": True}
 
@@ -203,8 +205,19 @@ class TestIncluirValidation:
             asyncio.run(d.sei_incluir_documento_externo("PF", arquivo_path="/etc/passwd", ctx=None))
 
 
+class _RequerIdSerieBackend:
+    name = "fake"
+
+    def __getattr__(self, op: str) -> object:
+        msg = f"_RequerIdSerieBackend.{op} not implemented"
+        raise NotImplementedError(msg)
+
+    async def requer_id_serie(self) -> bool:
+        return True
+
+
 def test_criar_documento_requires_id_serie_in_rest(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(d, "_has_rest", aconst(True))
+    monkeypatch.setattr(d, "_backend", aconst(_RequerIdSerieBackend()))
     with pytest.raises(SEIValidationError, match="id_serie é obrigatório"):
         asyncio.run(d.sei_criar_documento("PF", id_serie="", ctx=None))
 
@@ -214,10 +227,26 @@ def test_criar_documento_requires_id_serie_in_rest(monkeypatch: pytest.MonkeyPat
 # ---------------------------------------------------------------------------
 
 
+class _WebOnlyBackend:
+    name = "fake"
+
+    def __getattr__(self, op: str) -> object:
+        msg = f"_WebOnlyBackend.{op} not implemented"
+        raise NotImplementedError(msg)
+
+    async def consultar_documento_interno(
+        self, id_documento: str, processo: str | None = None
+    ) -> dict:
+        del id_documento
+        if processo is None:
+            msg = "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' para consultar metadados de documento."
+            raise SEINotImplementedError(msg)
+        return {"nivelAcesso": "0"}
+
+
 def test_ler_documento_web_only_requires_processo(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(d, "_backend", aconst(object()))
-    monkeypatch.setattr(d, "_has_rest", aconst(False))
-    with pytest.raises(SEIValidationError, match="forneça o parâmetro 'processo'"):
+    monkeypatch.setattr(d, "_backend", aconst(_WebOnlyBackend()))
+    with pytest.raises(Exception, match="forneça o parâmetro 'processo'"):
         asyncio.run(d.sei_ler_documento("D", tipo_documento="I", processo=None, ctx=None))
 
 
@@ -240,7 +269,6 @@ class _GateErroBackend:
 
 def test_ler_documento_propagates_consult_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(d, "_backend", aconst(_GateErroBackend()))
-    monkeypatch.setattr(d, "_has_rest", aconst(False))
     # Fail-closed by propagation: the gate's consult error propagates (the read
     # never runs); no tailored hint, no envelope.
     with pytest.raises(SEIError, match="não autorizado"):
@@ -253,6 +281,9 @@ class _AnexoBackend:
     def __getattr__(self, op: str) -> object:
         msg = f"_AnexoBackend.{op} not implemented"
         raise NotImplementedError(msg)
+
+    async def resolver_documento(self, referencia: str) -> tuple[str, str]:
+        return referencia, "X"
 
     async def consultar_documento_externo(
         self, id_documento: str, processo: str | None = None
@@ -267,7 +298,6 @@ class _AnexoBackend:
 
 def test_baixar_anexo_too_large_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(d, "_backend", aconst(_AnexoBackend()))
-    monkeypatch.setattr(d, "_has_rest", aconst(False))
     monkeypatch.setattr(d, "MAX_BINARY_SIZE", 10)
     with pytest.raises(SEIValidationError, match="muito grande"):
         asyncio.run(d.sei_baixar_anexo("D", processo="PF", ctx=None))
@@ -335,15 +365,20 @@ class _CancelarBackend:
         msg = f"_CancelarBackend.{op} not implemented"
         raise NotImplementedError(msg)
 
-    async def listar_secoes(self, id_documento: str) -> dict:
-        del id_documento
+    async def resolver_documento(self, referencia: str) -> tuple[str, str]:
+        return referencia, "I"
+
+    async def listar_secoes(self, id_documento: str, processo: str | None = None) -> dict:
+        del id_documento, processo
         return {
             "secoes": [{"id": "1", "idSecaoModelo": "2", "conteudo": "x"}],
             "ultimaVersaoDocumento": "4",
         }
 
-    async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str) -> dict:
-        del id_documento, secoes, versao
+    async def alterar_secoes(
+        self, id_documento: str, secoes: list[dict], versao: str, processo: str | None = None
+    ) -> dict:
+        del id_documento, secoes, versao, processo
         if self._locked:
             # The SEIClient raises this with the SEI's own message; it propagates.
             msg = "Erro ao alterar documento: documento já assinado."
@@ -352,12 +387,7 @@ class _CancelarBackend:
 
 
 def _patch_cancelar(monkeypatch: pytest.MonkeyPatch, backend: _CancelarBackend) -> None:
-    async def _fake_resolver(_client: object, ref: str) -> tuple[str, str]:
-        return ref, "I"
-
     monkeypatch.setattr(a, "_backend", aconst(backend))
-    monkeypatch.setattr(a, "_get_client", aconst(object()))
-    monkeypatch.setattr(a, "_resolver_documento", _fake_resolver)
 
 
 def test_cancelar_assinatura_propagates_lock_error(monkeypatch: pytest.MonkeyPatch) -> None:

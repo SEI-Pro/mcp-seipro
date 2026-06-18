@@ -113,8 +113,10 @@ class DocumentosRest(_RestMixin):
         descricao: str = "",
         nivel_acesso: str = "",
         hipotese_legal: str = "",
+        processo: str | None = None,
     ) -> dict:
         """Altera metadados de um documento interno."""
+        del processo  # REST localiza o documento pelo id; protocolo não é necessário
         return await self._rest.alterar_documento_interno(
             id_documento=id_documento,
             descricao=descricao,
@@ -139,13 +141,25 @@ class DocumentosRest(_RestMixin):
             arquivo_path=arquivo_path,
         )
 
-    async def listar_secoes(self, id_documento: str) -> dict:
+    async def listar_secoes(self, id_documento: str, processo: str | None = None) -> dict:
         """Lista as seções editáveis de um documento interno."""
+        del processo  # REST localiza o documento pelo id; protocolo não é necessário
         return await self._rest.listar_secao_documento(id_documento)
 
-    async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str = "") -> dict:
+    async def alterar_secoes(
+        self, id_documento: str, secoes: list[dict], versao: str = "", processo: str | None = None
+    ) -> dict:
         """Edita seções de um documento interno."""
+        del processo  # REST localiza o documento pelo id; protocolo não é necessário
         return await self._rest.alterar_secao_documento(id_documento, secoes, versao or "1")
+
+    async def resolver_documento(self, referencia: str) -> tuple[str, str]:
+        """Resolve referência de documento via pesquisa Solr (REST)."""
+        return await self._resolver_documento(referencia)
+
+    async def requer_id_serie(self) -> bool:
+        """REST exige id_serie para criar documentos internos."""
+        return True
 
     async def sugestao_assuntos_documento(self, id_serie: str) -> list[dict]:
         """Sugere assuntos para um tipo de documento."""

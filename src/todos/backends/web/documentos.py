@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING
 
 from todos.backends.models import DocumentoExternoInclusaoWeb
 from todos.backends.web._session import _WebMixin
-from todos.exceptions import SEINotImplementedError
+from todos.exceptions import SEINotFoundError, SEINotImplementedError
+from todos.html_utils import sanitize_iso8859
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,81 @@ class DocumentosWeb(_WebMixin):
                 conteudo=conteudo,
             ),
         )
+
+    async def listar_secoes(self, id_documento: str, processo: str | None = None) -> dict:
+        """Lista as seções editáveis de um documento interno via editor_montar."""
+        if processo is None:
+            msg = (
+                "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
+                "para listar seções de documento."
+            )
+            raise SEINotImplementedError(msg)
+        return await self._web.listar_secoes_web(processo, id_documento)
+
+    async def alterar_secoes(
+        self, id_documento: str, secoes: list[dict], versao: str = "", processo: str | None = None
+    ) -> dict:
+        """Edita seções de um documento interno via editor_montar."""
+        del versao  # web relê o form; versão não é enviada como parâmetro
+        if processo is None:
+            msg = (
+                "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
+                "para editar seções de documento."
+            )
+            raise SEINotImplementedError(msg)
+        # Sanitizar conteúdo para ISO-8859-1 antes de enviar ao SEI
+        secoes_sanitizadas = [
+            {**s, "conteudo": sanitize_iso8859(s.get("conteudo", ""))} for s in secoes
+        ]
+        return await self._web.alterar_secoes_web(processo, id_documento, secoes_sanitizadas)
+
+    async def alterar_documento_interno(
+        self,
+        id_documento: str,
+        descricao: str = "",
+        nivel_acesso: str = "",
+        hipotese_legal: str = "",
+        processo: str | None = None,
+    ) -> dict:
+        """Altera metadados de um documento interno via documento_alterar."""
+        if processo is None:
+            msg = (
+                "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
+                "para alterar um documento interno."
+            )
+            raise SEINotImplementedError(msg)
+        return await self._web.alterar_documento_interno_web(
+            processo,
+            id_documento,
+            descricao=descricao,
+            nivel_acesso=nivel_acesso,
+            hipotese_legal=hipotese_legal,
+        )
+
+    async def resolver_documento(self, referencia: str) -> tuple[str, str]:
+        """Resolve referência de documento via pesquisa web.
+
+        Tenta busca direta; se não encontrar, faz pesquisa web por número SEI.
+        Retorna (id_interno, tipo) onde tipo é 'I', 'X' ou 'auto'.
+        """
+        result = await self.buscar_documento(referencia)
+        if not result.get("encontrado"):
+            msg = (
+                f"Documento SEI '{referencia}' não encontrado via pesquisa web. "
+                "Informe o parâmetro processo= para busca direta, "
+                "ou use sei_arvore_processo para encontrar o id interno."
+            )
+            raise SEINotFoundError(msg)
+        doc = result["documento"]
+        # tipo_documento do scraper é label humano (ex: "Despacho") — não os códigos "I"/"X".
+        # Normalizar para "auto" quando não for código canônico.
+        raw_tipo = doc.get("tipo_documento", "")
+        tipo = raw_tipo if raw_tipo in ("I", "X") else "auto"
+        return doc["id"], tipo
+
+    async def requer_id_serie(self) -> bool:
+        """Web não exige id_serie para criar documentos internos."""
+        return False
 
     async def listar_assinaturas(
         self, id_documento: str, processo: str | None = None

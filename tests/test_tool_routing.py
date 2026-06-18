@@ -594,6 +594,8 @@ _RECORDING_BACKEND_OPS: frozenset[str] = frozenset(
         "criar_processo",  # test_criar_processo_shaped_output_preserves_ids
         "alterar_processo",  # test_alterar_processo_shaped_output
         "criar_documento_externo",  # test_incluir_documento_externo_shaped_output
+        "requer_id_serie",  # test_criar_documento_routes_to_composite + test_criar_documento_shaped_output_preserves_doc_ids
+        "resolver_documento",  # test_criar_documento_routes_to_composite + read/baixar tests
     }
 )
 
@@ -667,13 +669,11 @@ def test_editar_secao_reads_then_writes_via_composite(monkeypatch: pytest.Monkey
 def test_criar_documento_routes_to_composite(monkeypatch: pytest.MonkeyPatch) -> None:
     # Migrated hybrid create: routes through backend.criar_documento_interno
     # regardless of REST/web; the processo and a NovoDocumentoInterno are passed.
-    # _has_rest only gates the id_serie validation message, so stub it.
     fake = RecordingBackend()
     monkeypatch.setattr(documentos, "_backend", aconst(fake))
-    monkeypatch.setattr(documentos, "_has_rest", aconst(True))
 
     asyncio.run(documentos.sei_criar_documento("PF", id_serie="S", descricao="d", ctx=None))
-    op, args, _ = fake.calls[0]
+    op, args, _ = fake.calls[-1]
     assert op == "criar_documento_interno"
     assert args[0] == "PF"
     assert args[1].id_serie == "S"
@@ -713,13 +713,15 @@ class _ReadBackend(SEIBackend):
         self.calls.append("baixar_anexo")
         return b"%PDF-1.4 conteudo"
 
+    async def resolver_documento(self, referencia: str) -> tuple[str, str]:
+        return referencia, "auto"
+
 
 def test_ler_documento_gates_then_reads_via_composite(monkeypatch: pytest.MonkeyPatch) -> None:
     # Web-only mode (no auto-resolution): gate consults then content is read,
     # both through the composite. Public doc → content released.
     backend = _ReadBackend()
     monkeypatch.setattr(documentos, "_backend", aconst(backend))
-    monkeypatch.setattr(documentos, "_has_rest", aconst(False))
 
     out = asyncio.run(
         documentos.sei_ler_documento("D", tipo_documento="I", processo="PF", ctx=None)
@@ -731,7 +733,6 @@ def test_ler_documento_gates_then_reads_via_composite(monkeypatch: pytest.Monkey
 def test_baixar_anexo_gates_then_downloads_via_composite(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = _ReadBackend()
     monkeypatch.setattr(documentos, "_backend", aconst(backend))
-    monkeypatch.setattr(documentos, "_has_rest", aconst(False))
 
     out = asyncio.run(documentos.sei_baixar_anexo("D", processo="PF", ctx=None))
     assert backend.calls == ["consultar_documento_externo", "baixar_anexo"]
@@ -865,7 +866,6 @@ def test_criar_documento_shaped_output_preserves_doc_ids(monkeypatch: pytest.Mon
     """sei_criar_documento must return shaped RespostaEscrita preserving doc id+numero_sei."""
     fake = RecordingBackend({"idDocumento": "D42", "protocoloDocumentoFormatado": "2843449"})
     monkeypatch.setattr(documentos, "_backend", aconst(fake))
-    monkeypatch.setattr(documentos, "_has_rest", aconst(True))
 
     result = asyncio.run(documentos.sei_criar_documento("PF", id_serie="S", ctx=None))
     assert result.acao == "criar_documento"

@@ -65,6 +65,7 @@ _COMPOSITE_EXPLICIT = frozenset(
     {
         "consultar_processo",
         "criar_documento_externo",
+        "requer_id_serie",
         "trocar_unidade",
     }
 )
@@ -130,6 +131,10 @@ class CompositeBackend(SEIBackend):
                     exc,
                 )
         return result
+
+    async def requer_id_serie(self) -> bool:
+        """Retorna True apenas quando o backend REST está disponível."""
+        return self._rest is not None
 
     async def consultar_processo(self, processo: str) -> dict:
         """Combina metadados da REST com a árvore de documentos do web."""

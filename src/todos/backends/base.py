@@ -322,6 +322,7 @@ class SEIBackend:
         descricao: str = "",
         nivel_acesso: str = "",
         hipotese_legal: str = "",
+        processo: str | None = None,
     ) -> dict:
         """Altera metadados de um documento interno."""
         raise NotImplementedError
@@ -337,17 +338,31 @@ class SEIBackend:
         """Altera metadados (e opcionalmente o arquivo) de um documento externo."""
         raise NotImplementedError
 
-    async def listar_secoes(self, id_documento: str) -> dict:
+    async def listar_secoes(self, id_documento: str, processo: str | None = None) -> dict:
         """Lista as seções editáveis de um documento interno."""
         raise NotImplementedError
 
-    async def alterar_secoes(self, id_documento: str, secoes: list[dict], versao: str = "") -> dict:
+    async def alterar_secoes(
+        self, id_documento: str, secoes: list[dict], versao: str = "", processo: str | None = None
+    ) -> dict:
         """Edita seções de um documento interno."""
         raise NotImplementedError
 
     async def gerar_referencia(self, numero_sei: str, id_documento: str = "") -> dict:
         """Gera o HTML de referência (link dinâmico) para um documento."""
         raise NotImplementedError
+
+    async def resolver_documento(self, referencia: str) -> tuple[str, str]:
+        """Resolve referência de documento → (id_interno, tipo_documento).
+
+        Aceita tanto o id interno quanto o número SEI (protocoloFormatado).
+        Retorna (id_documento, tipo) onde tipo é 'I', 'X' ou 'auto'.
+        """
+        raise NotImplementedError
+
+    async def requer_id_serie(self) -> bool:
+        """Retorna True quando o backend exige id_serie para criar documentos internos."""
+        return False
 
     async def sugestao_assuntos_documento(self, id_serie: str) -> list[dict]:
         """Sugere assuntos para um tipo de documento."""
