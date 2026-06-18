@@ -46,18 +46,18 @@ def _catches_httpx(handler: ast.ExceptHandler) -> bool:
 def _bare_raises_not_in_nested_handler(stmts: list[ast.stmt]) -> list[int]:
     """Line numbers of bare `raise` reachable without entering a nested handler.
 
-    Recurses into if/for/while/with and try-body/orelse/finalbody, but stops
-    at nested except-handler bodies so only the enclosing httpx handler's
-    exception context is considered.
+    Recurses into if/for/while/with/async-for/async-with and
+    try-body/orelse/finalbody, but stops at nested except-handler bodies
+    so only the enclosing httpx handler's exception context is considered.
     """
     lines: list[int] = []
     for stmt in stmts:
         if isinstance(stmt, ast.Raise) and stmt.exc is None:
             lines.append(stmt.lineno)
-        elif isinstance(stmt, (ast.If, ast.For, ast.While)):
+        elif isinstance(stmt, (ast.If, ast.For, ast.While, ast.AsyncFor)):
             lines.extend(_bare_raises_not_in_nested_handler(stmt.body))
             lines.extend(_bare_raises_not_in_nested_handler(stmt.orelse))
-        elif isinstance(stmt, ast.With):
+        elif isinstance(stmt, (ast.With, ast.AsyncWith)):
             lines.extend(_bare_raises_not_in_nested_handler(stmt.body))
         elif isinstance(stmt, ast.Try):
             lines.extend(_bare_raises_not_in_nested_handler(stmt.body))
