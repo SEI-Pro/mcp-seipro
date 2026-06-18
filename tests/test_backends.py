@@ -613,3 +613,54 @@ def test_informative_not_implemented_preserved_over_base_stub() -> None:
     c = CompositeBackend(_RestVersaoAntiga(), _FakeWeb())
     with pytest.raises(SEINotImplementedError, match="mod-wssei"):
         asyncio.run(c.listar_relacionamentos("X"))
+
+
+# ---------------------------------------------------------------------------
+# Coverage thresholds — regression guard (RFC 0009 §2.2)
+#
+# These constants capture the implementation coverage at the time they were
+# written. Raising them is always welcome; lowering them requires an explicit
+# decision (add a comment explaining why a method was removed/moved).
+# ---------------------------------------------------------------------------
+
+_REST_COVERAGE_MIN = 111 / 125  # exact fraction; one drop → 110/125 = 0.880 < 0.888 → fails
+_WEB_COVERAGE_MIN = 81 / 125  # exact fraction; one drop → 80/125 = 0.640 < 0.648 → fails
+
+
+def _contract_ops() -> set[str]:
+    """Public async methods declared in SEIBackend (the full contract)."""
+    return {
+        n for n, _ in inspect.getmembers(SEIBackend, inspect.isfunction) if not n.startswith("_")
+    }
+
+
+def test_rest_backend_coverage_threshold() -> None:
+    """REST backend must implement ≥ _REST_COVERAGE_MIN of the SEIBackend contract.
+
+    Catches silent regressions: a mixin method deleted or renamed without a
+    replacement. Raise the constant when coverage improves; never lower it
+    without a comment explaining the intentional removal.
+    """
+    contract = _contract_ops()
+    implemented = _mixin_async_ops(SEIRestBackend) & contract
+    coverage = len(implemented) / len(contract)
+    missing = sorted(contract - implemented)
+    assert coverage >= _REST_COVERAGE_MIN, (
+        f"REST coverage dropped to {coverage:.0%} (min {_REST_COVERAGE_MIN:.0%}). "
+        f"Methods no longer implemented: {missing}"
+    )
+
+
+def test_web_backend_coverage_threshold() -> None:
+    """Web backend must implement ≥ _WEB_COVERAGE_MIN of the SEIBackend contract.
+
+    Same contract as the REST threshold test above.
+    """
+    contract = _contract_ops()
+    implemented = _mixin_async_ops(SEIWebBackend) & contract
+    coverage = len(implemented) / len(contract)
+    missing = sorted(contract - implemented)
+    assert coverage >= _WEB_COVERAGE_MIN, (
+        f"Web coverage dropped to {coverage:.0%} (min {_WEB_COVERAGE_MIN:.0%}). "
+        f"Methods no longer implemented: {missing}"
+    )
