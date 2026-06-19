@@ -23,6 +23,7 @@ from todos.mcp_app import (
     _json,
     mcp,
 )
+from todos.responses import BlocoAssinatura, DocumentoBloco, PaginadoGenerico
 
 
 @mcp.tool(annotations=_WRITE)
@@ -98,7 +99,7 @@ async def sei_pesquisar_blocos_assinatura(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> PaginadoGenerico[BlocoAssinatura]:
     """Pesquisa blocos de assinatura existentes.
 
     Retorna lista de blocos com seu id, descricao, estado e documentos pendentes.
@@ -116,7 +117,8 @@ async def sei_pesquisar_blocos_assinatura(
     extra: dict = {"limit": limit}
     if filtro:
         extra["filtro"] = filtro
-    return _json(
+    result["itens"] = result.pop("blocos", [])
+    return PaginadoGenerico[BlocoAssinatura].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -133,7 +135,7 @@ async def sei_listar_documentos_bloco_assinatura(
     limit: int = 50,
     cursor: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> PaginadoGenerico[DocumentoBloco]:
     """Lista documentos de um bloco de assinatura.
 
     Um bloco pode ter centenas de documentos.
@@ -150,11 +152,11 @@ async def sei_listar_documentos_bloco_assinatura(
     offset = pagina * limit
     page_items = all_items[offset : offset + limit]
     result = {
-        "documentos": page_items,
+        "itens": page_items,
         "tem_proxima": len(all_items) > offset + limit,
         "itens_pagina": len(page_items),
     }
-    return _json(
+    return PaginadoGenerico[DocumentoBloco].model_validate(
         _add_cursor(
             result,
             pagina=pagina,

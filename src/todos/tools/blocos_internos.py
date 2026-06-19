@@ -22,6 +22,7 @@ from todos.mcp_app import (
     _json,
     mcp,
 )
+from todos.responses import ResultadoListaProcessos
 
 
 @mcp.tool(annotations=_WRITE)
@@ -82,7 +83,7 @@ async def sei_listar_processos_bloco_interno(
     limit: int = 50,
     cursor: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> ResultadoListaProcessos:
     """Lista processos de um bloco interno.
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
@@ -105,7 +106,7 @@ async def sei_listar_processos_bloco_interno(
         "tem_proxima": len(all_items) > offset + limit,
         "itens_pagina": len(page_items),
     }
-    return _json(
+    return ResultadoListaProcessos.model_validate(
         _add_cursor(
             result,
             pagina=pagina,

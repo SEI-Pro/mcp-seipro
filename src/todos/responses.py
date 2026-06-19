@@ -10,7 +10,11 @@ automaticamente em ``content[0].text`` (JSON, compatível com clientes antigos)
 publicar ``outputSchema`` no catálogo de tools.
 """
 
-from pydantic import BaseModel, Field
+from typing import Generic, TypeVar, cast
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+T = TypeVar("T")
 
 
 class NextAction(BaseModel):
@@ -107,6 +111,168 @@ class Paginado(BaseModel):
     next_actions: list[NextAction] = Field(default_factory=list)
 
 
+class PaginadoGenerico(Paginado, Generic[T]):
+    """Envelope de paginação tipado com campo `itens: list[T]`.
+
+    Usado por tools de catálogo SEI. FastMCP resolve o tipo concreto em tempo
+    de decoração e publica outputSchema com propriedades por campo de item.
+    """
+
+    itens: list[T] = Field(default_factory=list, description="Itens da página atual")
+
+
+# ---------------------------------------------------------------------------
+# Modelos de item de catálogo SEI
+# ---------------------------------------------------------------------------
+
+
+class ItemSEI(BaseModel):
+    """Item de catálogo SEI com id e nome (base)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador interno do SEI")
+    nome: str = Field(default="", description="Nome legível")
+
+
+class HipoteseLegal(ItemSEI):
+    """Hipótese legal para nível de acesso restrito ou sigiloso."""
+
+
+class TipoCatalogo(ItemSEI):
+    """Tipo de processo, documento, documento externo ou conferência."""
+
+
+class AssuntoSEI(ItemSEI):
+    """Assunto para classificação de processos."""
+
+    codigo: str = Field(default="", description="Código de classificação, ex: '021.1'")
+
+
+class ContatoSEI(ItemSEI):
+    """Contato (pessoa física, jurídica ou órgão) cadastrado no SEI."""
+
+    sigla: str = Field(default="", description="Sigla ou abreviatura do contato")
+
+
+class TextoPadrao(ItemSEI):
+    """Texto padrão para preenchimento automático de documentos internos."""
+
+
+class GrupoModelos(ItemSEI):
+    """Grupo de modelos de documento."""
+
+
+class ModeloDocumento(ItemSEI):
+    """Modelo de documento para criação de documentos internos."""
+
+
+class UnidadeSEI(BaseModel):
+    """Unidade organizacional do SEI."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador interno da unidade")
+    sigla: str = Field(default="", description="Sigla da unidade, ex: 'CGTI'")
+    nome: str = Field(default="", description="Nome completo da unidade")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_id(cls, data: object) -> object:
+        if isinstance(data, dict):
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "id_unidade" in d:
+                d["id"] = d["id_unidade"]
+        return data
+
+
+class UsuarioSEI(BaseModel):
+    """Usuário do SEI."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador interno do usuário")
+    nome: str = Field(default="", description="Nome completo do usuário")
+    sigla: str = Field(default="", description="Login/sigla do usuário")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_id(cls, data: object) -> object:
+        if isinstance(data, dict):
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "id_usuario" in d:
+                d["id"] = d["id_usuario"]
+        return data
+
+
+class AcompanhamentoSEI(BaseModel):
+    """Processo em acompanhamento especial."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador do acompanhamento")
+    protocolo: str = Field(default="", description="Número do processo acompanhado")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_campos(cls, data: object) -> object:
+        if isinstance(data, dict):
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "idProcedimento" in d:
+                d["id"] = d["idProcedimento"]
+            if not d.get("protocolo") and "protocoloFormatado" in d:
+                d["protocolo"] = d["protocoloFormatado"]
+        return data
+
+
+class BlocoAssinatura(BaseModel):
+    """Bloco de assinatura para agrupamento de documentos."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador do bloco")
+    descricao: str = Field(default="", description="Descrição do bloco")
+    situacao: str = Field(
+        default="", description="Estado do bloco, ex: 'Aberto', 'Disponibilizado'"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_campos(cls, data: object) -> object:
+        if isinstance(data, dict):
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "idBloco" in d:
+                d["id"] = d["idBloco"]
+            if not d.get("situacao") and "estado" in d:
+                d["situacao"] = d["estado"]
+        return data
+
+
+class DocumentoBloco(BaseModel):
+    """Documento incluído em um bloco de assinatura."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador interno do documento")
+    protocolo: str = Field(default="", description="Número do processo do documento")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_campos(cls, data: object) -> object:
+        if isinstance(data, dict):
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "idDocumento" in d:
+                d["id"] = d["idDocumento"]
+            if not d.get("protocolo") and "numero" in d:
+                d["protocolo"] = d["numero"]
+        return data
+
+
+# ---------------------------------------------------------------------------
+# Respostas paginadas especializadas (mantêm campos extras além de `itens`)
+# ---------------------------------------------------------------------------
+
+
 class ResultadoPesquisaProcessos(Paginado):
     """Resposta de sei_pesquisar_processos (envelope Paginado + lista de processos)."""
 
@@ -119,6 +285,21 @@ class ResultadoPesquisaProcessos(Paginado):
         default=None,
         description="Avisos de filtros ignorados no caminho web",
     )
+
+
+class ResultadoListaProcessos(Paginado):
+    """Resposta de sei_listar_processos e sei_listar_processos_bloco_interno."""
+
+    processos: list[dict[str, object]] = Field(default_factory=list)
+    total_filtrados: int | None = Field(
+        default=None,
+        description="total após filtros client-side (tipo/filtro); None quando não aplicável",
+    )
+    pagina_atual: int | None = Field(default=None, description="página corrente (0-indexed)")
+    layout: str | None = Field(
+        default=None, description="'detalhada' ou 'resumida' — layout da caixa SEI (web only)"
+    )
+    hints: list[str] = Field(default_factory=list, description="dicas de workflow")
 
 
 class ProcessoDetalhe(BaseModel):

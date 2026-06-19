@@ -22,6 +22,7 @@ from todos.mcp_app import (
     _json,
     mcp,
 )
+from todos.responses import AcompanhamentoSEI, PaginadoGenerico
 
 _DEFAULT_LIMIT = 50
 
@@ -119,7 +120,7 @@ async def sei_listar_meus_acompanhamentos(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> PaginadoGenerico[AcompanhamentoSEI]:
     """Lista processos que o usuário está acompanhando (acompanhamento especial).
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
@@ -133,7 +134,8 @@ async def sei_listar_meus_acompanhamentos(
         limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.listar_meus_acompanhamentos(limit=limit, pagina=pagina)
-    return _json(
+    result["itens"] = result.pop("acompanhamentos", [])
+    return PaginadoGenerico[AcompanhamentoSEI].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -150,7 +152,7 @@ async def sei_listar_acompanhamentos_unidade(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> PaginadoGenerico[AcompanhamentoSEI]:
     """Lista processos com acompanhamento especial na unidade atual.
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
@@ -164,7 +166,8 @@ async def sei_listar_acompanhamentos_unidade(
         limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.listar_acompanhamentos_unidade(limit=limit, pagina=pagina)
-    return _json(
+    result["itens"] = result.pop("acompanhamentos", [])
+    return PaginadoGenerico[AcompanhamentoSEI].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
