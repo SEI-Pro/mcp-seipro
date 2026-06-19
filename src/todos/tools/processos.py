@@ -502,7 +502,7 @@ async def sei_listar_processos(
         tipo=tipo,
         filtro=filtro,
     )
-    result["_hints"] = get_hints()
+    result["hints"] = get_hints()
     cursor_extra: dict = {}
     if apenas_meus:
         cursor_extra["apenas_meus"] = apenas_meus

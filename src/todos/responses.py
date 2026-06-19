@@ -194,15 +194,18 @@ class ResultadoDocumentosBloco(Paginado):
 
 
 class ResultadoListaProcessos(Paginado):
-    """Resposta de sei_listar_processos."""
+    """Resposta de sei_listar_processos e sei_listar_processos_bloco_interno."""
 
     processos: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ProcessosBloco(Paginado):
-    """Resposta de sei_listar_processos_bloco_interno."""
-
-    processos: list[dict[str, object]] = Field(default_factory=list)
+    total_filtrados: int | None = Field(
+        default=None,
+        description="total após filtros client-side (tipo/filtro); None quando não aplicável",
+    )
+    pagina_atual: int | None = Field(default=None, description="página corrente (0-indexed)")
+    layout: str | None = Field(
+        default=None, description="'detalhada' ou 'resumida' — layout da caixa SEI (web only)"
+    )
+    hints: list[str] = Field(default_factory=list, description="dicas de workflow")
 
 
 class ProcessoDetalhe(BaseModel):
