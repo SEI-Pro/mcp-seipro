@@ -53,6 +53,14 @@ for _m in _MODULES:
     importlib.import_module(_m)
 
 
+_LIST_RETURNING_OPS: frozenset[str] = frozenset(
+    {
+        "listar_processos_bloco_interno",
+        "listar_documentos_bloco_assinatura",
+    }
+)
+
+
 class RecordingBackend:
     """Duck-typed stand-in for the composite backend that records every op call.
 
@@ -63,6 +71,9 @@ class RecordingBackend:
     Only operations listed in ``_RECORDING_BACKEND_OPS`` are accepted; unknown
     names raise ``AttributeError`` immediately so typos in the routing table are
     caught before any assertion runs.
+
+    Operations in ``_LIST_RETURNING_OPS`` always return ``[]`` so tools that slice
+    the result don't crash with ``KeyError`` during routing tests.
     """
 
     name = "fake"
@@ -80,6 +91,8 @@ class RecordingBackend:
 
         async def _op(*args: object, **kwargs: object) -> Any:
             self.calls.append((op, args, kwargs))
+            if op in _LIST_RETURNING_OPS:
+                return []
             return dict(self._result) if isinstance(self._result, dict) else self._result
 
         return _op
