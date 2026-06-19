@@ -546,7 +546,7 @@ async def sei_pesquisar_processos(
         return _wrap_pesquisa(
             result, include_raw=include_raw, pagina=pagina, limit=limit, cursor_extra=cursor_extra
         )
-    except (ValueError, httpx.UnsupportedProtocol):
+    except (ValueError, httpx.UnsupportedProtocol, SEIConnectionError):
         _rest_unavailable = True  # REST não configurado (sem SEI_URL) ou URL inválida
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (404, 501):

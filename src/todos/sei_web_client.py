@@ -1168,7 +1168,10 @@ class SEIWebClient:
                     total_itens = int(m.group(1))
                     break
         except (ValueError, IndexError, AttributeError):
-            logger.debug("Falha ao parsear total de itens da pesquisa", exc_info=True)
+            logger.warning(
+                "Falha ao parsear total de itens da pesquisa — possível mudança de layout do SEI",
+                exc_info=True,
+            )
 
         return {"processos": results, "total_itens": total_itens}
 
@@ -1205,12 +1208,15 @@ class SEIWebClient:
         # garante que o protocolo está no cache de links da inbox
         async with self._form_lock:
             _in_links = protocolo_formatado in self._trabalhar_links
-        if not _in_links:
+            _inbox_loaded = self._form_action is not None
+        if not _in_links and not _inbox_loaded:
+            # inbox nunca foi carregada (sessão recém-criada sem startup bem-sucedido)
             await self.fetch_inbox(detalhada=False)
-        async with self._form_lock:
-            _in_links = protocolo_formatado in self._trabalhar_links
+            async with self._form_lock:
+                _in_links = protocolo_formatado in self._trabalhar_links
         if not _in_links:
-            # processo fora da caixa — usa pesquisa rápida
+            # processo fora da caixa (ou inbox já foi carregada e não o contém)
+            # — usa pesquisa rápida em vez de re-fetch da inbox
             await self.pesquisar_processo(protocolo_formatado)
 
         async with self._form_lock:
@@ -1244,6 +1250,18 @@ class SEIWebClient:
         # Step 2: procedimento_visualizar (arvore_montar.php)
         r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
         _check(r2)
+
+        # detecta sessão expirada (servidor retorna 200 com página de login)
+        # usa BeautifulSoup para evitar falso positivo com txtUsuario em JS
+        _r2_soup = BeautifulSoup(r2.text, "html.parser")
+        _login_input = _r2_soup.find("input", attrs={"name": "txtUsuario"})
+        if _login_input is not None:
+            logger.info("Sessão SEI expirou ao buscar árvore, re-logando")
+            async with self._form_lock:
+                self._form_action = None
+                self._form_hidden = {}
+            await self.login()
+            return await self.consultar_processo(protocolo_formatado)
 
         nos = parse_arvore_nos(r2.text)
         arvore_html = r2.text  # preservado para cardRelacionado — não sobrescrever no loop AGUARDE
@@ -2477,10 +2495,16 @@ class SEIWebClient:
             headers={"Referer": str(self._inbox_url)},
         )
         if not r.is_success:
+            logger.warning("autocomplete_unidades: HTTP %s para termo=%r", r.status_code, termo)
             return []
         try:
             raw = r.json()
         except ValueError:
+            logger.warning(
+                "autocomplete_unidades: resposta não-JSON (HTTP %s) para termo=%r",
+                r.status_code,
+                termo,
+            )
             return []
         results = []
         for item in raw if isinstance(raw, list) else []:
