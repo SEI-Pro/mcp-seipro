@@ -589,7 +589,7 @@ async def sei_pesquisar_processos(
             total_itens = parsed_total
             tem_proxima = total_itens > (pagina + 1) * SEI_WEB_PAGE_SIZE
         else:
-            total_itens = len(items)
+            total_itens = None  # unknown; let _add_cursor use tem_proxima heuristic
             tem_proxima = len(items) >= SEI_WEB_PAGE_SIZE
 
         paged: dict = {

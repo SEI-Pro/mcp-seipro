@@ -78,8 +78,8 @@ Tools com `include_raw` branch: retornam `ListaDocumentos | str` quando
 `include_raw=True` (raw JSON). Estratégia: tratar `include_raw=True` como
 overload separado ou manter `str` nesse branch.
 
-Afetadas: `sei_arvore_processo`, `sei_listar_documentos`, `sei_consultar_processo`,
-`sei_listar_atividades`, `sei_pesquisar_processos`.
+Concluídas: `sei_arvore_processo` ✅, `sei_listar_documentos` ✅, `sei_consultar_processo` ✅, `sei_pesquisar_processos` ✅
+Pendente: `sei_listar_atividades` ⏳
 
 ### Fase 2 — Catálogos paginados: Paginado
 
