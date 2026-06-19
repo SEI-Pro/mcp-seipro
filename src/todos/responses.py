@@ -88,3 +88,9 @@ class ProcessoDetalhe(BaseModel):
     interessados: list[str] = Field(default_factory=list)
     total_documentos: int = 0
     next_actions: list[NextAction] = Field(default_factory=list)
+    aviso_acesso: dict | None = Field(
+        default=None, description="Aviso informativo de classificação de acesso"
+    )
+    warnings: list[str] | None = Field(
+        default=None, description="Avisos de backend (ex: falha de uma fonte)"
+    )

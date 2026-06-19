@@ -1,6 +1,8 @@
 # RFC 0011 — Paridade web para o domínio de documentos
 
-**Status**: Parcialmente implementada (Fases 1, 2, 4 concluídas; Fase 3 pendente de SEI ao vivo)
+**Status**: Parcialmente implementada · **Atualizado**: 2026-06-19
+
+Fases 1, 2, 4 concluídas; Fase 3 (`listar_blocos_documento` + `sugestao_assuntos_documento` web) pendente de acesso a SEI ao vivo para descoberta de URLs e seletores.
 **Data**: 2026-06-18
 **Autores**: Franklin Baldo (com Claude Code)
 **Relacionado**: RFC 0006 (backend abstrato — pendente: `tools/documentos.py` raw clients), RFC 0001 (web-first)
