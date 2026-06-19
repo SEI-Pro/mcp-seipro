@@ -1,13 +1,12 @@
 # RFC 0012 — Auditoria mcp-coding: Violações de Princípios no Servidor todos
 
-**Status:** Parcialmente implementada · **Atualizado**: 2026-06-19
+**Status:** ✅ Concluída · **Atualizado**: 2026-06-19
 
-Implementado (PR #74):
-- **P1** parcial: `sei_concluir_processo` → `_DEST`; demais tools de assinatura (`sei_assinar_documento`, `sei_assinar_bloco`, `sei_assinar_documentos_bloco`) e `sei_conceder_credenciamento` pendentes
+- **P1** ✅: todas as 6 tools com `destructiveHint` ausente corrigidas para `_DEST` (`sei_enviar_processo`, `sei_concluir_processo`, `sei_assinar_documento`, `sei_assinar_bloco`, `sei_assinar_documentos_bloco`, `sei_conceder_credenciamento`)
 - **P2** ✅: `suppress(Exception)` em `setup_wizard.py` corrigido para tipos estreitos com `logger.warning`
-- **P3** ✅: cursor opaco em `sei_listar_processos`; `sei_listar_meus_acompanhamentos` e `sei_listar_acompanhamentos_unidade` pendentes
-- **P4** parcial: `_validar_pagina` em `sei_pesquisar_blocos_assinatura`; `sei_listar_documentos_bloco_assinatura`, `sei_pesquisar_contatos`, `sei_listar_processos_bloco_interno` pendentes
-- **P5** ⏳: enriquecimento de descrições não iniciado
+- **P3** ✅: cursor opaco em `sei_listar_processos`, `sei_listar_meus_acompanhamentos` e `sei_listar_acompanhamentos_unidade`
+- **P4** ✅: limit/cursor em `sei_pesquisar_blocos_assinatura`, `sei_listar_documentos_bloco_assinatura`, `sei_pesquisar_contatos`, `sei_listar_processos_bloco_interno`
+- **P5** ✅: descrições enriquecidas — `sei_dar_ciencia` (texto corrigido), `sei_excluir_marcador`, `sei_criar_bloco_interno`, `sei_remover_acompanhamento`
 **Data:** 2026-06-19
 **Referência:** skill `mcp-coding` (`.agents/skills/mcp-coding/SKILL.md`)
 
