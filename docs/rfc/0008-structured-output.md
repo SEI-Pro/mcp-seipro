@@ -1,6 +1,6 @@
 # RFC 0008 — Saída estruturada (structuredContent + outputSchema)
 
-**Status**: Parcialmente implementada (Fase 0 concluída; Fase 1 em andamento — `sei_arvore_processo`, `sei_listar_documentos`, `sei_consultar_processo` e `sei_pesquisar_processos` migrados)
+**Status**: Parcialmente implementada (Fase 0 ✅ concluída; Fase 1 ✅ concluída; Fase 2 ⏳ em andamento)
 **Data**: 2026-06-17
 **Atualizado**: 2026-06-19
 **Autores**: Franklin Baldo (com Claude Code)
@@ -78,8 +78,7 @@ Tools com `include_raw` branch: retornam `ListaDocumentos | str` quando
 `include_raw=True` (raw JSON). Estratégia: tratar `include_raw=True` como
 overload separado ou manter `str` nesse branch.
 
-Concluídas: `sei_arvore_processo` ✅, `sei_listar_documentos` ✅, `sei_consultar_processo` ✅, `sei_pesquisar_processos` ✅
-Pendente: `sei_listar_atividades` ⏳
+Concluídas: `sei_arvore_processo` ✅, `sei_listar_documentos` ✅, `sei_consultar_processo` ✅, `sei_pesquisar_processos` ✅, `sei_listar_atividades` ✅
 
 ### Fase 2 — Catálogos paginados: Paginado
 

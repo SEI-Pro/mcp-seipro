@@ -47,6 +47,27 @@ class ListaDocumentos(BaseModel):
     next_actions: list[NextAction] = Field(default_factory=list)
 
 
+class Andamento(BaseModel):
+    """Entrada no histórico de andamentos de um processo."""
+
+    data_hora: str = Field(description="Data e hora, ex: '19/06/2026 10:30:00'")
+    unidade: str = Field(default="", description="Unidade que registrou o andamento")
+    usuario: str = Field(default="", description="Usuário que registrou o andamento")
+    descricao: str = Field(default="", description="Descrição da ação realizada")
+
+
+class ListaAtividades(BaseModel):
+    """Resposta de sei_listar_atividades."""
+
+    processo: str = Field(description="Protocolo formatado do processo")
+    total_andamentos: int = Field(description="Total de andamentos no histórico")
+    andamentos: list[Andamento]
+    truncado: bool = Field(
+        default=False,
+        description="True se há mais andamentos além do limite exibido (50)",
+    )
+
+
 class RespostaEscrita(BaseModel):
     """Resposta enxuta de tools de criação/alteração."""
 
