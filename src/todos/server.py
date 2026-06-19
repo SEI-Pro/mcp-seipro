@@ -1,11 +1,11 @@
 """MCP Server genérico para o SEI (Sistema Eletrônico de Informações)."""
 
 import re
-import sys
 from collections.abc import Callable
-from typing import TypeAlias, TypedDict, TypeGuard
+from typing import Annotated, TypeAlias, TypedDict, TypeGuard
 
 import httpx
+import typer as _typer
 from fastmcp import Context
 
 from todos.backends import EnvioProcesso
@@ -703,24 +703,45 @@ async def sei_sobrestar_processo(
     return _json(result)
 
 
-def main() -> None:
-    """Entry point: run setup wizard, set-password, or start the MCP server."""
-    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    if cmd == "setup":
-        if not sys.stdin.isatty():
-            sys.stderr.write("Erro: 'todos setup' requer um terminal interativo.\n")
-            sys.exit(1)
-        run_setup_wizard(force="--force" in sys.argv[2:])
-        return
+_app = _typer.Typer(
+    no_args_is_help=False,
+    add_completion=False,
+    pretty_exceptions_show_locals=False,
+    rich_markup_mode="rich",
+)
 
-    if cmd == "set-password":
-        if not sys.stdin.isatty():
-            sys.stderr.write("Erro: 'todos set-password' requer um terminal interativo.\n")
-            sys.exit(1)
-        run_set_password()
-        return
 
+@_app.command("setup")
+def _cmd_setup(
+    *,
+    force: Annotated[
+        bool,
+        _typer.Option(
+            "--force", help="Reconfigurar do zero, sobrescrevendo a configuração existente."
+        ),
+    ] = False,
+) -> None:
+    """Configurar o MCP SEI interativamente (wizard de primeira vez)."""
+    run_setup_wizard(force=force)
+
+
+@_app.command("set-password")
+def _cmd_set_password() -> None:
+    """Atualizar apenas a senha no Keyring sem alterar a configuração MCP."""
+    run_set_password()
+
+
+@_app.callback(invoke_without_command=True)
+def _cmd_default(ctx: _typer.Context) -> None:
+    """MCP Server para o SEI — 126 tools, scraper HTTP + REST híbrido."""
+    if ctx.invoked_subcommand is not None:
+        return
     if _http_mode:
         run_remote(mcp, port=_http_port)
     else:
         mcp.run(transport="stdio", show_banner=False)
+
+
+def main() -> None:
+    """Entry point do console script `todos`."""
+    _app()
