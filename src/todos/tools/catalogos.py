@@ -58,10 +58,9 @@ async def sei_pesquisar_hipoteses_legais(
         limit=limit,
         pagina=pagina,
     )
-    extra: dict = {}
+    extra: dict = {"limit": limit}
     if filtro:
         extra["filtro"] = filtro
-    extra["limit"] = limit
     result["itens"] = result.pop("hipoteses", [])
     return PaginadoGenerico[HipoteseLegal].model_validate(
         _add_cursor(
@@ -107,12 +106,11 @@ async def sei_pesquisar_tipos_processo(
         limit=limit,
         pagina=pagina,
     )
-    extra: dict = {}
+    extra: dict = {"limit": limit}
     if filtro:
         extra["filtro"] = filtro
     if favoritos:
         extra["favoritos"] = favoritos
-    extra["limit"] = limit
     result["itens"] = result.pop("tipos", [])
     return PaginadoGenerico[TipoCatalogo].model_validate(
         _add_cursor(
@@ -163,14 +161,13 @@ async def sei_pesquisar_tipos_documento(
         limit=limit,
         pagina=pagina,
     )
-    extra: dict = {}
+    extra: dict = {"limit": limit}
     if filtro:
         extra["filtro"] = filtro
     if favoritos:
         extra["favoritos"] = favoritos
     if aplicabilidade:
         extra["aplicabilidade"] = aplicabilidade
-    extra["limit"] = limit
     result["itens"] = result.pop("tipos", [])
     return PaginadoGenerico[TipoCatalogo].model_validate(
         _add_cursor(
@@ -212,10 +209,9 @@ async def sei_pesquisar_tipos_documento_externo(
         limit=limit,
         pagina=pagina,
     )
-    extra: dict = {}
+    extra: dict = {"limit": limit}
     if filtro:
         extra["filtro"] = filtro
-    extra["limit"] = limit
     result["itens"] = result.pop("tipos", [])
     return PaginadoGenerico[TipoCatalogo].model_validate(
         _add_cursor(
@@ -257,10 +253,9 @@ async def sei_pesquisar_tipos_conferencia(
         limit=limit,
         pagina=pagina,
     )
-    extra: dict = {}
+    extra: dict = {"limit": limit}
     if filtro:
         extra["filtro"] = filtro
-    extra["limit"] = limit
     result["itens"] = result.pop("tipos", [])
     return PaginadoGenerico[TipoCatalogo].model_validate(
         _add_cursor(
@@ -301,10 +296,9 @@ async def sei_pesquisar_assuntos(
         limit=limit,
         pagina=pagina,
     )
-    extra: dict = {}
+    extra: dict = {"limit": limit}
     if filtro:
         extra["filtro"] = filtro
-    extra["limit"] = limit
     result["itens"] = result.pop("assuntos", [])
     return PaginadoGenerico[AssuntoSEI].model_validate(
         _add_cursor(
@@ -403,10 +397,9 @@ async def sei_pesquisar_textos_padrao(
         limit=limit,
         pagina=pagina,
     )
-    extra: dict = {}
+    extra: dict = {"limit": limit}
     if filtro:
         extra["filtro"] = filtro
-    extra["limit"] = limit
     result["itens"] = result.pop("textos", [])
     return PaginadoGenerico[TextoPadrao].model_validate(
         _add_cursor(
@@ -440,8 +433,7 @@ async def sei_listar_grupos_modelos(
         limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
     result = await backend.listar_grupos_modelos(limit=limit, pagina=pagina)
-    extra: dict = {}
-    extra["limit"] = limit
+    extra: dict = {"limit": limit}
     result["itens"] = result.pop("grupos", [])
     return PaginadoGenerico[GrupoModelos].model_validate(
         _add_cursor(
@@ -486,12 +478,11 @@ async def sei_listar_modelos(
         limit=limit,
         pagina=pagina,
     )
-    extra: dict = {}
+    extra: dict = {"limit": limit}
     if id_grupo:
         extra["id_grupo"] = id_grupo
     if filtro:
         extra["filtro"] = filtro
-    extra["limit"] = limit
     result["itens"] = result.pop("modelos", [])
     return PaginadoGenerico[ModeloDocumento].model_validate(
         _add_cursor(

@@ -12,7 +12,7 @@ publicar ``outputSchema`` no catálogo de tools.
 
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 T = TypeVar("T")
 
@@ -176,6 +176,13 @@ class UnidadeSEI(BaseModel):
     sigla: str = Field(default="", description="Sigla da unidade, ex: 'CGTI'")
     nome: str = Field(default="", description="Nome completo da unidade")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_id(cls, data: object) -> object:
+        if isinstance(data, dict) and not data.get("id") and "id_unidade" in data:
+            data["id"] = data["id_unidade"]
+        return data
+
 
 class UsuarioSEI(BaseModel):
     """Usuário do SEI."""
@@ -186,6 +193,13 @@ class UsuarioSEI(BaseModel):
     nome: str = Field(default="", description="Nome completo do usuário")
     sigla: str = Field(default="", description="Login/sigla do usuário")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_id(cls, data: object) -> object:
+        if isinstance(data, dict) and not data.get("id") and "id_usuario" in data:
+            data["id"] = data["id_usuario"]
+        return data
+
 
 class AcompanhamentoSEI(BaseModel):
     """Processo em acompanhamento especial."""
@@ -194,6 +208,16 @@ class AcompanhamentoSEI(BaseModel):
 
     id: str = Field(default="", description="Identificador do acompanhamento")
     protocolo: str = Field(default="", description="Número do processo acompanhado")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_campos(cls, data: object) -> object:
+        if isinstance(data, dict):
+            if not data.get("id") and "idProcedimento" in data:
+                data["id"] = data["idProcedimento"]
+            if not data.get("protocolo") and "protocoloFormatado" in data:
+                data["protocolo"] = data["protocoloFormatado"]
+        return data
 
 
 class BlocoAssinatura(BaseModel):
@@ -207,6 +231,16 @@ class BlocoAssinatura(BaseModel):
         default="", description="Estado do bloco, ex: 'Aberto', 'Disponibilizado'"
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_campos(cls, data: object) -> object:
+        if isinstance(data, dict):
+            if not data.get("id") and "idBloco" in data:
+                data["id"] = data["idBloco"]
+            if not data.get("situacao") and "estado" in data:
+                data["situacao"] = data["estado"]
+        return data
+
 
 class DocumentoBloco(BaseModel):
     """Documento incluído em um bloco de assinatura."""
@@ -215,6 +249,16 @@ class DocumentoBloco(BaseModel):
 
     id: str = Field(default="", description="Identificador interno do documento")
     protocolo: str = Field(default="", description="Número do processo do documento")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_campos(cls, data: object) -> object:
+        if isinstance(data, dict):
+            if not data.get("id") and "idDocumento" in data:
+                data["id"] = data["idDocumento"]
+            if not data.get("protocolo") and "numero" in data:
+                data["protocolo"] = data["numero"]
+        return data
 
 
 # ---------------------------------------------------------------------------

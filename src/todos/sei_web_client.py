@@ -4254,7 +4254,7 @@ class SEIWebClient:
         tbls = soup.find_all("table", class_=re.compile(r"infraTable", re.IGNORECASE))
         tbl = tbls[0] if tbls else soup.find("table")
         processos = self._parse_acompanhamento_tabela(tbl, limit)
-        return {"processos": processos, "total_itens": len(processos)}
+        return {"acompanhamentos": processos, "total_itens": len(processos)}
 
     async def listar_acompanhamentos_unidade_web(self, limit: int = 50) -> dict:
         """Lista processos com acompanhamento especial da unidade via scraper web."""
@@ -4262,7 +4262,7 @@ class SEIWebClient:
         tbls = soup.find_all("table", class_=re.compile(r"infraTable", re.IGNORECASE))
         tbl = tbls[1] if len(tbls) > 1 else (tbls[0] if tbls else soup.find("table"))
         processos = self._parse_acompanhamento_tabela(tbl, limit)
-        return {"processos": processos, "total_itens": len(processos)}
+        return {"acompanhamentos": processos, "total_itens": len(processos)}
 
     async def listar_grupos_acompanhamento_web(self, filtro: str = "") -> dict:
         """Extrai grupos de acompanhamento do select selGrupoAcompanhamento (acompanhamento_gerenciar)."""
