@@ -86,6 +86,12 @@ Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. F
 
 ## Qualidade de código
 
+### Regras absolutas — paridade CLI ↔ MCP
+- **Toda operação disponível no CLI deve ter uma tool MCP equivalente.** Se algo só é possível via CLI, a tool MCP está faltando — adicione-a.
+- O inverso não é obrigatório: tools MCP de leitura interna (status, sessão) não precisam de comando CLI.
+- **A implementação fica na camada de serviço/backend**, não no handler CLI ou na tool MCP. Ambos chamam a mesma função — sem lógica duplicada.
+- Ao adicionar um comando CLI novo, verifique se já existe tool MCP correspondente; ao adicionar tool MCP nova, verifique se o CLI deve expô-la.
+
 ### Regras absolutas — ruff
 - **Proibido `# noqa`** — nunca suprima uma violação com `# noqa` ou `# type: ignore`. Se o ruff sinalizar, corrija o padrão.
 - **Proibido descartar** — nunca classifique uma violação como "puramente estilística", "opcional" ou "não se aplica a CLIs". Toda violação é um code smell.
