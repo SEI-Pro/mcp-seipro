@@ -26,6 +26,7 @@ from helpers import aconst
 
 from todos.backends.base import SEIBackend
 from todos.mcp_app import mcp
+from todos.responses import ListaDocumentos
 from todos.tools import documentos, processos
 
 if TYPE_CHECKING:
@@ -907,3 +908,76 @@ def test_incluir_documento_externo_shaped_output(monkeypatch: pytest.MonkeyPatch
     assert result.acao == "incluir_documento_externo"
     assert result.id_documento == "D77"
     assert result.numero_sei == "2877777"
+
+
+# ---------------------------------------------------------------------------
+# Fase 1 (RFC 0008) — read response shaping (ListaDocumentos)
+# ---------------------------------------------------------------------------
+
+
+def test_arvore_processo_returns_lista_documentos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_arvore_processo (include_raw=False) returns ListaDocumentos model."""
+    fake = RecordingBackend(
+        {
+            "documentos": [
+                {
+                    "id": "D1",
+                    "numero_sei": "001",
+                    "tipo_documento": "Despacho",
+                    "nome_composto": "Despacho GPF 001",
+                    "sigla_unidade": "GPF",
+                },
+            ],
+            "total_documentos": 1,
+        }
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_arvore_processo("50300.000123/2025-00"))
+    assert isinstance(result, ListaDocumentos)
+    assert result.processo == "50300.000123/2025-00"
+    assert result.total_documentos == 1
+    assert result.documentos[0].id == "D1"
+
+
+def test_arvore_processo_include_raw_returns_str(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_arvore_processo (include_raw=True) returns raw JSON string."""
+    fake = RecordingBackend({"documentos": [], "total_documentos": 0})
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_arvore_processo("50300.000123/2025-00", include_raw=True))
+    assert isinstance(result, str)
+
+
+def test_listar_documentos_returns_lista_documentos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_listar_documentos (include_raw=False) returns ListaDocumentos model."""
+    fake = RecordingBackend(
+        {
+            "documentos": [
+                {
+                    "id": "D2",
+                    "numero_sei": "002",
+                    "tipo_documento": "Ofício",
+                    "nome_composto": "Ofício GPF 002",
+                    "sigla_unidade": "GPF",
+                },
+            ],
+            "total_documentos": 1,
+        }
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_listar_documentos("50300.000123/2025-00"))
+    assert isinstance(result, ListaDocumentos)
+    assert result.processo == "50300.000123/2025-00"
+    assert result.total_documentos == 1
+    assert result.documentos[0].tipo_documento == "Ofício"
+
+
+def test_listar_documentos_include_raw_returns_str(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_listar_documentos (include_raw=True) returns raw JSON string."""
+    fake = RecordingBackend({"documentos": [], "total_documentos": 0})
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_listar_documentos("50300.000123/2025-00", include_raw=True))
+    assert isinstance(result, str)
