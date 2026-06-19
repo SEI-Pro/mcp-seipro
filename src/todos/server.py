@@ -32,6 +32,7 @@ from todos.mcp_app import (
     mcp,
 )
 from todos.remote import run_remote
+from todos.responses import NextAction, ResultadoPesquisaProcessos
 from todos.sei_web_client import SEI_WEB_PAGE_SIZE
 from todos.setup_wizard import run_set_password, run_setup_wizard
 from todos.tools import (
@@ -447,18 +448,25 @@ def _pesquisa_cursor_args(
 
 def _wrap_pesquisa(
     result: dict, *, include_raw: bool, pagina: int, limit: int, cursor_extra: dict
-) -> str:
-    """Retorna JSON do resultado com envelope de cursor opaco ou bruto segundo include_raw."""
+) -> ResultadoPesquisaProcessos | str:
+    """Retorna modelo shaped ou JSON bruto segundo include_raw."""
     if include_raw:
         return _json(result)
-    return _json(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_pesquisar_processos",
-            cursor_extra=cursor_extra,
-        )
+    paginado = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_pesquisar_processos",
+        cursor_extra=cursor_extra,
+    )
+    return ResultadoPesquisaProcessos(
+        processos=paginado.get("processos", []),
+        total_itens=paginado.get("total_itens"),
+        proximo_cursor=paginado.get("proximo_cursor"),
+        tem_proxima_inferida=paginado.get("tem_proxima_inferida", False),
+        next_actions=[NextAction(**a) for a in paginado.get("next_actions", [])],
+        fonte=paginado.get("fonte", "rest"),
+        aviso=paginado.get("aviso"),
     )
 
 
@@ -479,7 +487,7 @@ async def sei_pesquisar_processos(
     ctx: Context | None = None,
     *,
     include_raw: bool = False,
-) -> str:
+) -> ResultadoPesquisaProcessos | str:
     """Pesquisa processos no SEI por texto, descrição, datas, unidade ou assunto.
 
     Use palavras_chave para busca geral ou busca_rapida para busca simplificada.
@@ -581,7 +589,7 @@ async def sei_pesquisar_processos(
             total_itens = parsed_total
             tem_proxima = total_itens > (pagina + 1) * SEI_WEB_PAGE_SIZE
         else:
-            total_itens = len(items)
+            total_itens = None  # unknown; let _add_cursor use tem_proxima heuristic
             tem_proxima = len(items) >= SEI_WEB_PAGE_SIZE
 
         paged: dict = {
