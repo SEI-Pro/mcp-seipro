@@ -19,6 +19,7 @@ from fastmcp import Context
 from todos.exceptions import SEIError, SEIValidationError
 from todos.html_utils import sanitize_iso8859
 from todos.mcp_app import (
+    _DEST,
     _IDEM,
     _READ,
     _backend,
@@ -119,7 +120,7 @@ async def sei_cancelar_assinatura(
     )
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_DEST)
 async def sei_assinar_documento(
     id_documento: str,
     cargo: str = "",
@@ -165,7 +166,7 @@ async def sei_listar_assinaturas(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_DEST)
 async def sei_assinar_bloco(
     id_bloco: str,
     cargo: str = "",
@@ -188,7 +189,7 @@ async def sei_assinar_bloco(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_DEST)
 async def sei_assinar_documentos_bloco(
     documentos: str,
     cargo: str = "",
@@ -227,7 +228,8 @@ async def sei_dar_ciencia(
     - sei_dar_ciencia("1482875", tipo="documento")  → ciência na NT 16
     - sei_dar_ciencia("50300.018905/2018-67", tipo="processo")  → ciência no processo
 
-    instâncias sem mod-wssei. Tipo "documento" exige REST.
+    QUANDO NÃO USAR: tipo "documento" exige mod-wssei (REST). Em instâncias
+    sem mod-wssei, use tipo="processo" (disponível via web). Retorna {"ok": True}.
     """
     backend = await _backend(ctx)
     result = await backend.dar_ciencia(referencia, tipo=tipo)
