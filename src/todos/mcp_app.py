@@ -7,12 +7,13 @@ import json
 import logging
 import os
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from typing import TypedDict
 
 import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.server.dependencies import get_access_token
+from fastmcp.utilities.logging import configure_logging
 from pydantic import BaseModel, Field
 
 from todos import access_control
@@ -49,6 +50,16 @@ _MAX_ZIP_MB = 200.0  # refuse to embed ZIPs larger than this
 _http_mode = bool(os.environ.get("PORT"))
 _http_port = int(os.environ.get("PORT", "8000"))
 
+# Configura o logger todos.* com o mesmo RichHandler do FastMCP, respeitando
+# TODOS_LOG_LEVEL (ou FASTMCP_LOG_LEVEL como fallback, padrão INFO).
+_todos_log_level = (
+    os.environ.get("TODOS_LOG_LEVEL") or os.environ.get("FASTMCP_LOG_LEVEL") or "INFO"
+).upper()
+configure_logging(
+    level=getattr(logging, _todos_log_level, logging.INFO),
+    logger=logging.getLogger("todos"),
+)
+
 
 @asynccontextmanager
 async def lifespan(_server: FastMCP) -> AsyncGenerator[dict[str, object], None]:
@@ -78,9 +89,18 @@ async def lifespan(_server: FastMCP) -> AsyncGenerator[dict[str, object], None]:
             web_client = SEIWebClient()
             try:
                 # Login eager com detalhada=True: popula _unidade_atual e
-                # hdnDetalhadoNroItens (total real de processos abertos na unidade)
-                with suppress(Exception):
+                # hdnDetalhadoNroItens (total real de processos abertos na unidade).
+                # Falha aqui é não-fatal (tools fazem login sob demanda), mas
+                # DEVE ser logada para não enganar quem investiga falhas.
+                try:
                     await web_client.fetch_inbox(detalhada=True)
+                except (SEIError, httpx.RequestError, RuntimeError) as exc:
+                    logger.warning(
+                        "SEI web: falha no login eagerly durante startup — "
+                        "tools farão login sob demanda. Causa: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
                 yield {"sei": client, "sei_web": web_client}
             finally:
                 await client.close()
@@ -127,8 +147,10 @@ async def _get_client(ctx: Context | None) -> SEIClient:
             clients[ctx.session_id] = client
 
         if evicted is not None:
-            with suppress(Exception):
+            try:
                 await evicted.close()
+            except (httpx.TransportError, OSError, RuntimeError) as exc:
+                logger.debug("Falha ao fechar SEIClient evictado (ignorada): %s", exc)
         return client
 
     client = ctx.lifespan_context.get("sei")
@@ -170,8 +192,10 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
             clients[ctx.session_id] = client
 
         if evicted is not None:
-            with suppress(Exception):
+            try:
                 await evicted.close()
+            except (httpx.TransportError, OSError, RuntimeError) as exc:
+                logger.debug("Falha ao fechar SEIWebClient evictado (ignorada): %s", exc)
         return client
 
     client = ctx.lifespan_context.get("sei_web")
@@ -470,7 +494,16 @@ async def _solicitar_consentimento_via_elicit(
         )
         return "nao_suportado"
     except (AttributeError, NotImplementedError, RuntimeError, TypeError, ValueError) as e:
-        logger.debug("elicit falhou (%s: %s) — fallback JSON", type(e).__name__, e)
+        # NotImplementedError/TypeError → client doesn't support elicit (expected, debug only).
+        # Check these first: NotImplementedError is a RuntimeError subclass, so the order matters.
+        if isinstance(e, (NotImplementedError, TypeError)):
+            logger.debug(
+                "elicit não suportado pelo cliente (%s: %s) — fallback JSON", type(e).__name__, e
+            )
+        else:
+            logger.warning(
+                "elicit falhou inesperadamente (%s: %s) — fallback JSON", type(e).__name__, e
+            )
         return "nao_suportado"
 
     if result.action == "accept" and result.data and result.data.autorizo_acesso:
@@ -582,8 +615,13 @@ async def _buscar_documento_em_processo(
                 if doc_id:
                     tipo = d.get("atributos", {}).get("tipoDocumento", "I")
                     return doc_id, tipo
-    except (SEIError, httpx.RequestError):
-        pass
+    except (SEIError, httpx.RequestError) as exc:
+        logger.warning(
+            "_buscar_documento_em_processo: falha ao listar docs do proc %s — %s: %s",
+            id_proc,
+            type(exc).__name__,
+            exc,
+        )
     return None
 
 
@@ -600,8 +638,13 @@ async def _buscar_documento_via_solr(client: SEIClient, referencia: str) -> tupl
             found = await _buscar_documento_em_processo(client, id_proc, referencia)
             if found is not None:
                 return found
-    except (SEIError, httpx.RequestError):
-        pass
+    except (SEIError, httpx.RequestError) as exc:
+        logger.warning(
+            "_buscar_documento_via_solr: falha na pesquisa Solr para %r — %s: %s",
+            referencia,
+            type(exc).__name__,
+            exc,
+        )
     return None
 
 

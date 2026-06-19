@@ -958,7 +958,7 @@ class SEIWebClient:
     # Consultar processo (página de detalhe)
     # ------------------------------------------------------------------
 
-    async def pesquisar_processo(self, protocolo: str) -> None:
+    async def pesquisar_processo(self, protocolo: str, *, _relogin: bool = True) -> None:
         """Busca um processo pelo protocolo via pesquisa rápida do SEI.
 
         Popula `_trabalhar_links` com a URL pré-assinada do processo encontrado,
@@ -982,6 +982,18 @@ class SEIWebClient:
         )
         _check(r)
 
+        # detecta sessão expirada — a pesquisa rápida pode retornar o login
+        # quando _pesquisa_rapida_action estava cacheado mas a sessão expirou
+        if 'name="txtUsuario"' in r.text or 'id="txtUsuario"' in r.text:
+            if not _relogin:
+                msg = "Sessão SEI expirou após re-login na pesquisa rápida — falha de autenticação."
+                raise SEIError(msg)
+            logger.info("pesquisar_processo: sessão SEI expirou, re-logando via fetch_inbox")
+            async with self._form_lock:
+                self._pesquisa_rapida_action = None
+            await self.fetch_inbox(detalhada=False)
+            return await self.pesquisar_processo(protocolo, _relogin=False)
+
         final_url = str(r.url)
         sei_base = f"{self.sei_root}/sei/"
 
@@ -990,7 +1002,7 @@ class SEIWebClient:
             href = final_url.replace(sei_base, "") if final_url.startswith(sei_base) else final_url
             async with self._form_lock:
                 self._trabalhar_links[protocolo] = href
-            return
+            return None
 
         # Página de resultados (protocolo_pesquisar) — busca o link correto
         soup = BeautifulSoup(r.text, "html.parser")
@@ -1001,14 +1013,14 @@ class SEIWebClient:
                 href = _tag_str(a, "href").replace("&amp;", "&")
                 async with self._form_lock:
                     self._trabalhar_links[protocolo] = href
-                return
+                return None
 
         # Tenta também via links com id_procedimento (tooltip ou linha da tabela)
         for a in soup.find_all("a", href=re.compile(r"procedimento_trabalhar")):
             href = _tag_str(a, "href").replace("&amp;", "&")
             async with self._form_lock:
                 self._trabalhar_links[protocolo] = href
-            return
+            return None
 
         msg = (
             f"Processo {protocolo!r} não encontrado na pesquisa. "
@@ -1168,11 +1180,14 @@ class SEIWebClient:
                     total_itens = int(m.group(1))
                     break
         except (ValueError, IndexError, AttributeError):
-            logger.debug("Falha ao parsear total de itens da pesquisa", exc_info=True)
+            logger.warning(
+                "Falha ao parsear total de itens da pesquisa — possível mudança de layout do SEI",
+                exc_info=True,
+            )
 
         return {"processos": results, "total_itens": total_itens}
 
-    async def consultar_processo(self, protocolo_formatado: str) -> dict:
+    async def consultar_processo(self, protocolo_formatado: str, *, _relogin: bool = True) -> dict:
         """Busca dados de um processo navegando pela cadeia de páginas web.
 
         Fluxo:
@@ -1205,12 +1220,15 @@ class SEIWebClient:
         # garante que o protocolo está no cache de links da inbox
         async with self._form_lock:
             _in_links = protocolo_formatado in self._trabalhar_links
-        if not _in_links:
+            _inbox_loaded = self._form_action is not None
+        if not _in_links and not _inbox_loaded:
+            # inbox nunca foi carregada (sessão recém-criada sem startup bem-sucedido)
             await self.fetch_inbox(detalhada=False)
-        async with self._form_lock:
-            _in_links = protocolo_formatado in self._trabalhar_links
+            async with self._form_lock:
+                _in_links = protocolo_formatado in self._trabalhar_links
         if not _in_links:
-            # processo fora da caixa — usa pesquisa rápida
+            # processo fora da caixa (ou inbox já foi carregada e não o contém)
+            # — usa pesquisa rápida em vez de re-fetch da inbox
             await self.pesquisar_processo(protocolo_formatado)
 
         async with self._form_lock:
@@ -1222,12 +1240,17 @@ class SEIWebClient:
 
         # detecta sessão expirada
         if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
+            if not _relogin:
+                msg = "Sessão SEI expirou após re-login — possível falha de autenticação."
+                raise SEIError(msg)
             logger.info("Sessão SEI expirou, re-logando")
             async with self._form_lock:
                 self._form_action = None
                 self._form_hidden = {}
+                # remove stale link so the retry fetches a fresh signed URL
+                self._trabalhar_links.pop(protocolo_formatado, None)
             await self.login()
-            return await self.consultar_processo(protocolo_formatado)
+            return await self.consultar_processo(protocolo_formatado, _relogin=False)
 
         soup_fs = BeautifulSoup(r1.text, "html.parser")
         ifr = soup_fs.find("iframe", id="ifrArvore")
@@ -1244,6 +1267,24 @@ class SEIWebClient:
         # Step 2: procedimento_visualizar (arvore_montar.php)
         r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
         _check(r2)
+
+        # detecta sessão expirada (servidor retorna 200 com página de login)
+        # usa BeautifulSoup para evitar falso positivo com txtUsuario em JS strings
+        if "txtUsuario" in r2.text:
+            _r2_soup = BeautifulSoup(r2.text, "html.parser")
+            _login_input = _r2_soup.find("input", attrs={"name": "txtUsuario"})
+            if _login_input is not None:
+                if not _relogin:
+                    msg = "Sessão SEI expirou após re-login (árvore) — possível falha de autenticação."
+                    raise SEIError(msg)
+                logger.info("Sessão SEI expirou ao buscar árvore, re-logando")
+                async with self._form_lock:
+                    self._form_action = None
+                    self._form_hidden = {}
+                    # remove stale link so the retry fetches a fresh signed URL
+                    self._trabalhar_links.pop(protocolo_formatado, None)
+                await self.login()
+                return await self.consultar_processo(protocolo_formatado, _relogin=False)
 
         nos = parse_arvore_nos(r2.text)
         arvore_html = r2.text  # preservado para cardRelacionado — não sobrescrever no loop AGUARDE
@@ -2477,10 +2518,16 @@ class SEIWebClient:
             headers={"Referer": str(self._inbox_url)},
         )
         if not r.is_success:
+            logger.warning("autocomplete_unidades: HTTP %s para termo=%r", r.status_code, termo)
             return []
         try:
             raw = r.json()
         except ValueError:
+            logger.warning(
+                "autocomplete_unidades: resposta não-JSON (HTTP %s) para termo=%r",
+                r.status_code,
+                termo,
+            )
             return []
         results = []
         for item in raw if isinstance(raw, list) else []:
