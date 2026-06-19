@@ -911,7 +911,7 @@ def test_incluir_documento_externo_shaped_output(monkeypatch: pytest.MonkeyPatch
 
 
 # ---------------------------------------------------------------------------
-# Phase 4 — read response shaping (ListaDocumentos)
+# Fase 1 (RFC 0008) — read response shaping (ListaDocumentos)
 # ---------------------------------------------------------------------------
 
 
@@ -969,5 +969,15 @@ def test_listar_documentos_returns_lista_documentos(monkeypatch: pytest.MonkeyPa
 
     result = asyncio.run(processos.sei_listar_documentos("50300.000123/2025-00"))
     assert isinstance(result, ListaDocumentos)
+    assert result.processo == "50300.000123/2025-00"
     assert result.total_documentos == 1
     assert result.documentos[0].tipo_documento == "Ofício"
+
+
+def test_listar_documentos_include_raw_returns_str(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_listar_documentos (include_raw=True) returns raw JSON string."""
+    fake = RecordingBackend({"documentos": [], "total_documentos": 0})
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_listar_documentos("50300.000123/2025-00", include_raw=True))
+    assert isinstance(result, str)
