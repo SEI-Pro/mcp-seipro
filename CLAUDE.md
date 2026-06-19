@@ -220,7 +220,7 @@ Hosts MCP recebem `ToolError` com a mensagem equivalente — nunca exit codes.
 | `UP` sintaxe legada | `list[str]` não `List[str]`; `X \| None` não `Optional[X]`; `datetime.UTC` não `timezone.utc` |
 | `TC001/TC002` import de tipo | Mova para bloco `if TYPE_CHECKING:` |
 | `D1xx` docstring faltando | Toda função/classe pública precisa de docstring (uma linha basta) |
-| `S110/S112` except+pass | `suppress(ExcType)` com tipo **estreito**; logar se for erro real |
+| `S110/S112` except+pass | **Evite o padrão** — propague o erro ou `logger.warning` antes de retornar default; `suppress` só para cleanup de recurso com tipo estreito + `logger.debug` |
 | `PERF401` loop com append | List comprehension ou `list.extend(...)` |
 | `ERA001` código comentado | Delete — histórico fica no git |
 
