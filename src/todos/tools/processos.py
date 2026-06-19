@@ -129,11 +129,7 @@ def _shape_atividades(result: dict, *, ordem: str = "desc") -> ListaAtividades:
         raw.reverse()
     total = result.get("total_andamentos", len(raw))
     truncated = raw[:_ATIVIDADES_LIMIT]
-    proc = result.get("processo", {})
-    processo_info = ProcessoInfo(
-        protocolo=proc.get("protocolo", "") if isinstance(proc, dict) else str(proc),
-        id_procedimento=proc.get("id_procedimento", "") if isinstance(proc, dict) else "",
-    )
+    processo_info = ProcessoInfo.model_validate(result.get("processo", {}))
     return ListaAtividades(
         processo=processo_info,
         total_andamentos=total,
