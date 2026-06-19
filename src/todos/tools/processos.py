@@ -47,6 +47,7 @@ from todos.responses import (
     ListaDocumentos,
     NextAction,
     ProcessoDetalhe,
+    ProcessoInfo,
     RespostaEscrita,
 )
 from todos.tools.configuracao import _ProtocoloFormatado
@@ -128,14 +129,13 @@ def _shape_atividades(result: dict, *, ordem: str = "desc") -> ListaAtividades:
         raw.reverse()
     total = result.get("total_andamentos", len(raw))
     truncated = raw[:_ATIVIDADES_LIMIT]
-    processo_info = result.get("processo", {})
-    protocolo = (
-        processo_info.get("protocolo", "")
-        if isinstance(processo_info, dict)
-        else str(processo_info)
+    proc = result.get("processo", {})
+    processo_info = ProcessoInfo(
+        protocolo=proc.get("protocolo", "") if isinstance(proc, dict) else str(proc),
+        id_procedimento=proc.get("id_procedimento", "") if isinstance(proc, dict) else "",
     )
     return ListaAtividades(
-        processo=protocolo,
+        processo=processo_info,
         total_andamentos=total,
         andamentos=[Andamento(**a) for a in truncated],
         truncado=total > _ATIVIDADES_LIMIT,

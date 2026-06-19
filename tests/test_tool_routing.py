@@ -1105,7 +1105,8 @@ def test_listar_atividades_returns_lista_atividades(monkeypatch: pytest.MonkeyPa
 
     result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
     assert isinstance(result, ListaAtividades)
-    assert result.processo == "50300.000123/2025-00"
+    assert result.processo.protocolo == "50300.000123/2025-00"
+    assert result.processo.id_procedimento == "P1"
     assert result.total_andamentos == 2
     assert len(result.andamentos) == 2
     assert result.andamentos[0].descricao == "Processo criado"

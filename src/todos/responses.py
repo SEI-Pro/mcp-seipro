@@ -56,10 +56,19 @@ class Andamento(BaseModel):
     descricao: str = Field(default="", description="Descrição da ação realizada")
 
 
+class ProcessoInfo(BaseModel):
+    """Identificação do processo retornada por sei_listar_atividades."""
+
+    protocolo: str = Field(
+        default="", description="Protocolo formatado, ex: '50300.000123/2025-00'"
+    )
+    id_procedimento: str = Field(default="", description="Id interno do SEI")
+
+
 class ListaAtividades(BaseModel):
     """Resposta de sei_listar_atividades."""
 
-    processo: str = Field(description="Protocolo formatado do processo")
+    processo: ProcessoInfo = Field(description="Identificação do processo")
     total_andamentos: int = Field(description="Total de andamentos no histórico")
     andamentos: list[Andamento]
     truncado: bool = Field(
