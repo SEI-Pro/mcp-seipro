@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from todos.backends.models import CredenciaisAssinatura
 from todos.backends.rest._session import _RestMixin
+from todos.backends.rest.catalogos import _validar_pagina
 
 
 class BlocosRest(_RestMixin):
@@ -95,6 +96,7 @@ class BlocosRest(_RestMixin):
         self, filtro: str = "", limit: int = 50, pagina: int = 0
     ) -> dict:
         """Pesquisa blocos de assinatura existentes."""
+        _validar_pagina(pagina)
         return await self._rest.pesquisar_blocos_assinatura(
             filtro=filtro, limit=limit, start=pagina
         )

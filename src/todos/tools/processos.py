@@ -493,6 +493,9 @@ async def sei_listar_processos(
     if cursor:
         decoded = _decode_cursor(cursor)
         pagina = decoded.get("p", pagina)
+        apenas_meus = decoded.get("apenas_meus", apenas_meus)
+        tipo = decoded.get("tipo", tipo)
+        filtro = decoded.get("filtro", filtro)
     backend = await _backend(ctx)
     result = await backend.listar_processos(
         pagina=pagina,
@@ -501,7 +504,22 @@ async def sei_listar_processos(
         filtro=filtro,
     )
     result["_hints"] = get_hints()
-    return _json(_add_cursor(result, pagina=pagina, limit=500, tool_name="sei_listar_processos"))
+    cursor_extra: dict = {}
+    if apenas_meus:
+        cursor_extra["apenas_meus"] = apenas_meus
+    if tipo:
+        cursor_extra["tipo"] = tipo
+    if filtro:
+        cursor_extra["filtro"] = filtro
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=500,
+            tool_name="sei_listar_processos",
+            cursor_extra=cursor_extra,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +618,9 @@ async def sei_concluir_processo(numero_processo: str, ctx: Context | None = None
 
     O processo é removido da caixa da unidade mas permanece acessível.
     Use sei_reabrir_processo para reverter.
+
+    CONFIRMAÇÃO OBRIGATÓRIA: solicite confirmação do usuário antes de executar —
+    o efeito é imediato e visível para outros usuários da unidade.
     """
     backend = await _backend(ctx)
     result = await backend.concluir_processo(numero_processo)

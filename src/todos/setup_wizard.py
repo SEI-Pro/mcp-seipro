@@ -350,9 +350,10 @@ def _validate_credentials(conn: _SEIConnConfig) -> None:
                 "orgao": web_client.orgao_usuario,
                 "unidade": {},
             }
-            with contextlib.suppress(SEIError, httpx.HTTPError, OSError):
-                _logger_setup.debug("setup_wizard: obtendo unidade atual (best-effort)")
+            try:
                 info["unidade"] = await web_client.unidade_atual()
+            except (SEIError, httpx.HTTPError, OSError) as exc:
+                _logger_setup.warning("setup_wizard: não foi possível obter unidade atual: %s", exc)
             return info
         finally:
             await web_client.close()
