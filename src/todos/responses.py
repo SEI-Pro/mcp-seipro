@@ -77,6 +77,20 @@ class Paginado(BaseModel):
     next_actions: list[NextAction] = Field(default_factory=list)
 
 
+class ResultadoPesquisaProcessos(Paginado):
+    """Resposta de sei_pesquisar_processos (envelope Paginado + lista de processos)."""
+
+    processos: list[dict[str, object]] = Field(
+        default_factory=list,
+        description="Lista de processos encontrados (campos variam entre REST e web)",
+    )
+    fonte: str = Field(default="rest", description="'rest' ou 'web'")
+    aviso: str | None = Field(
+        default=None,
+        description="Avisos de filtros ignorados no caminho web",
+    )
+
+
 class ProcessoDetalhe(BaseModel):
     """Resposta shaped de sei_consultar_processo."""
 

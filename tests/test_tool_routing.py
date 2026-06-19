@@ -26,7 +26,8 @@ from helpers import aconst
 
 from todos.backends.base import SEIBackend
 from todos.mcp_app import mcp
-from todos.responses import ListaDocumentos, ProcessoDetalhe
+from todos.responses import ListaDocumentos, ProcessoDetalhe, ResultadoPesquisaProcessos
+from todos.server import _wrap_pesquisa
 from todos.tools import documentos, processos
 
 if TYPE_CHECKING:
@@ -1019,3 +1020,51 @@ def test_consultar_processo_include_raw_returns_str(monkeypatch: pytest.MonkeyPa
         processos.sei_consultar_processo("50300.000123/2025-00", ctx=None, include_raw=True)
     )
     assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# Fase 1 (RFC 0008) — sei_pesquisar_processos → ResultadoPesquisaProcessos
+# ---------------------------------------------------------------------------
+
+
+def test_wrap_pesquisa_returns_resultado_pesquisa_processos() -> None:
+    """_wrap_pesquisa (include_raw=False) returns ResultadoPesquisaProcessos model."""
+    result = {
+        "processos": [
+            {"ProtocoloFormatado": "50300.000123/2025-00", "NomeTipoProcedimento": "Requerimento"}
+        ],
+        "pagina_atual": 0,
+        "itens_pagina": 1,
+        "total_itens": 1,
+        "tem_proxima": False,
+        "fonte": "rest",
+    }
+    shaped = _wrap_pesquisa(result, include_raw=False, pagina=0, limit=50, cursor_extra={})
+    assert isinstance(shaped, ResultadoPesquisaProcessos)
+    assert shaped.total_itens == 1
+    assert shaped.fonte == "rest"
+    assert len(shaped.processos) == 1
+    assert shaped.proximo_cursor is None
+
+
+def test_wrap_pesquisa_include_raw_returns_str() -> None:
+    """_wrap_pesquisa (include_raw=True) returns raw JSON string."""
+    result = {"processos": [], "total_itens": 0, "tem_proxima": False}
+    raw = _wrap_pesquisa(result, include_raw=True, pagina=0, limit=50, cursor_extra={})
+    assert isinstance(raw, str)
+
+
+def test_wrap_pesquisa_sets_proximo_cursor_when_has_more() -> None:
+    """_wrap_pesquisa emits proximo_cursor when more pages exist."""
+    result = {
+        "processos": [{"p": i} for i in range(50)],
+        "pagina_atual": 0,
+        "itens_pagina": 50,
+        "total_itens": 100,
+        "tem_proxima": True,
+    }
+    shaped = _wrap_pesquisa(result, include_raw=False, pagina=0, limit=50, cursor_extra={})
+    assert isinstance(shaped, ResultadoPesquisaProcessos)
+    assert shaped.proximo_cursor is not None
+    assert len(shaped.next_actions) == 1
+    assert shaped.next_actions[0].tool == "sei_pesquisar_processos"

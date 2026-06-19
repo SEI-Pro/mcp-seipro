@@ -1,6 +1,6 @@
 # RFC 0008 — Saída estruturada (structuredContent + outputSchema)
 
-**Status**: Parcialmente implementada (Fase 0 concluída; Fase 1 em andamento — `sei_arvore_processo`, `sei_listar_documentos` e `sei_consultar_processo` migrados)
+**Status**: Parcialmente implementada (Fase 0 concluída; Fase 1 em andamento — `sei_arvore_processo`, `sei_listar_documentos`, `sei_consultar_processo` e `sei_pesquisar_processos` migrados)
 **Data**: 2026-06-17
 **Atualizado**: 2026-06-19
 **Autores**: Franklin Baldo (com Claude Code)
