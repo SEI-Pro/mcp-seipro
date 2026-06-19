@@ -41,6 +41,37 @@ _WSSEI_API_PATHS: tuple[str, ...] = (
 )
 _WSSEI_PROBE_TIMEOUT: float = 8.0
 _TOTAL_STEPS: int = 5
+_UFS: frozenset[str] = frozenset(
+    {
+        "AC",
+        "AL",
+        "AP",
+        "AM",
+        "BA",
+        "CE",
+        "DF",
+        "ES",
+        "GO",
+        "MA",
+        "MT",
+        "MS",
+        "MG",
+        "PA",
+        "PB",
+        "PR",
+        "PE",
+        "PI",
+        "RJ",
+        "RN",
+        "RS",
+        "RO",
+        "RR",
+        "SC",
+        "SP",
+        "SE",
+        "TO",
+    }
+)
 
 _console = Console()
 
@@ -186,37 +217,8 @@ def _resolve_organ_from_list(organs: list[tuple[str, str]]) -> tuple[str, str]:
     orgao_id, sigla_orgao = organs[selected_idx]
 
     parts = [p.strip() for p in re.split(r"\s*-\s*", sigla_orgao) if p.strip()]
-    ufs = {
-        "AC",
-        "AL",
-        "AP",
-        "AM",
-        "BA",
-        "CE",
-        "DF",
-        "ES",
-        "GO",
-        "MA",
-        "MT",
-        "MS",
-        "MG",
-        "PA",
-        "PB",
-        "PR",
-        "PE",
-        "PI",
-        "RJ",
-        "RN",
-        "RS",
-        "RO",
-        "RR",
-        "SC",
-        "SP",
-        "SE",
-        "TO",
-    }
     if len(parts) > 1:
-        parts_without_uf = [p for p in parts if p.upper() not in ufs]
+        parts_without_uf = [p for p in parts if p.upper() not in _UFS]
         if parts_without_uf:
             parts = parts_without_uf
     if len(parts) > 1:
@@ -771,17 +773,16 @@ def _resolve_modsei_url(detection: _ModseiDetection) -> str:
     """Confirma com o usuário qual URL REST do mod-wssei usar. Retorna a URL escolhida."""
     if detection.url and detection.confirmed:
         _ok(f"mod-wssei detectado: [cyan]{detection.url}[/]")
-        if Confirm.ask("  Usar esta URL REST?", default=True, console=_console):
-            return detection.url
     elif detection.url:
         _warn(f"Possível mod-wssei em: [cyan]{detection.url}[/]")
         _warn(
             "  (Cloudflare bloqueou verificação automática — confirme se mod-wssei está instalado.)"
         )
-        if Confirm.ask("  Usar esta URL REST?", default=True, console=_console):
-            return detection.url
     else:
         _warn("mod-wssei não detectado automaticamente nesta instância.")
+
+    if detection.url and Confirm.ask("  Usar esta URL REST?", default=True, console=_console):
+        return detection.url
 
     prompt_label = (
         "  URL REST do mod-wssei (vazio = desativar)"
