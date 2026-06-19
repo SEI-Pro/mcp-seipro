@@ -244,6 +244,24 @@ class DocumentosWeb(_WebMixin):
             raise SEINotImplementedError(msg)
         return await self._web.executar_acao_processo(referencia, "processo_dar_ciencia")
 
+    async def listar_blocos_documento(self, id_documento: str) -> list[dict]:
+        """Lista os blocos de assinatura que contêm um documento (REST-only)."""
+        del id_documento  # contrato exige o parâmetro; operação só disponível via REST
+        msg = (
+            "Listar blocos de um documento requer mod-wssei (REST). "
+            "Configure SEI_URL para habilitar esta funcionalidade."
+        )
+        raise SEINotImplementedError(msg)
+
+    async def sugestao_assuntos_documento(self, id_serie: str) -> list[dict]:
+        """Sugere assuntos para um tipo de documento (REST-only)."""
+        del id_serie  # contrato exige o parâmetro; operação só disponível via REST
+        msg = (
+            "Sugestão de assuntos por tipo requer mod-wssei (REST). "
+            "Configure SEI_URL para habilitar esta funcionalidade."
+        )
+        raise SEINotImplementedError(msg)
+
     async def listar_ciencias(
         self, referencia: str, tipo: str = "documento", processo: str | None = None
     ) -> list[dict]:

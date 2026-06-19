@@ -1,6 +1,6 @@
 # RFC 0011 — Paridade web para o domínio de documentos
 
-**Status**: Proposta
+**Status**: Parcialmente implementada (Fases 1, 2, 4 concluídas; Fase 3 pendente de SEI ao vivo)
 **Data**: 2026-06-18
 **Autores**: Franklin Baldo (com Claude Code)
 **Relacionado**: RFC 0006 (backend abstrato — pendente: `tools/documentos.py` raw clients), RFC 0001 (web-first)
@@ -309,7 +309,14 @@ Fecha o item pendente da RFC 0006.
 3. Teste mock.
 
 ### Fase 3 — `listar_blocos_documento` + `sugestao_assuntos_documento` web
-1. Implementar em `backends/web/documentos.py`.
+**Status: pendente** — requer SEI ao vivo para descoberta de URLs e seletores (confiança Baixa).
+
+Até lá, ambas as operações têm stubs explícitos em `backends/web/documentos.py` que levantam
+`SEINotImplementedError("requer mod-wssei (REST)")` com mensagem orientativa, em vez do
+`NotImplementedError` genérico herdado do base.
+
+Quando SEI ao vivo estiver disponível:
+1. Implementar scraping em `backends/web/documentos.py` (remover stubs `SEINotImplementedError`).
 2. Confirmar URLs/estrutura ao vivo.
 3. Testes mock.
 

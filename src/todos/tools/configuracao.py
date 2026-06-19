@@ -97,6 +97,7 @@ _host = _sei_host()
 _SEI_PROTOCOLO_PATTERN = os.environ.get("SEI_PROTOCOLO_PATTERN", "") or _read_keyring_pattern_sync(
     _host
 )
+_ProtocoloFormatadoBase = Annotated[str, Field(description=_PROTOCOLO_DESC)]
 if _SEI_PROTOCOLO_PATTERN:
     _candidate = Annotated[str, Field(pattern=_SEI_PROTOCOLO_PATTERN, description=_PROTOCOLO_DESC)]
     try:
@@ -107,9 +108,9 @@ if _SEI_PROTOCOLO_PATTERN:
             f"[todos] SEI_PROTOCOLO_PATTERN={_SEI_PROTOCOLO_PATTERN!r} é um regex inválido "
             "para o motor Pydantic/Rust — constraint ignorado, qualquer string será aceita.\n"
         )
-        _ProtocoloFormatado = Annotated[str, Field(description=_PROTOCOLO_DESC)]
+        _ProtocoloFormatado = _ProtocoloFormatadoBase
 else:
-    _ProtocoloFormatado = Annotated[str, Field(description=_PROTOCOLO_DESC)]
+    _ProtocoloFormatado = _ProtocoloFormatadoBase
 
 # ---------------------------------------------------------------------------
 # Descoberta automática do formato de protocolo

@@ -616,6 +616,109 @@ def test_informative_not_implemented_preserved_over_base_stub() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Web backend: documentos — unit tests with faked SEIWebClient (RFC 0011)
+# ---------------------------------------------------------------------------
+
+
+class _FakeWebClient:
+    """Minimal fake of SEIWebClient for documentos mixin tests."""
+
+    def __init__(self) -> None:
+        self.listar_secoes_calls: list[tuple[str, str]] = []
+        self.alterar_secoes_calls: list[tuple[str, str, list]] = []
+        self.alterar_doc_calls: list[dict] = []
+
+    async def listar_secoes_web(self, protocolo: str, id_documento: str) -> dict:
+        self.listar_secoes_calls.append((protocolo, id_documento))
+        return {
+            "secoes": [
+                {"id": "s1", "idSecaoModelo": "s1", "conteudo": "texto", "somenteLeitura": False}
+            ],
+            "ultimaVersaoDocumento": "7",
+        }
+
+    async def alterar_secoes_web(
+        self, protocolo: str, id_documento: str, secoes: list[dict]
+    ) -> dict:
+        self.alterar_secoes_calls.append((protocolo, id_documento, secoes))
+        return {"status": "ok", "id_documento": id_documento}
+
+    async def alterar_documento_interno_web(
+        self,
+        protocolo: str,
+        id_documento: str,
+        descricao: str = "",
+        nivel_acesso: str = "",
+        hipotese_legal: str = "",
+    ) -> dict:
+        del hipotese_legal
+        self.alterar_doc_calls.append(
+            {
+                "protocolo": protocolo,
+                "id": id_documento,
+                "descricao": descricao,
+                "nivel_acesso": nivel_acesso,
+            }
+        )
+        return {"status": "ok"}
+
+
+def _web_doc_backend(client: _FakeWebClient) -> SEIWebBackend:
+    return SEIWebBackend(client)  # type: ignore[arg-type]
+
+
+class TestWebDocumentosBackend:
+    def setup_method(self) -> None:
+        self.client = _FakeWebClient()
+        self.backend = _web_doc_backend(self.client)
+
+    def test_listar_secoes_delegates_to_web_client(self) -> None:
+        result = asyncio.run(self.backend.listar_secoes("DOC1", processo="PF"))
+        assert result["ultimaVersaoDocumento"] == "7"
+        assert self.client.listar_secoes_calls == [("PF", "DOC1")]
+
+    def test_listar_secoes_without_processo_raises(self) -> None:
+        with pytest.raises(SEINotImplementedError, match="forneça o parâmetro 'processo'"):
+            asyncio.run(self.backend.listar_secoes("DOC1", processo=None))
+
+    def test_alterar_secoes_delegates_to_web_client(self) -> None:
+        secoes = [{"idSecaoModelo": "s1", "conteudo": "<p>novo</p>"}]
+        result = asyncio.run(self.backend.alterar_secoes("DOC1", secoes, processo="PF"))
+        assert result["status"] == "ok"
+        assert self.client.alterar_secoes_calls[0][0] == "PF"
+        assert self.client.alterar_secoes_calls[0][1] == "DOC1"
+
+    def test_alterar_secoes_without_processo_raises(self) -> None:
+        with pytest.raises(SEINotImplementedError):
+            asyncio.run(
+                self.backend.alterar_secoes("DOC1", [{"idSecaoModelo": "s1", "conteudo": "x"}])
+            )
+
+    def test_alterar_documento_interno_delegates(self) -> None:
+        result = asyncio.run(
+            self.backend.alterar_documento_interno(
+                "DOC1", descricao="Novo título", nivel_acesso="0", processo="PF"
+            )
+        )
+        assert result["status"] == "ok"
+        call = self.client.alterar_doc_calls[0]
+        assert call["protocolo"] == "PF"
+        assert call["descricao"] == "Novo título"
+
+    def test_alterar_documento_interno_without_processo_raises(self) -> None:
+        with pytest.raises(SEINotImplementedError):
+            asyncio.run(self.backend.alterar_documento_interno("DOC1", processo=None))
+
+    def test_listar_blocos_documento_raises_not_implemented(self) -> None:
+        with pytest.raises(SEINotImplementedError, match="mod-wssei"):
+            asyncio.run(self.backend.listar_blocos_documento("DOC1"))
+
+    def test_sugestao_assuntos_documento_raises_not_implemented(self) -> None:
+        with pytest.raises(SEINotImplementedError, match="mod-wssei"):
+            asyncio.run(self.backend.sugestao_assuntos_documento("SERIE1"))
+
+
+# ---------------------------------------------------------------------------
 # Coverage thresholds — regression guard (RFC 0009 §2.2)
 #
 # These constants capture the implementation coverage at the time they were
@@ -623,8 +726,8 @@ def test_informative_not_implemented_preserved_over_base_stub() -> None:
 # decision (add a comment explaining why a method was removed/moved).
 # ---------------------------------------------------------------------------
 
-_REST_COVERAGE_MIN = 111 / 125  # exact fraction; one drop → 110/125 = 0.880 < 0.888 → fails
-_WEB_COVERAGE_MIN = 81 / 125  # exact fraction; one drop → 80/125 = 0.640 < 0.648 → fails
+_REST_COVERAGE_MIN = 113 / 127  # exact fraction; one drop → 112/127 = 0.882 < 0.890 → fails
+_WEB_COVERAGE_MIN = 88 / 127  # exact fraction; one drop → 87/127 = 0.685 < 0.693 → fails
 
 
 def _contract_ops() -> set[str]:
