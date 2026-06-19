@@ -10,7 +10,11 @@ automaticamente em ``content[0].text`` (JSON, compatível com clientes antigos)
 publicar ``outputSchema`` no catálogo de tools.
 """
 
-from pydantic import BaseModel, Field
+from typing import Generic, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field
+
+T = TypeVar("T")
 
 
 class NextAction(BaseModel):
@@ -107,6 +111,117 @@ class Paginado(BaseModel):
     next_actions: list[NextAction] = Field(default_factory=list)
 
 
+class PaginadoGenerico(Paginado, Generic[T]):
+    """Envelope de paginação tipado com campo `itens: list[T]`.
+
+    Usado por tools de catálogo SEI. FastMCP resolve o tipo concreto em tempo
+    de decoração e publica outputSchema com propriedades por campo de item.
+    """
+
+    itens: list[T] = Field(default_factory=list, description="Itens da página atual")
+
+
+# ---------------------------------------------------------------------------
+# Modelos de item de catálogo SEI
+# ---------------------------------------------------------------------------
+
+
+class ItemSEI(BaseModel):
+    """Item de catálogo SEI com id e nome (base)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador interno do SEI")
+    nome: str = Field(default="", description="Nome legível")
+
+
+class HipoteseLegal(ItemSEI):
+    """Hipótese legal para nível de acesso restrito ou sigiloso."""
+
+
+class TipoCatalogo(ItemSEI):
+    """Tipo de processo, documento, documento externo ou conferência."""
+
+
+class AssuntoSEI(ItemSEI):
+    """Assunto para classificação de processos."""
+
+    codigo: str = Field(default="", description="Código de classificação, ex: '021.1'")
+
+
+class ContatoSEI(ItemSEI):
+    """Contato (pessoa física, jurídica ou órgão) cadastrado no SEI."""
+
+    sigla: str = Field(default="", description="Sigla ou abreviatura do contato")
+
+
+class TextoPadrao(ItemSEI):
+    """Texto padrão para preenchimento automático de documentos internos."""
+
+
+class GrupoModelos(ItemSEI):
+    """Grupo de modelos de documento."""
+
+
+class ModeloDocumento(ItemSEI):
+    """Modelo de documento para criação de documentos internos."""
+
+
+class UnidadeSEI(BaseModel):
+    """Unidade organizacional do SEI."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador interno da unidade")
+    sigla: str = Field(default="", description="Sigla da unidade, ex: 'CGTI'")
+    nome: str = Field(default="", description="Nome completo da unidade")
+
+
+class UsuarioSEI(BaseModel):
+    """Usuário do SEI."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador interno do usuário")
+    nome: str = Field(default="", description="Nome completo do usuário")
+    sigla: str = Field(default="", description="Login/sigla do usuário")
+
+
+class AcompanhamentoSEI(BaseModel):
+    """Processo em acompanhamento especial."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador do acompanhamento")
+    protocolo: str = Field(default="", description="Número do processo acompanhado")
+
+
+class BlocoAssinatura(BaseModel):
+    """Bloco de assinatura para agrupamento de documentos."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador do bloco")
+    descricao: str = Field(default="", description="Descrição do bloco")
+    situacao: str = Field(
+        default="", description="Estado do bloco, ex: 'Aberto', 'Disponibilizado'"
+    )
+
+
+class DocumentoBloco(BaseModel):
+    """Documento incluído em um bloco de assinatura."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador interno do documento")
+    protocolo: str = Field(default="", description="Número do processo do documento")
+
+
+# ---------------------------------------------------------------------------
+# Respostas paginadas especializadas (mantêm campos extras além de `itens`)
+# ---------------------------------------------------------------------------
+
+
 class ResultadoPesquisaProcessos(Paginado):
     """Resposta de sei_pesquisar_processos (envelope Paginado + lista de processos)."""
 
@@ -119,78 +234,6 @@ class ResultadoPesquisaProcessos(Paginado):
         default=None,
         description="Avisos de filtros ignorados no caminho web",
     )
-
-
-class ResultadoHipoteses(Paginado):
-    """Resposta de sei_pesquisar_hipoteses_legais."""
-
-    hipoteses: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoTipos(Paginado):
-    """Resposta de sei_pesquisar_tipos_processo / _documento / _externo / _conferencia."""
-
-    tipos: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoAssuntos(Paginado):
-    """Resposta de sei_pesquisar_assuntos."""
-
-    assuntos: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoContatos(Paginado):
-    """Resposta de sei_pesquisar_contatos."""
-
-    contatos: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoTextos(Paginado):
-    """Resposta de sei_pesquisar_textos_padrao."""
-
-    textos: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoGruposModelos(Paginado):
-    """Resposta de sei_listar_grupos_modelos."""
-
-    grupos: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoModelos(Paginado):
-    """Resposta de sei_listar_modelos."""
-
-    modelos: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoUnidades(Paginado):
-    """Resposta de sei_pesquisar_unidades / sei_pesquisar_outras_unidades."""
-
-    unidades: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoUsuarios(Paginado):
-    """Resposta de sei_pesquisar_usuarios."""
-
-    usuarios: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoAcompanhamentos(Paginado):
-    """Resposta de sei_listar_meus_acompanhamentos / sei_listar_acompanhamentos_unidade."""
-
-    acompanhamentos: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoBlocos(Paginado):
-    """Resposta de sei_pesquisar_blocos_assinatura."""
-
-    blocos: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ResultadoDocumentosBloco(Paginado):
-    """Resposta de sei_listar_documentos_bloco_assinatura."""
-
-    documentos: list[dict[str, object]] = Field(default_factory=list)
 
 
 class ResultadoListaProcessos(Paginado):

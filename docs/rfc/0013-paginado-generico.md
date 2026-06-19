@@ -1,6 +1,6 @@
 # RFC 0013 — PaginadoGenerico: colapsar subclasses Paginado em modelo único
 
-**Status:** 📋 Proposta
+**Status:** ✅ Concluída (Opção C implementada)
 **Data:** 2026-06-19
 **Relacionado:** RFC 0008 (saída estruturada, Fase 2)
 

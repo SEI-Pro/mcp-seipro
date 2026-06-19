@@ -14,13 +14,14 @@ from fastmcp import Context
 
 from todos.mcp_app import _READ, _WRITE, _add_cursor, _backend, _decode_cursor, _json, mcp
 from todos.responses import (
-    ResultadoAssuntos,
-    ResultadoContatos,
-    ResultadoGruposModelos,
-    ResultadoHipoteses,
-    ResultadoModelos,
-    ResultadoTextos,
-    ResultadoTipos,
+    AssuntoSEI,
+    ContatoSEI,
+    GrupoModelos,
+    HipoteseLegal,
+    ModeloDocumento,
+    PaginadoGenerico,
+    TextoPadrao,
+    TipoCatalogo,
 )
 
 _DEFAULT_LIMIT = 50
@@ -33,7 +34,7 @@ async def sei_pesquisar_hipoteses_legais(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> ResultadoHipoteses:
+) -> PaginadoGenerico[HipoteseLegal]:
     """Pesquisa hipóteses legais disponíveis no SEI.
 
     Necessário ao criar processos ou documentos com nível de acesso
@@ -61,7 +62,8 @@ async def sei_pesquisar_hipoteses_legais(
     if filtro:
         extra["filtro"] = filtro
     extra["limit"] = limit
-    return ResultadoHipoteses.model_validate(
+    result["itens"] = result.pop("hipoteses", [])
+    return PaginadoGenerico[HipoteseLegal].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -80,7 +82,7 @@ async def sei_pesquisar_tipos_processo(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> ResultadoTipos:
+) -> PaginadoGenerico[TipoCatalogo]:
     """Pesquisa tipos de processo disponíveis no SEI.
 
     Parâmetros:
@@ -111,7 +113,8 @@ async def sei_pesquisar_tipos_processo(
     if favoritos:
         extra["favoritos"] = favoritos
     extra["limit"] = limit
-    return ResultadoTipos.model_validate(
+    result["itens"] = result.pop("tipos", [])
+    return PaginadoGenerico[TipoCatalogo].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -131,7 +134,7 @@ async def sei_pesquisar_tipos_documento(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> ResultadoTipos:
+) -> PaginadoGenerico[TipoCatalogo]:
     """Pesquisa tipos de documento (séries) disponíveis no SEI.
 
     Parâmetros:
@@ -168,7 +171,8 @@ async def sei_pesquisar_tipos_documento(
     if aplicabilidade:
         extra["aplicabilidade"] = aplicabilidade
     extra["limit"] = limit
-    return ResultadoTipos.model_validate(
+    result["itens"] = result.pop("tipos", [])
+    return PaginadoGenerico[TipoCatalogo].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -186,7 +190,7 @@ async def sei_pesquisar_tipos_documento_externo(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> ResultadoTipos:
+) -> PaginadoGenerico[TipoCatalogo]:
     """Pesquisa tipos de documento para documentos externos (séries externas).
 
     Diferente de sei_pesquisar_tipos_documento que lista todos os tipos,
@@ -212,7 +216,8 @@ async def sei_pesquisar_tipos_documento_externo(
     if filtro:
         extra["filtro"] = filtro
     extra["limit"] = limit
-    return ResultadoTipos.model_validate(
+    result["itens"] = result.pop("tipos", [])
+    return PaginadoGenerico[TipoCatalogo].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -230,7 +235,7 @@ async def sei_pesquisar_tipos_conferencia(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> ResultadoTipos:
+) -> PaginadoGenerico[TipoCatalogo]:
     """Pesquisa tipos de conferência para documentos externos.
 
     Tipo de conferência indica se o documento externo é cópia autenticada,
@@ -256,7 +261,8 @@ async def sei_pesquisar_tipos_conferencia(
     if filtro:
         extra["filtro"] = filtro
     extra["limit"] = limit
-    return ResultadoTipos.model_validate(
+    result["itens"] = result.pop("tipos", [])
+    return PaginadoGenerico[TipoCatalogo].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -274,7 +280,7 @@ async def sei_pesquisar_assuntos(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> ResultadoAssuntos:
+) -> PaginadoGenerico[AssuntoSEI]:
     """Pesquisa assuntos disponíveis para processos.
 
     Use o ID retornado no campo 'assuntos' ao criar processos.
@@ -299,7 +305,8 @@ async def sei_pesquisar_assuntos(
     if filtro:
         extra["filtro"] = filtro
     extra["limit"] = limit
-    return ResultadoAssuntos.model_validate(
+    result["itens"] = result.pop("assuntos", [])
+    return PaginadoGenerico[AssuntoSEI].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -317,7 +324,7 @@ async def sei_pesquisar_contatos(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> ResultadoContatos:
+) -> PaginadoGenerico[ContatoSEI]:
     """Pesquisa contatos cadastrados no SEI.
 
     Use para encontrar id de interessados ao criar/alterar processos.
@@ -337,7 +344,8 @@ async def sei_pesquisar_contatos(
     cursor_extra: dict = {"limit": limit}
     if filtro:
         cursor_extra["filtro"] = filtro
-    return ResultadoContatos.model_validate(
+    result["itens"] = result.pop("contatos", [])
+    return PaginadoGenerico[ContatoSEI].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -373,7 +381,7 @@ async def sei_pesquisar_textos_padrao(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> ResultadoTextos:
+) -> PaginadoGenerico[TextoPadrao]:
     """Pesquisa textos padrão internos disponíveis na unidade.
 
     Textos padrão são modelos reutilizáveis para preencher documentos
@@ -399,7 +407,8 @@ async def sei_pesquisar_textos_padrao(
     if filtro:
         extra["filtro"] = filtro
     extra["limit"] = limit
-    return ResultadoTextos.model_validate(
+    result["itens"] = result.pop("textos", [])
+    return PaginadoGenerico[TextoPadrao].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -416,7 +425,7 @@ async def sei_listar_grupos_modelos(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> ResultadoGruposModelos:
+) -> PaginadoGenerico[GrupoModelos]:
     """Lista grupos de modelos de documento disponíveis.
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
@@ -433,7 +442,8 @@ async def sei_listar_grupos_modelos(
     result = await backend.listar_grupos_modelos(limit=limit, pagina=pagina)
     extra: dict = {}
     extra["limit"] = limit
-    return ResultadoGruposModelos.model_validate(
+    result["itens"] = result.pop("grupos", [])
+    return PaginadoGenerico[GrupoModelos].model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -452,7 +462,7 @@ async def sei_listar_modelos(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> ResultadoModelos:
+) -> PaginadoGenerico[ModeloDocumento]:
     """Lista modelos de documento disponíveis.
 
     - id_grupo: filtrar por grupo (use sei_listar_grupos_modelos)
@@ -482,7 +492,8 @@ async def sei_listar_modelos(
     if filtro:
         extra["filtro"] = filtro
     extra["limit"] = limit
-    return ResultadoModelos.model_validate(
+    result["itens"] = result.pop("modelos", [])
+    return PaginadoGenerico[ModeloDocumento].model_validate(
         _add_cursor(
             result, pagina=pagina, limit=limit, tool_name="sei_listar_modelos", cursor_extra=extra
         )
