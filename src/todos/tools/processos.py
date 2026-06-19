@@ -81,7 +81,7 @@ def _to_str_list(items: list) -> list[str]:
     return out
 
 
-def _shape_lista_documentos(result: dict, protocolo: str, *, tool_name: str) -> dict:
+def _shape_lista_documentos(result: dict, protocolo: str, *, tool_name: str) -> ListaDocumentos:
     """Retorna ListaDocumentos a partir do payload bruto de arvore_processo/listar_documentos."""
     docs_raw: list = result.get("documentos", [])
     total: int = result.get("total_documentos", len(docs_raw))
