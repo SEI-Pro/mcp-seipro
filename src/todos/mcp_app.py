@@ -146,7 +146,7 @@ async def _get_client(ctx: Context | None) -> SEIClient:
         if evicted is not None:
             try:
                 await evicted.close()
-            except (httpx.TransportError, OSError) as exc:
+            except (httpx.TransportError, OSError, RuntimeError) as exc:
                 logger.debug("Falha ao fechar SEIClient evictado (ignorada): %s", exc)
         return client
 
@@ -191,7 +191,7 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
         if evicted is not None:
             try:
                 await evicted.close()
-            except (httpx.TransportError, OSError) as exc:
+            except (httpx.TransportError, OSError, RuntimeError) as exc:
                 logger.debug("Falha ao fechar SEIWebClient evictado (ignorada): %s", exc)
         return client
 
@@ -491,13 +491,15 @@ async def _solicitar_consentimento_via_elicit(
         )
         return "nao_suportado"
     except (AttributeError, NotImplementedError, RuntimeError, TypeError, ValueError) as e:
-        if isinstance(e, (AttributeError, RuntimeError, ValueError)):
-            logger.warning(
-                "elicit falhou inesperadamente (%s: %s) — fallback JSON", type(e).__name__, e
-            )
-        else:
+        # NotImplementedError/TypeError → client doesn't support elicit (expected, debug only).
+        # Check these first: NotImplementedError is a RuntimeError subclass, so the order matters.
+        if isinstance(e, (NotImplementedError, TypeError)):
             logger.debug(
                 "elicit não suportado pelo cliente (%s: %s) — fallback JSON", type(e).__name__, e
+            )
+        else:
+            logger.warning(
+                "elicit falhou inesperadamente (%s: %s) — fallback JSON", type(e).__name__, e
             )
         return "nao_suportado"
 

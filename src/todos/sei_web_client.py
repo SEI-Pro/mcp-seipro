@@ -1175,7 +1175,7 @@ class SEIWebClient:
 
         return {"processos": results, "total_itens": total_itens}
 
-    async def consultar_processo(self, protocolo_formatado: str) -> dict:
+    async def consultar_processo(self, protocolo_formatado: str, *, _relogin: bool = True) -> dict:
         """Busca dados de um processo navegando pela cadeia de páginas web.
 
         Fluxo:
@@ -1228,12 +1228,15 @@ class SEIWebClient:
 
         # detecta sessão expirada
         if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
+            if not _relogin:
+                msg = "Sessão SEI expirou após re-login — possível falha de autenticação."
+                raise SEIError(msg)
             logger.info("Sessão SEI expirou, re-logando")
             async with self._form_lock:
                 self._form_action = None
                 self._form_hidden = {}
             await self.login()
-            return await self.consultar_processo(protocolo_formatado)
+            return await self.consultar_processo(protocolo_formatado, _relogin=False)
 
         soup_fs = BeautifulSoup(r1.text, "html.parser")
         ifr = soup_fs.find("iframe", id="ifrArvore")
@@ -1252,16 +1255,20 @@ class SEIWebClient:
         _check(r2)
 
         # detecta sessão expirada (servidor retorna 200 com página de login)
-        # usa BeautifulSoup para evitar falso positivo com txtUsuario em JS
-        _r2_soup = BeautifulSoup(r2.text, "html.parser")
-        _login_input = _r2_soup.find("input", attrs={"name": "txtUsuario"})
-        if _login_input is not None:
-            logger.info("Sessão SEI expirou ao buscar árvore, re-logando")
-            async with self._form_lock:
-                self._form_action = None
-                self._form_hidden = {}
-            await self.login()
-            return await self.consultar_processo(protocolo_formatado)
+        # usa BeautifulSoup para evitar falso positivo com txtUsuario em JS strings
+        if "txtUsuario" in r2.text:
+            _r2_soup = BeautifulSoup(r2.text, "html.parser")
+            _login_input = _r2_soup.find("input", attrs={"name": "txtUsuario"})
+            if _login_input is not None:
+                if not _relogin:
+                    msg = "Sessão SEI expirou após re-login (árvore) — possível falha de autenticação."
+                    raise SEIError(msg)
+                logger.info("Sessão SEI expirou ao buscar árvore, re-logando")
+                async with self._form_lock:
+                    self._form_action = None
+                    self._form_hidden = {}
+                await self.login()
+                return await self.consultar_processo(protocolo_formatado, _relogin=False)
 
         nos = parse_arvore_nos(r2.text)
         arvore_html = r2.text  # preservado para cardRelacionado — não sobrescrever no loop AGUARDE
