@@ -92,6 +92,18 @@ Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. F
 - **Verificação obrigatória** — após qualquer edição em Python, rode `uv run ruff check .` e `uv run ruff format --check .` antes de encerrar o turno.
 - **Formatação** — rode `uv run ruff format .` se houver divergência de formatação; nunca ajuste manualmente o estilo.
 
+### Regras absolutas — tratamento de erros
+- **Proibido engolir erros** — nunca `except ... pass`, `except ... continue` ou `suppress(Exception)` sem logar. Erros devem propagar ou ser logados com `logger.warning`/`logger.error`.
+- **`suppress` só com tipos estreitos** — `contextlib.suppress(httpx.TransportError, OSError)` é aceitável para cleanup de conexão; `suppress(Exception)` nunca.
+- **`return` default silencioso é erro** — funções que retornam `None`/`[]`/`{}` ao capturar uma exceção devem logar antes de retornar; o chamador não consegue distinguir "não encontrado" de "falhou".
+- **`logger.debug` para erros reais é invisível em produção** — use `warning` para qualquer exceção que indica falha real (parsing, HTTP error, estado inesperado); reserve `debug` apenas para "cliente não suporta feature" ou diagnóstico de fluxo normal.
+
+### Logging
+- O logger `todos.*` é configurado pelo `mcp_app.py` via `fastmcp.utilities.logging.configure_logging` com o mesmo RichHandler do FastMCP.
+- Nível controlado por `TODOS_LOG_LEVEL` → `FASTMCP_LOG_LEVEL` → `INFO`.
+- Use `logging.getLogger(__name__)` em todos os módulos — o namespace `todos.*` já está configurado.
+- Nunca use `print()` para diagnóstico — use o logger.
+
 ### Receitas para violações comuns
 
 | Violação | Solução correta |
@@ -107,9 +119,51 @@ Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. F
 | `TC001/TC002` import de tipo | Mova para bloco `if TYPE_CHECKING:` quando usado apenas em anotações |
 | `PLC0415` import dentro de função | Mova para o topo do módulo; use `sys.path.insert` antes se necessário |
 | `D1xx` docstring faltando | Toda função/classe pública precisa de docstring (uma linha basta para funções simples) |
-| `S110/S112` except+pass | Substitua por `contextlib.suppress(ExcType)` |
+| `S110/S112` except+pass | `suppress(ExcType)` com tipo **estreito** (nunca `suppress(Exception)`); sempre logar se for erro real |
 | `PERF401` loop com append | Substitua por list comprehension ou `list.extend(...)` |
 | `ERA001` código comentado | Delete — histórico fica no git, não no fonte |
+
+## Integração com o pink (Kanoê/Caipora)
+
+O pink é o MCP do sistema de gestão processual (Kanoê + Caipora), parceiro do todos no fluxo jurídico. Tools do todos frequentemente lêem o SEI e postam no pink.
+
+### Tools mais usadas ao integrar
+
+| Tool pink | Uso típico |
+|---|---|
+| `expediente_comentar` | Posta análise/ação após `sei_consultar_processo` |
+| `expediente_criar` | Cria controle de prazo (ex.: ED 5 dias úteis Juizado, 10 demais) |
+| `pasta_show` | Lê resumo estratégico antes de consultar o SEI |
+| `inbox` | Lista processos não-recebidos; com `full=True` traz teor dos expedientes |
+| `hoje` | Triagem diária — expedientes e tarefas com prazo no horizonte |
+| `pasta_mover` | Move pasta para caixa após triagem |
+| `tarefa_criar` | Cria tarefa de acompanhamento em uma pasta |
+
+### Convenções do pink que afetam o código
+
+- **`_next` é obrigatório após escrita** — todas as tools de escrita retornam `{"ok": True, "_next": [...]}`. Execute `_next[0]` depois da escrita para verificar; não assuma sucesso apenas pelo `ok: True`.
+- **Ops destrutivas exigem confirmação** — `expediente_criar`, `expediente_comentar`, `pasta_receber`, `tarefa_criar`, `documento_deletar` e afins são permanentes e visíveis para o setor inteiro; o agente deve confirmar com o usuário antes.
+- **`fresh=True` força bypass de cache** — use quando a resposta precisa refletir uma escrita imediata.
+- **`raw_html=True`** — passe quando `texto`/`teor` já contém marcação HTML (`<p>`, `<strong>`, `<br/>`); sem o flag o texto é escapado.
+- **`mark=False`** — suprime o marcador visual rosa (RFC 0012); use quando a entrada deve parecer humana.
+- **Paginação via `cursor`** — quando a resposta contém `proximo_cursor`, passe-o em `cursor` para obter a próxima página.
+- **`sei_enrich=True`** em `pasta_show`/`expediente_show` — detecta NUPs e IDs SEI no teor e adiciona `_sei_refs` com resumos; resolve cruzamento Kanoê+SEI sem chamadas extras.
+
+### Tipos de expediente (campo `tipo` em `expediente_criar`)
+
+| Valor | Nome |
+|---|---|
+| 0 | OUTROS (padrão) |
+| 1 | INTIMACAO |
+| 2 | CITACAO |
+| 3 | RETORNO_PROGRAMADO |
+| 4 | NOTIFICACAO |
+
+### Prazo no pink
+
+- Formato obrigatório: `YYYY-MM-DD` — validado no schema; outros formatos falham.
+- Prazo ED: 5 dias úteis para Juizado/TR, 10 dias para os demais.
+- Pauta em sessão virtual: criar expediente de controle de destaque/sustentação oral (até 48h antes); sessão presencial não precisa.
 
 ## Ambientes testados
 
