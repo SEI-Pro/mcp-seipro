@@ -1,6 +1,6 @@
 # RFC 0008 — Saída estruturada (structuredContent + outputSchema)
 
-**Status**: Proposta
+**Status**: Parcialmente implementada (Fase 0 concluída; Fase 1 em andamento — `sei_arvore_processo` e `sei_listar_documentos` migrados)
 **Data**: 2026-06-17
 **Autores**: Franklin Baldo (com Claude Code)
 **Relacionado**: RFC 0007 (response shaping, Pydantic models em `responses.py`)

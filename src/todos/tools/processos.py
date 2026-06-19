@@ -115,7 +115,7 @@ def _shape_lista_documentos(result: dict, protocolo: str, *, tool_name: str) -> 
         total_documentos=total,
         documentos=resumos,
         next_actions=actions,
-    ).model_dump()
+    )
 
 
 def _shape_atividades(result: dict, *, ordem: str = "desc") -> dict:
@@ -218,7 +218,7 @@ async def sei_arvore_processo(
     ctx: Context | None = None,
     *,
     include_raw: bool = False,
-) -> str:
+) -> ListaDocumentos | str:
     """Mostra a árvore completa de documentos de um processo SEI.
 
     Implementação via scraper web (~10x mais rápido que REST: ~1 s vs ~12 s).
@@ -241,9 +241,7 @@ async def sei_arvore_processo(
         await ctx.report_progress(100, 100)
     if include_raw:
         return _json(result)
-    return _json(
-        _shape_lista_documentos(result, protocolo_formatado, tool_name="sei_arvore_processo")
-    )
+    return _shape_lista_documentos(result, protocolo_formatado, tool_name="sei_arvore_processo")
 
 
 @mcp.tool(annotations=_READ)
@@ -252,7 +250,7 @@ async def sei_listar_documentos(
     ctx: Context | None = None,
     *,
     include_raw: bool = False,
-) -> str:
+) -> ListaDocumentos | str:
     """Lista todos os documentos de um processo SEI.
 
     Implementação via scraper web (~10x mais rápido que REST).
@@ -292,9 +290,7 @@ async def sei_listar_documentos(
         result: dict = {"documentos": docs, "total_documentos": len(docs)}
     else:
         result = raw
-    return _json(
-        _shape_lista_documentos(result, protocolo_formatado, tool_name="sei_listar_documentos")
-    )
+    return _shape_lista_documentos(result, protocolo_formatado, tool_name="sei_listar_documentos")
 
 
 @mcp.tool(annotations=_READ)
