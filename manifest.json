@@ -116,6 +116,14 @@
     {
       "name": "sei_incluir_documento_externo",
       "description": "Faz upload de arquivo externo (PDF, imagem) em processo"
+    },
+    {
+      "name": "sei_detectar_formato_protocolo",
+      "description": "Detecta e persiste o formato do número de processo desta instância SEI"
+    },
+    {
+      "name": "sei_redefinir_formato_protocolo",
+      "description": "Remove o padrão de protocolo persistido para forçar nova detecção"
     }
   ],
   "compatibility": {
