@@ -1,6 +1,8 @@
 # RFC 0006 — Backend abstrato: contrato único REST/web + tools modulares
 
-**Status**: Em andamento
+**Status**: Parcialmente concluída · **Atualizado**: 2026-06-19
+
+Objetivos principais atingidos (contrato abstrato, backends REST/web/composite, 10 módulos de tools, `tools/documentos.py` migrado). Pendências menores: poda de ops vestigiais do contrato (`cancelar_assinatura`, `gerar_referencia`, `marcar_nao_lido`, `resumo_processos`); 2 tools de orquestração em `server.py` que permanecerão no tool-layer por design.
 **Data**: 2026-06-13
 **Autores**: Franklin Baldo (com Claude Code)
 **Relacionado**: supersede o mecanismo de roteamento da [RFC 0001 §4.1](0001-web-first.md) (web-first); preserva todo o comportamento web-first descrito lá.

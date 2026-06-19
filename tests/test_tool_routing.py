@@ -26,7 +26,7 @@ from helpers import aconst
 
 from todos.backends.base import SEIBackend
 from todos.mcp_app import mcp
-from todos.responses import ListaDocumentos
+from todos.responses import ListaDocumentos, ProcessoDetalhe
 from todos.tools import documentos, processos
 
 if TYPE_CHECKING:
@@ -654,7 +654,8 @@ def test_consultar_processo_routes_and_keeps_public_payload(
     result = asyncio.run(processos.sei_consultar_processo("50300.000123/2025-00", ctx=None))
     assert fake.calls[0][0] == "consultar_processo"
     assert "50300.000123/2025-00" in _flatten(fake.calls[0][1], fake.calls[0][2])
-    assert "42" in result
+    assert isinstance(result, ProcessoDetalhe)
+    assert result.id_procedimento == "42"
 
 
 def test_executar_acao_dry_run_does_not_touch_backend(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -980,4 +981,41 @@ def test_listar_documentos_include_raw_returns_str(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
     result = asyncio.run(processos.sei_listar_documentos("50300.000123/2025-00", include_raw=True))
+    assert isinstance(result, str)
+
+
+def test_consultar_processo_returns_processo_detalhe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_consultar_processo (include_raw=False) returns ProcessoDetalhe model."""
+    fake = RecordingBackend(
+        {
+            "IdProcedimento": "P123",
+            "ProtocoloProcedimentoFormatado": "50300.000123/2025-00",
+            "NomeTipoProcedimento": "Requerimento",
+            "especificacao": "Teste",
+            "nivelAcesso": "0",
+            "interessados": ["Maria"],
+            "total_documentos": 2,
+        }
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_consultar_processo("50300.000123/2025-00", ctx=None))
+    assert isinstance(result, ProcessoDetalhe)
+    assert result.protocolo == "50300.000123/2025-00"
+    assert result.id_procedimento == "P123"
+    assert result.tipo == "Requerimento"
+    assert result.total_documentos == 2
+    assert result.interessados == ["Maria"]
+    assert len(result.next_actions) == 1
+    assert result.next_actions[0].tool == "sei_arvore_processo"
+
+
+def test_consultar_processo_include_raw_returns_str(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_consultar_processo (include_raw=True) returns raw JSON string."""
+    fake = RecordingBackend({"IdProcedimento": "P1", "nivelAcesso": "0"})
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(
+        processos.sei_consultar_processo("50300.000123/2025-00", ctx=None, include_raw=True)
+    )
     assert isinstance(result, str)

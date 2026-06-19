@@ -134,7 +134,7 @@ def _shape_atividades(result: dict, *, ordem: str = "desc") -> dict:
     }
 
 
-def _shape_consultar_processo(merged: dict, protocolo: str) -> dict:
+def _shape_consultar_processo(merged: dict, protocolo: str) -> ProcessoDetalhe:
     """Retorna ProcessoDetalhe shaped do payload bruto de consultar_processo.
 
     Com include_raw=False (padrão), retorna um resumo compacto com next_actions
@@ -154,7 +154,7 @@ def _shape_consultar_processo(merged: dict, protocolo: str) -> dict:
             )
         )
 
-    detail = ProcessoDetalhe(
+    return ProcessoDetalhe(
         id_procedimento=merged.get("IdProcedimento") or merged.get("id_procedimento", ""),
         protocolo=merged.get("ProtocoloProcedimentoFormatado")
         or merged.get("protocolo", protocolo),
@@ -164,13 +164,9 @@ def _shape_consultar_processo(merged: dict, protocolo: str) -> dict:
         interessados=interessados,
         total_documentos=total_docs,
         next_actions=actions,
+        warnings=merged.get("_warnings"),
+        aviso_acesso=merged.get("_aviso_acesso"),
     )
-    out = detail.model_dump()
-    if "_warnings" in merged:
-        out["_warnings"] = merged["_warnings"]
-    if "_aviso_acesso" in merged:
-        out["_aviso_acesso"] = merged["_aviso_acesso"]
-    return out
 
 
 @mcp.tool(annotations=_READ)
@@ -179,7 +175,7 @@ async def sei_consultar_processo(
     ctx: Context,
     *,
     include_raw: bool = False,
-) -> str:
+) -> ProcessoDetalhe | str:
     """Consulta um processo SEI pelo número de protocolo formatado.
 
     Exemplo de protocolo: 50300.000123/2025-00
@@ -209,7 +205,9 @@ async def sei_consultar_processo(
             alvo={"tipo": "processo", "protocolo": protocolo_formatado},
         )
 
-    return _json(merged if include_raw else _shape_consultar_processo(merged, protocolo_formatado))
+    if include_raw:
+        return _json(merged)
+    return _shape_consultar_processo(merged, protocolo_formatado)
 
 
 @mcp.tool(annotations=_READ)

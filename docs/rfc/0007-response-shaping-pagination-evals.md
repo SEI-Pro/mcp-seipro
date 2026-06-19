@@ -1,6 +1,13 @@
 # RFC 0007 — Response shaping, paginação por cursor, erros recuperáveis e eval harness
 
-**Status**: Proposta
+**Status**: Parcialmente implementada · **Atualizado**: 2026-06-19
+
+Fases implementadas:
+- **Fase 0** ✅ — `responses.py` com todos os modelos; `_encode_cursor`/`_decode_cursor`; contagem de tools corrigida
+- **Fase 1** ✅ — cursor opaco em 12+ tools de catálogo/blocos e `sei_listar_processos`
+- **Fase 3** ✅ — 6 write tools retornam `RespostaEscrita` (RFC 0008 Fase 0)
+- **Fase 2** 🚧 — `sei_arvore_processo`, `sei_listar_documentos`, `sei_consultar_processo` migrados para `ListaDocumentos`/`ProcessoDetalhe`; `sei_listar_atividades` e `sei_pesquisar_processos` pendentes
+- **Fases 4–5** ⏳ — erros recuperáveis e evals não iniciados
 **Data**: 2026-06-17
 **Autores**: Franklin Baldo (com Claude Code)
 **Relacionado**: RFC 0006 (backend abstrato), RFC 0004 (exceções)
