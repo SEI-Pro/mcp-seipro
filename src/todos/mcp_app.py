@@ -55,7 +55,10 @@ _http_port = int(os.environ.get("PORT", "8000"))
 _todos_log_level = (
     os.environ.get("TODOS_LOG_LEVEL") or os.environ.get("FASTMCP_LOG_LEVEL") or "INFO"
 ).upper()
-configure_logging(level=_todos_log_level, logger=logging.getLogger("todos"))
+configure_logging(
+    level=getattr(logging, _todos_log_level, logging.INFO),
+    logger=logging.getLogger("todos"),
+)
 
 
 @asynccontextmanager

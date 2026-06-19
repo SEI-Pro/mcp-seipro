@@ -2,8 +2,8 @@
   "manifest_version": "0.3",
   "name": "todos",
   "display_name": "todos",
-  "version": "0.5.35",
-  "description": "TOdos Domina O Sei — 126 ferramentas para o SEI, scraper web-first, funciona em qualquer instância (com ou sem mod-wssei).",
+  "version": "0.5.36",
+  "description": "TOdos Domina O Sei — 124 ferramentas para o SEI, scraper web-first, funciona em qualquer instância (com ou sem mod-wssei).",
   "long_description": "TOdos Domina O Sei: servidor MCP para o SEI (Sistema Eletrônico de Informações) com arquitetura web-first. Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. Funciona em qualquer instância SEI 4.0+ — inclusive sem mod-wssei instalado. Cobre processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais. Operações de leitura críticas usam scraper web (23× mais rápido que REST). Metadados estáticos em cache TTL 1h.",
   "author": {
     "name": "Franklin Baldo",
@@ -22,7 +22,9 @@
     "entry_point": "bootstrap.py",
     "mcp_config": {
       "command": "python",
-      "args": ["${__dirname}/bootstrap.py"],
+      "args": [
+        "${__dirname}/bootstrap.py"
+      ],
       "env": {
         "SEI_URL": "${user_config.sei_url}",
         "SEI_WEB_URL": "${user_config.sei_web_url}",
@@ -75,21 +77,53 @@
     }
   },
   "tools": [
-    {"name": "sei_listar_unidades", "description": "Lista unidades acessiveis"},
-    {"name": "sei_trocar_unidade", "description": "Troca a unidade ativa"},
-    {"name": "sei_listar_processos", "description": "Lista processos da caixa da unidade"},
-    {"name": "sei_consultar_processo", "description": "Consulta detalhes de um processo"},
-    {"name": "sei_criar_processo", "description": "Cria novo processo"},
-    {"name": "sei_enviar_processo", "description": "Tramita processo para outra unidade"},
-    {"name": "sei_ler_documento", "description": "Le o conteudo de um documento"},
-    {"name": "sei_criar_documento", "description": "Cria novo documento em um processo"},
-    {"name": "sei_assinar_documento", "description": "Assina documento digitalmente"},
-    {"name": "sei_incluir_documento_externo", "description": "Faz upload de arquivo externo (PDF, imagem) em processo"},
-    {"name": "sei_detectar_formato_protocolo", "description": "Detecta e persiste o formato de numero de protocolo desta instancia SEI"},
-    {"name": "sei_redefinir_formato_protocolo", "description": "Remove o padrao de protocolo persistido no keyring para forcar redescoberta"}
+    {
+      "name": "sei_listar_unidades",
+      "description": "Lista unidades acessiveis"
+    },
+    {
+      "name": "sei_trocar_unidade",
+      "description": "Troca a unidade ativa"
+    },
+    {
+      "name": "sei_listar_processos",
+      "description": "Lista processos da caixa da unidade"
+    },
+    {
+      "name": "sei_consultar_processo",
+      "description": "Consulta detalhes de um processo"
+    },
+    {
+      "name": "sei_criar_processo",
+      "description": "Cria novo processo"
+    },
+    {
+      "name": "sei_enviar_processo",
+      "description": "Tramita processo para outra unidade"
+    },
+    {
+      "name": "sei_ler_documento",
+      "description": "Le o conteudo de um documento"
+    },
+    {
+      "name": "sei_criar_documento",
+      "description": "Cria novo documento em um processo"
+    },
+    {
+      "name": "sei_assinar_documento",
+      "description": "Assina documento digitalmente"
+    },
+    {
+      "name": "sei_incluir_documento_externo",
+      "description": "Faz upload de arquivo externo (PDF, imagem) em processo"
+    }
   ],
   "compatibility": {
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "python": ">=3.11"
     }

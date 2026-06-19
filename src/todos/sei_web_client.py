@@ -958,7 +958,7 @@ class SEIWebClient:
     # Consultar processo (página de detalhe)
     # ------------------------------------------------------------------
 
-    async def pesquisar_processo(self, protocolo: str) -> None:
+    async def pesquisar_processo(self, protocolo: str, *, _relogin: bool = True) -> None:
         """Busca um processo pelo protocolo via pesquisa rápida do SEI.
 
         Popula `_trabalhar_links` com a URL pré-assinada do processo encontrado,
@@ -982,6 +982,18 @@ class SEIWebClient:
         )
         _check(r)
 
+        # detecta sessão expirada — a pesquisa rápida pode retornar o login
+        # quando _pesquisa_rapida_action estava cacheado mas a sessão expirou
+        if 'name="txtUsuario"' in r.text or 'id="txtUsuario"' in r.text:
+            if not _relogin:
+                msg = "Sessão SEI expirou após re-login na pesquisa rápida — falha de autenticação."
+                raise SEIError(msg)
+            logger.info("pesquisar_processo: sessão SEI expirou, re-logando via fetch_inbox")
+            async with self._form_lock:
+                self._pesquisa_rapida_action = None
+            await self.fetch_inbox(detalhada=False)
+            return await self.pesquisar_processo(protocolo, _relogin=False)
+
         final_url = str(r.url)
         sei_base = f"{self.sei_root}/sei/"
 
@@ -990,7 +1002,7 @@ class SEIWebClient:
             href = final_url.replace(sei_base, "") if final_url.startswith(sei_base) else final_url
             async with self._form_lock:
                 self._trabalhar_links[protocolo] = href
-            return
+            return None
 
         # Página de resultados (protocolo_pesquisar) — busca o link correto
         soup = BeautifulSoup(r.text, "html.parser")
@@ -1001,14 +1013,14 @@ class SEIWebClient:
                 href = _tag_str(a, "href").replace("&amp;", "&")
                 async with self._form_lock:
                     self._trabalhar_links[protocolo] = href
-                return
+                return None
 
         # Tenta também via links com id_procedimento (tooltip ou linha da tabela)
         for a in soup.find_all("a", href=re.compile(r"procedimento_trabalhar")):
             href = _tag_str(a, "href").replace("&amp;", "&")
             async with self._form_lock:
                 self._trabalhar_links[protocolo] = href
-            return
+            return None
 
         msg = (
             f"Processo {protocolo!r} não encontrado na pesquisa. "
@@ -1235,6 +1247,8 @@ class SEIWebClient:
             async with self._form_lock:
                 self._form_action = None
                 self._form_hidden = {}
+                # remove stale link so the retry fetches a fresh signed URL
+                self._trabalhar_links.pop(protocolo_formatado, None)
             await self.login()
             return await self.consultar_processo(protocolo_formatado, _relogin=False)
 
@@ -1267,6 +1281,8 @@ class SEIWebClient:
                 async with self._form_lock:
                     self._form_action = None
                     self._form_hidden = {}
+                    # remove stale link so the retry fetches a fresh signed URL
+                    self._trabalhar_links.pop(protocolo_formatado, None)
                 await self.login()
                 return await self.consultar_processo(protocolo_formatado, _relogin=False)
 
