@@ -41,10 +41,13 @@ from todos.mcp_app import (
     mcp,
 )
 from todos.responses import (
+    Andamento,
     DocumentoResumo,
+    ListaAtividades,
     ListaDocumentos,
     NextAction,
     ProcessoDetalhe,
+    ProcessoInfo,
     RespostaEscrita,
 )
 from todos.tools.configuracao import _ProtocoloFormatado
@@ -118,20 +121,21 @@ def _shape_lista_documentos(result: dict, protocolo: str, *, tool_name: str) -> 
     )
 
 
-def _shape_atividades(result: dict, *, ordem: str = "desc") -> dict:
+def _shape_atividades(result: dict, *, ordem: str = "desc") -> ListaAtividades:
     """Retorna andamentos em formato shaped a partir do payload bruto de listar_atividades."""
-    andamentos: list = list(result.get("andamentos", []))
+    raw: list[dict] = list(result.get("andamentos", []))
     # Raw list from web scraper is newest-first; reverse only when ascending order is requested.
     if ordem == "asc":
-        andamentos.reverse()
-    total = result.get("total_andamentos", len(andamentos))
-    truncated = andamentos[:_ATIVIDADES_LIMIT]
-    return {
-        "processo": result.get("processo", {}),
-        "total_andamentos": total,
-        "andamentos": truncated,
-        "truncado": total > _ATIVIDADES_LIMIT,
-    }
+        raw.reverse()
+    total = result.get("total_andamentos", len(raw))
+    truncated = raw[:_ATIVIDADES_LIMIT]
+    processo_info = ProcessoInfo.model_validate(result.get("processo", {}))
+    return ListaAtividades(
+        processo=processo_info,
+        total_andamentos=total,
+        andamentos=[Andamento(**a) for a in truncated],
+        truncado=total > _ATIVIDADES_LIMIT,
+    )
 
 
 def _shape_consultar_processo(merged: dict, protocolo: str) -> ProcessoDetalhe:
@@ -418,7 +422,7 @@ async def sei_listar_atividades(
     *,
     ordem: Literal["desc", "asc"] = "desc",
     include_raw: bool = False,
-) -> str:
+) -> ListaAtividades | str:
     """Lista o histórico de atividades/andamentos de um processo.
 
     Implementação via scraper web (procedimento_consultar_historico.php).
@@ -436,7 +440,7 @@ async def sei_listar_atividades(
     result = await backend.listar_atividades(processo)
     if include_raw:
         return _json(result)
-    return _json(_shape_atividades(result, ordem=ordem))
+    return _shape_atividades(result, ordem=ordem)
 
 
 @mcp.tool(annotations=_READ)

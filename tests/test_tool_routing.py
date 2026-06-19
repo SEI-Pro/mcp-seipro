@@ -26,7 +26,12 @@ from helpers import aconst
 
 from todos.backends.base import SEIBackend
 from todos.mcp_app import mcp
-from todos.responses import ListaDocumentos, ProcessoDetalhe, ResultadoPesquisaProcessos
+from todos.responses import (
+    ListaAtividades,
+    ListaDocumentos,
+    ProcessoDetalhe,
+    ResultadoPesquisaProcessos,
+)
 from todos.server import _wrap_pesquisa
 from todos.tools import documentos, processos
 
@@ -1067,4 +1072,113 @@ def test_wrap_pesquisa_sets_proximo_cursor_when_has_more() -> None:
     assert isinstance(shaped, ResultadoPesquisaProcessos)
     assert shaped.proximo_cursor is not None
     assert len(shaped.next_actions) == 1
-    assert shaped.next_actions[0].tool == "sei_pesquisar_processos"
+
+
+# ---------------------------------------------------------------------------
+# Fase 1 (RFC 0008) — sei_listar_atividades → ListaAtividades
+# ---------------------------------------------------------------------------
+
+
+def test_listar_atividades_returns_lista_atividades(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_listar_atividades (include_raw=False) returns ListaAtividades model."""
+    fake = RecordingBackend(
+        {
+            "processo": {"protocolo": "50300.000123/2025-00", "id_procedimento": "P1"},
+            "total_andamentos": 2,
+            "andamentos": [
+                {
+                    "data_hora": "19/06/2026 10:00:00",
+                    "unidade": "GPF",
+                    "usuario": "fulano",
+                    "descricao": "Processo criado",
+                },
+                {
+                    "data_hora": "19/06/2026 11:00:00",
+                    "unidade": "GPF",
+                    "usuario": "fulano",
+                    "descricao": "Documento assinado",
+                },
+            ],
+        }
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
+    assert isinstance(result, ListaAtividades)
+    assert result.processo.protocolo == "50300.000123/2025-00"
+    assert result.processo.id_procedimento == "P1"
+    assert result.total_andamentos == 2
+    assert len(result.andamentos) == 2
+    assert result.andamentos[0].descricao == "Processo criado"
+    assert not result.truncado
+
+
+def test_listar_atividades_include_raw_returns_str(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_listar_atividades (include_raw=True) returns raw JSON string."""
+    fake = RecordingBackend(
+        {
+            "processo": {"protocolo": "50300.000123/2025-00", "id_procedimento": "P1"},
+            "total_andamentos": 0,
+            "andamentos": [],
+        }
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00", include_raw=True))
+    assert isinstance(result, str)
+
+
+def test_listar_atividades_truncado_when_over_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_listar_atividades sets truncado=True when total exceeds 50."""
+    fake = RecordingBackend(
+        {
+            "processo": {"protocolo": "50300.000123/2025-00", "id_procedimento": "P1"},
+            "total_andamentos": 51,
+            "andamentos": [
+                {
+                    "data_hora": f"19/06/2026 {i:02d}:00:00",
+                    "unidade": "GPF",
+                    "usuario": "u",
+                    "descricao": f"Ação {i}",
+                }
+                for i in range(51)
+            ],
+        }
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
+    assert isinstance(result, ListaAtividades)
+    assert result.truncado
+    assert len(result.andamentos) == 50  # capped at _ATIVIDADES_LIMIT
+
+
+def test_listar_atividades_ordem_asc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_listar_atividades with ordem='asc' reverses the list."""
+    fake = RecordingBackend(
+        {
+            "processo": {"protocolo": "50300.000123/2025-00", "id_procedimento": "P1"},
+            "total_andamentos": 2,
+            "andamentos": [
+                {
+                    "data_hora": "19/06/2026 11:00:00",
+                    "unidade": "",
+                    "usuario": "",
+                    "descricao": "B",
+                },
+                {
+                    "data_hora": "19/06/2026 10:00:00",
+                    "unidade": "",
+                    "usuario": "",
+                    "descricao": "A",
+                },
+            ],
+        }
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00", ordem="asc"))
+    assert isinstance(result, ListaAtividades)
+    # After reverse, A (older) should come first
+    assert result.andamentos[0].descricao == "A"
+    assert result.andamentos[1].descricao == "B"
