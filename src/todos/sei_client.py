@@ -2137,9 +2137,9 @@ class SEIClient:
     # Contato
     # ------------------------------------------------------------------
 
-    async def pesquisar_contatos(self, filtro: str = "", limit: int = 50) -> dict:
+    async def pesquisar_contatos(self, filtro: str = "", limit: int = 50, start: int = 0) -> dict:
         """Pesquisa contatos no SEI."""
-        params: dict = {"limit": limit}
+        params: dict = {"limit": limit, "start": start}
         if filtro:
             params["filter"] = filtro
         resp = await self._request("GET", "/contato/pesquisar", params=params)
@@ -2147,7 +2147,7 @@ class SEIClient:
         if not data.get("sucesso"):
             msg = f"Erro ao pesquisar contatos: {data.get('mensagem')}"
             raise SEIError(msg)
-        return {"contatos": data.get("data", []), "total": data.get("total")}
+        return self._paginated(data, "contatos", data.get("data", []), start, limit)
 
     async def criar_contato(
         self, nome: str, tipo: str = "", email: str = "", telefone: str = ""

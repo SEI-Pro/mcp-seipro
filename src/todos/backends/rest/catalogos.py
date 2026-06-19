@@ -95,9 +95,10 @@ class CatalogosRest(_RestMixin):
         _validar_pagina(pagina)
         return await self._rest.pesquisar_assuntos(filtro=filtro, limit=limit, start=pagina)
 
-    async def pesquisar_contatos(self, filtro: str = "", limit: int = 50) -> dict:
+    async def pesquisar_contatos(self, filtro: str = "", limit: int = 50, pagina: int = 0) -> dict:
         """Pesquisa contatos cadastrados."""
-        return await self._rest.pesquisar_contatos(filtro=filtro, limit=limit)
+        _validar_pagina(pagina)
+        return await self._rest.pesquisar_contatos(filtro=filtro, limit=limit, start=pagina)
 
     async def criar_contato(
         self, nome: str, tipo: str = "", email: str = "", telefone: str = ""

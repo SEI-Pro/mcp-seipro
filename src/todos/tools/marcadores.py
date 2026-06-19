@@ -53,7 +53,12 @@ async def sei_excluir_marcador(
     ids_marcadores: str,
     ctx: Context | None = None,
 ) -> str:
-    """Exclui marcador(es). IDs separados por vírgula."""
+    """Exclui marcador(es) permanentemente. IDs separados por vírgula.
+
+    QUANDO NÃO USAR: prefira sei_desativar_marcador se quiser apenas ocultar
+    o marcador mas manter o histórico — excluir remove o marcador de TODOS os
+    processos que o tinham aplicado sem possibilidade de recuperação.
+    """
     backend = await _backend(ctx)
     result = await backend.excluir_marcadores(ids_marcadores)
     return _json(result)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from todos.backends.models import CredenciaisAssinatura
 from todos.backends.rest._session import _RestMixin
+from todos.backends.rest.catalogos import _validar_pagina
 
 
 class BlocosRest(_RestMixin):
@@ -91,9 +92,14 @@ class BlocosRest(_RestMixin):
         """Cancela a disponibilização de um bloco de assinatura."""
         return await self._rest.cancelar_disponibilizacao_bloco_assinatura(id_bloco)
 
-    async def pesquisar_blocos_assinatura(self, filtro: str = "", limit: int = 50) -> dict:
+    async def pesquisar_blocos_assinatura(
+        self, filtro: str = "", limit: int = 50, pagina: int = 0
+    ) -> dict:
         """Pesquisa blocos de assinatura existentes."""
-        return await self._rest.pesquisar_blocos_assinatura(filtro=filtro, limit=limit)
+        _validar_pagina(pagina)
+        return await self._rest.pesquisar_blocos_assinatura(
+            filtro=filtro, limit=limit, start=pagina
+        )
 
     async def listar_documentos_bloco_assinatura(self, id_bloco: str) -> list[dict]:
         """Lista os documentos de um bloco de assinatura."""

@@ -409,7 +409,7 @@ class CatalogosProtocol(Protocol):
         """Pesquisa assuntos para classificação de processos."""
         ...
 
-    async def pesquisar_contatos(self, filtro: str = "", limit: int = 50) -> dict:
+    async def pesquisar_contatos(self, filtro: str = "", limit: int = 50, pagina: int = 0) -> dict:
         """Pesquisa contatos cadastrados."""
         ...
 
@@ -595,7 +595,9 @@ class BlocoAssinaturaProtocol(Protocol):
         """Cancela a disponibilização de um bloco de assinatura."""
         ...
 
-    async def pesquisar_blocos_assinatura(self, filtro: str = "", limit: int = 50) -> dict:
+    async def pesquisar_blocos_assinatura(
+        self, filtro: str = "", limit: int = 50, pagina: int = 0
+    ) -> dict:
         """Pesquisa blocos de assinatura existentes."""
         ...
 

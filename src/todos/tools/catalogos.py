@@ -305,15 +305,38 @@ async def sei_pesquisar_assuntos(
 async def sei_pesquisar_contatos(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
+    pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Pesquisa contatos cadastrados no SEI.
 
+    Use para encontrar id de interessados ao criar/alterar processos.
     Em instâncias sem mod-wssei, requer filtro não-vazio (busca via autocomplete AJAX).
+    Para listar usuários internos da unidade, use sei_listar_usuarios.
+
+    O campo `id` retornado é o id interno do contato no SEI.
+
+    Paginação: passe cursor = proximo_cursor da resposta anterior.
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
-    result = await backend.pesquisar_contatos(filtro=filtro, limit=limit)
-    return _json(result)
+    result = await backend.pesquisar_contatos(filtro=filtro, limit=limit, pagina=pagina)
+    cursor_extra: dict = {"limit": limit}
+    if filtro:
+        cursor_extra["filtro"] = filtro
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_contatos",
+            cursor_extra=cursor_extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_WRITE)

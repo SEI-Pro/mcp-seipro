@@ -101,8 +101,9 @@ class CatalogosWeb(_WebMixin):
         del pagina  # parâmetro do contrato não suportado pelo autocomplete web
         return await self._web.pesquisar_assuntos_web(filtro=filtro, limit=limit)
 
-    async def pesquisar_contatos(self, filtro: str = "", limit: int = 50) -> dict:
+    async def pesquisar_contatos(self, filtro: str = "", limit: int = 50, pagina: int = 0) -> dict:
         """Pesquisa contatos cadastrados."""
+        del pagina  # web backend não suporta paginação por offset
         return await self._web.pesquisar_contatos_web(filtro=filtro, limit=limit)
 
     async def pesquisar_textos_padrao(

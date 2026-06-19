@@ -12,7 +12,17 @@ ser objetos reais (não strings adiadas).
 
 from fastmcp import Context
 
-from todos.mcp_app import _DEST, _IDEM, _READ, _WRITE, _backend, _json, mcp
+from todos.mcp_app import (
+    _DEST,
+    _IDEM,
+    _READ,
+    _WRITE,
+    _add_cursor,
+    _backend,
+    _decode_cursor,
+    _json,
+    mcp,
+)
 
 
 @mcp.tool(annotations=_WRITE)
@@ -85,23 +95,74 @@ async def sei_cancelar_disponibilizacao_bloco(
 async def sei_pesquisar_blocos_assinatura(
     filtro: str = "",
     limit: int = 50,
+    pagina: int = 0,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
-    """Pesquisa blocos de assinatura existentes."""
+    """Pesquisa blocos de assinatura existentes.
+
+    Retorna lista de blocos com seu id, descricao, estado e documentos pendentes.
+    Use o `id` retornado em sei_assinar_bloco, sei_disponibilizar_bloco_assinatura
+    e sei_listar_documentos_bloco_assinatura.
+
+    Paginação: passe cursor = proximo_cursor da resposta anterior.
+    """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
+        limit = decoded.get("limit", limit)
     backend = await _backend(ctx)
-    result = await backend.pesquisar_blocos_assinatura(filtro=filtro, limit=limit)
-    return _json(result)
+    result = await backend.pesquisar_blocos_assinatura(filtro=filtro, limit=limit, pagina=pagina)
+    extra: dict = {"limit": limit}
+    if filtro:
+        extra["filtro"] = filtro
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_pesquisar_blocos_assinatura",
+            cursor_extra=extra,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_documentos_bloco_assinatura(
     id_bloco: str,
+    limit: int = 50,
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
-    """Lista documentos de um bloco de assinatura."""
+    """Lista documentos de um bloco de assinatura.
+
+    Um bloco pode ter centenas de documentos.
+    Paginação: passe cursor = proximo_cursor da resposta anterior.
+    """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", 0)
+        limit = decoded.get("limit", limit)
+    else:
+        pagina = 0
     backend = await _backend(ctx)
-    result = await backend.listar_documentos_bloco_assinatura(id_bloco)
-    return _json(result)
+    all_items = await backend.listar_documentos_bloco_assinatura(id_bloco)
+    offset = pagina * limit
+    page_items = all_items[offset : offset + limit]
+    result = {
+        "documentos": page_items,
+        "tem_proxima": len(all_items) > offset + limit,
+        "itens_pagina": len(page_items),
+    }
+    return _json(
+        _add_cursor(
+            result,
+            pagina=pagina,
+            limit=limit,
+            tool_name="sei_listar_documentos_bloco_assinatura",
+            cursor_extra={"limit": limit},
+        )
+    )
 
 
 @mcp.tool(annotations=_DEST)

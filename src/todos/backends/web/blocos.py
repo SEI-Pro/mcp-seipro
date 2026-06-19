@@ -29,8 +29,11 @@ class BlocosWeb(_WebMixin):
         """Cancela a disponibilização de um bloco de assinatura."""
         return await self._web.cancelar_disponibilizacao_bloco_assinatura_web(id_bloco)
 
-    async def pesquisar_blocos_assinatura(self, filtro: str = "", limit: int = 50) -> dict:
+    async def pesquisar_blocos_assinatura(
+        self, filtro: str = "", limit: int = 50, pagina: int = 0
+    ) -> dict:
         """Pesquisa blocos de assinatura existentes."""
+        del pagina  # web backend não suporta paginação por offset
         return await self._web.pesquisar_blocos_assinatura_web(filtro=filtro, limit=limit)
 
     async def listar_documentos_bloco_assinatura(self, id_bloco: str) -> list[dict]:
