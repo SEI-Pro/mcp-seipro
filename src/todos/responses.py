@@ -10,7 +10,7 @@ automaticamente em ``content[0].text`` (JSON, compatível com clientes antigos)
 publicar ``outputSchema`` no catálogo de tools.
 """
 
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -179,8 +179,10 @@ class UnidadeSEI(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalizar_id(cls, data: object) -> object:
-        if isinstance(data, dict) and not data.get("id") and "id_unidade" in data:
-            data["id"] = data["id_unidade"]
+        if isinstance(data, dict):
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "id_unidade" in d:
+                d["id"] = d["id_unidade"]
         return data
 
 
@@ -196,8 +198,10 @@ class UsuarioSEI(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalizar_id(cls, data: object) -> object:
-        if isinstance(data, dict) and not data.get("id") and "id_usuario" in data:
-            data["id"] = data["id_usuario"]
+        if isinstance(data, dict):
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "id_usuario" in d:
+                d["id"] = d["id_usuario"]
         return data
 
 
@@ -213,10 +217,11 @@ class AcompanhamentoSEI(BaseModel):
     @classmethod
     def _normalizar_campos(cls, data: object) -> object:
         if isinstance(data, dict):
-            if not data.get("id") and "idProcedimento" in data:
-                data["id"] = data["idProcedimento"]
-            if not data.get("protocolo") and "protocoloFormatado" in data:
-                data["protocolo"] = data["protocoloFormatado"]
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "idProcedimento" in d:
+                d["id"] = d["idProcedimento"]
+            if not d.get("protocolo") and "protocoloFormatado" in d:
+                d["protocolo"] = d["protocoloFormatado"]
         return data
 
 
@@ -235,10 +240,11 @@ class BlocoAssinatura(BaseModel):
     @classmethod
     def _normalizar_campos(cls, data: object) -> object:
         if isinstance(data, dict):
-            if not data.get("id") and "idBloco" in data:
-                data["id"] = data["idBloco"]
-            if not data.get("situacao") and "estado" in data:
-                data["situacao"] = data["estado"]
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "idBloco" in d:
+                d["id"] = d["idBloco"]
+            if not d.get("situacao") and "estado" in d:
+                d["situacao"] = d["estado"]
         return data
 
 
@@ -254,10 +260,11 @@ class DocumentoBloco(BaseModel):
     @classmethod
     def _normalizar_campos(cls, data: object) -> object:
         if isinstance(data, dict):
-            if not data.get("id") and "idDocumento" in data:
-                data["id"] = data["idDocumento"]
-            if not data.get("protocolo") and "numero" in data:
-                data["protocolo"] = data["numero"]
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "idDocumento" in d:
+                d["id"] = d["idDocumento"]
+            if not d.get("protocolo") and "numero" in d:
+                d["protocolo"] = d["numero"]
         return data
 
 
