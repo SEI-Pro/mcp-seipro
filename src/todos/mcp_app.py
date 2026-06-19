@@ -13,6 +13,7 @@ from typing import TypedDict
 import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.server.dependencies import get_access_token
+from fastmcp.utilities.logging import configure_logging
 from pydantic import BaseModel, Field
 
 from todos import access_control
@@ -48,6 +49,13 @@ _MAX_ZIP_MB = 200.0  # refuse to embed ZIPs larger than this
 # Detecta modo HTTP (Railway injeta PORT)
 _http_mode = bool(os.environ.get("PORT"))
 _http_port = int(os.environ.get("PORT", "8000"))
+
+# Configura o logger todos.* com o mesmo RichHandler do FastMCP, respeitando
+# TODOS_LOG_LEVEL (ou FASTMCP_LOG_LEVEL como fallback, padrão INFO).
+_todos_log_level = (
+    os.environ.get("TODOS_LOG_LEVEL") or os.environ.get("FASTMCP_LOG_LEVEL") or "INFO"
+).upper()
+configure_logging(level=_todos_log_level, logger=logging.getLogger("todos"))
 
 
 @asynccontextmanager
