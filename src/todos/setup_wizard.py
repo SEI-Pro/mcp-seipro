@@ -740,7 +740,8 @@ def _detect_organs_with_ssl_fallback(
             )
         )
         if not Confirm.ask("  Desativar SSL e tentar novamente?", console=_console):
-            sys.exit(1)
+            _warn("Continuando sem detecção automática de órgãos. Configure o órgão manualmente.")
+            return [], sigla_orgao_sistema, sigla_sistema, False
     except httpx.HTTPStatusError as e:
         _warn(
             f"SEI retornou HTTP {e.response.status_code}. "
