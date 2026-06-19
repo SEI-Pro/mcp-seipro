@@ -664,9 +664,7 @@ class _FakeWebClient:
 
 
 def _web_doc_backend(client: _FakeWebClient) -> SEIWebBackend:
-    b = SEIWebBackend.__new__(SEIWebBackend)
-    b._web = client  # type: ignore[attr-defined]  # bypass __init__ for unit test
-    return b
+    return SEIWebBackend(client)  # type: ignore[arg-type]
 
 
 class TestWebDocumentosBackend:
