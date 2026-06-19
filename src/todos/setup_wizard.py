@@ -21,150 +21,28 @@ import keyring as _keyring
 from bs4 import BeautifulSoup
 from pydantic import Field, TypeAdapter
 from pydantic_core import SchemaError as _PydanticSchemaError
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
+from rich.table import Table
 
 from todos.backends.models import SEIWebClientConfig
 from todos.exceptions import SEIAuthError, SEICredenciaisError
 from todos.sei_web_client import SEIWebClient
 
-# Named constants for magic values
+# ── Constantes ──────────────────────────────────────────────────────────────
 _MAX_ACRONYM_LEN: int = 6
 _MAX_ANCESTOR_SEARCH: int = 5
 _MIN_HOSTNAME_PARTS: int = 2
-# mod-wssei can be installed as "wssei/" or "mod-wssei/" depending on how the admin
-# extracted the release archive (see github.com/pengovbr/mod-wssei/issues/46).
 _WSSEI_API_PATHS: tuple[str, ...] = (
     "/sei/modulos/wssei/controlador_ws.php/api/v2",
     "/sei/modulos/mod-wssei/controlador_ws.php/api/v2",
 )
 _WSSEI_PROBE_TIMEOUT: float = 8.0
-
-
-@dataclass
-class _SEIConnConfig:
-    """Holds the SEI connection parameters used during credential validation."""
-
-    sei_root: str
-    usuario: str
-    senha: str
-    sigla_orgao: str
-    sigla_orgao_sistema: str
-    sigla_sistema: str
-    verify_ssl_disabled: bool
-
-
-# Suporte a cores no terminal
-def print_cyan(text: str) -> None:
-    """Print text in cyan color to stdout."""
-    sys.stdout.write(f"\033[96m{text}\033[0m\n")
-
-
-def print_green(text: str) -> None:
-    """Print text in green color to stdout."""
-    sys.stdout.write(f"\033[92m{text}\033[0m\n")
-
-
-def print_yellow(text: str) -> None:
-    """Print text in yellow color to stdout."""
-    sys.stdout.write(f"\033[93m{text}\033[0m\n")
-
-
-def print_red(text: str) -> None:
-    """Print text in red color to stdout."""
-    sys.stdout.write(f"\033[91m{text}\033[0m\n")
-
-
-def _detect_organs(
-    login_url: str,
-    sigla_orgao_sistema: str,
-    sigla_sistema: str,
-) -> tuple[list[tuple[str, str]], bool, str, str]:
-    """Try to auto-detect available organs from the SEI login page.
-
-    Returns (organs, verify_ssl_disabled, sigla_orgao_sistema, sigla_sistema).
-    """
-    organs: list[tuple[str, str]] = []
-    verify_ssl_disabled = False
-
-    resp = None
-    try:
-        with httpx.Client(verify=True, follow_redirects=True, timeout=10.0) as client:
-            resp = client.get(login_url)
-            resp.raise_for_status()
-    except httpx.RequestError:
-        print_yellow("[!] Falha ao estabelecer conexão SSL segura com o SEI.")
-        print_yellow(
-            "    Isso ocorre comumente em redes governamentais com proxies ou certificados internos."
-        )
-        print_red("=" * 70)
-        print_red("AVISO DE SEGURANÇA — RISCO DE INTERCEPTAÇÃO DE CREDENCIAIS")
-        print_red("=" * 70)
-        print_red("A verificação SSL protege contra ataques man-in-the-middle (MITM).")
-        print_red("Desabilitá-la permite que um atacante intercepte suas credenciais")
-        print_red("(usuário e senha) em trânsito, sem que você perceba.")
-        print_red("Use esta opção SOMENTE em redes internas onde você controla a CA")
-        print_red("(ex: rede corporativa com certificado auto-assinado próprio).")
-        print_red("=" * 70)
-        confirm_ssl = (
-            input("Deseja tentar a conexão desativando a verificação de certificado SSL? (s/n): ")
-            .strip()
-            .lower()
-        )
-        if confirm_ssl == "s":
-            verify_ssl_disabled = True
-            ssl_verify: bool = False  # user explicitly disabled SSL verification
-            with httpx.Client(verify=ssl_verify, follow_redirects=True, timeout=10.0) as client:
-                resp = client.get(login_url)
-                resp.raise_for_status()
-        else:
-            raise
-    except httpx.HTTPStatusError as e:
-        print_yellow(
-            f"[!] SEI retornou HTTP {e.response.status_code} na página de login. "
-            "Continuando sem detecção automática de órgãos."
-        )
-
-    if resp is not None:
-        parsed_final = urlparse(str(resp.url))
-        query_final = parse_qs(parsed_final.query)
-        sigla_orgao_sistema = query_final.get("sigla_orgao_sistema", [sigla_orgao_sistema])[0]
-        sigla_sistema = query_final.get("sigla_sistema", [sigla_sistema])[0]
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-        sel = soup.find("select", attrs={"name": "selOrgao"}) or soup.find("select", id="selOrgao")
-        if sel:
-            for opt in sel.find_all("option"):
-                val = opt.get("value")
-                text = opt.get_text(strip=True)
-                if (
-                    isinstance(val, str)
-                    and val != "null"
-                    and not text.startswith(("-", "Selecione"))
-                ):
-                    organs.append((val, text))
-
-    return organs, verify_ssl_disabled, sigla_orgao_sistema, sigla_sistema
-
-
-def _resolve_organ_from_list(
-    organs: list[tuple[str, str]],
-) -> tuple[str, str]:
-    """Prompt user to select an organ from the detected list. Returns (orgao_id, sigla_orgao)."""
-    print_green("[+] Órgãos detectados com sucesso no seu SEI:")
-    for idx, (val, name) in enumerate(organs, 1):
-        sys.stdout.write(f"  [{idx}] {name} (ID: {val})\n")
-
-    selection = input(f"Selecione o seu órgão [1-{len(organs)}] (padrão: 1): ").strip()
-    if selection.isdigit() and 1 <= int(selection) <= len(organs):
-        selected_idx = int(selection) - 1
-    else:
-        selected_idx = 0
-
-    orgao_id, sigla_orgao = organs[selected_idx]
-
-    # Limpar espaços ou traços do nome para obter apenas a sigla limpa (ex: "PGE-RO" -> "PGE")
-    parts = [p.strip() for p in re.split(r"\s*-\s*", sigla_orgao) if p.strip()]
-
-    ufs = {
+_TOTAL_STEPS: int = 5
+_UFS: frozenset[str] = frozenset(
+    {
         "AC",
         "AL",
         "AP",
@@ -193,11 +71,156 @@ def _resolve_organ_from_list(
         "SE",
         "TO",
     }
+)
+
+_console = Console()
+
+_BANNER_ART: str = """\
+  ████████╗  ██████╗  ██████╗   ██████╗  ███████╗
+     ██╔══╝ ██╔═══██╗ ██╔══██╗ ██╔═══██╗ ██╔════╝
+     ██║    ██║   ██║ ██║  ██║ ██║   ██║ ███████╗
+     ██║    ██║   ██║ ██║  ██║ ██║   ██║ ╚════██║
+     ██║    ╚██████╔╝ ██████╔╝ ╚██████╔╝ ███████║
+     ╚═╝     ╚═════╝  ╚═════╝   ╚═════╝  ╚══════╝"""
+
+
+# ── Dataclasses ──────────────────────────────────────────────────────────────
+@dataclass
+class _SEIConnConfig:
+    """Parâmetros de conexão usados durante a validação de credenciais."""
+
+    sei_root: str
+    usuario: str
+    senha: str
+    sigla_orgao: str
+    sigla_orgao_sistema: str
+    sigla_sistema: str
+    verify_ssl_disabled: bool
+
+
+@dataclass
+class _SEIInstanceConfig:
+    """Parâmetros da instância SEI resolvidos na etapa 1 do wizard."""
+
+    sei_root: str
+    rest_url: str
+    sigla_orgao: str
+    sigla_orgao_sistema: str
+    sigla_sistema: str
+    orgao_id: str
+    verify_ssl_disabled: bool
+    protocolo_pattern: str = ""
+
+
+@dataclass
+class _ModseiDetection:
+    """Resultado da sondagem do mod-wssei."""
+
+    url: str
+    confirmed: bool
+
+
+# ── UI helpers ───────────────────────────────────────────────────────────────
+def _show_banner() -> None:
+    """Exibe o banner ASCII art do TOdos em um painel estilizado."""
+    content = (
+        f"[bold cyan]{_BANNER_ART}[/]\n\n"
+        "[bold white]TOdos Domina O Sei[/]  [dim]·[/]  "
+        "[cyan]MCP Server[/]  [dim]·[/]  [cyan]126 tools[/]"
+    )
+    _console.print(Panel(content, border_style="cyan", padding=(1, 4)))
+    _console.print()
+
+
+def _step(n: int, title: str) -> None:
+    """Imprime um separador de etapa numerado e estilizado."""
+    _console.print()
+    _console.rule(f"[bold cyan]Passo {n}/{_TOTAL_STEPS}  ·  {title}[/]")
+    _console.print()
+
+
+def _ok(msg: str) -> None:
+    """Imprime uma linha de sucesso."""
+    _console.print(f"  [bold green]✓[/]  {msg}")
+
+
+def _warn(msg: str) -> None:
+    """Imprime uma linha de aviso."""
+    _console.print(f"  [bold yellow]⚠[/]  {msg}")
+
+
+def _err(msg: str) -> None:
+    """Imprime uma linha de erro."""
+    _console.print(f"  [bold red]✗[/]  {msg}")
+
+
+# ── Detecção de órgãos ───────────────────────────────────────────────────────
+def _detect_organs(
+    login_url: str,
+    sigla_orgao_sistema: str,
+    sigla_sistema: str,
+    *,
+    verify_ssl: bool,
+) -> tuple[list[tuple[str, str]], str, str]:
+    """Detecta os órgãos disponíveis na página de login do SEI.
+
+    Retorna (organs, sigla_orgao_sistema, sigla_sistema).
+    Lança httpx.RequestError ou httpx.HTTPStatusError em falha de conexão.
+    """
+    organs: list[tuple[str, str]] = []
+
+    with httpx.Client(verify=verify_ssl, follow_redirects=True, timeout=10.0) as client:
+        resp = client.get(login_url)
+        resp.raise_for_status()
+
+    parsed_final = urlparse(str(resp.url))
+    query_final = parse_qs(parsed_final.query)
+    sigla_orgao_sistema = query_final.get("sigla_orgao_sistema", [sigla_orgao_sistema])[0]
+    sigla_sistema = query_final.get("sigla_sistema", [sigla_sistema])[0]
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    sel = soup.find("select", attrs={"name": "selOrgao"}) or soup.find("select", id="selOrgao")
+    if sel:
+        for opt in sel.find_all("option"):
+            val = opt.get("value")
+            text = opt.get_text(strip=True)
+            if isinstance(val, str) and val != "null" and not text.startswith(("-", "Selecione")):
+                organs.append((val, text))
+
+    return organs, sigla_orgao_sistema, sigla_sistema
+
+
+def _resolve_organ_from_list(organs: list[tuple[str, str]]) -> tuple[str, str]:
+    """Exibe tabela de órgãos e solicita seleção. Retorna (orgao_id, sigla_orgao)."""
+    table = Table(
+        title="Órgãos disponíveis no SEI",
+        box=box.ROUNDED,
+        border_style="cyan",
+        header_style="bold cyan",
+        padding=(0, 1),
+    )
+    table.add_column("#", style="dim", width=4, justify="right")
+    table.add_column("Órgão", style="bold white", ratio=1)
+    table.add_column("ID", style="cyan", width=8)
+    for idx, (val, name) in enumerate(organs, 1):
+        table.add_row(str(idx), name, val)
+    _console.print(table)
+    _console.print()
+
+    while True:
+        raw = Prompt.ask("  Número do seu órgão", default="1", console=_console)
+        if raw.isdigit() and 1 <= int(raw) <= len(organs):
+            selected_idx = int(raw) - 1
+            break
+        _err(f"Opção inválida — informe um número entre 1 e {len(organs)}.")
+
+    orgao_id, sigla_orgao = organs[selected_idx]
+
+    parts = [p.strip() for p in re.split(r"\s*-\s*", sigla_orgao) if p.strip()]
     if len(parts) > 1:
-        parts_without_uf = [p for p in parts if p.upper() not in ufs]
+        parts_without_uf = [p for p in parts if p.upper() not in _UFS]
         if parts_without_uf:
             parts = parts_without_uf
-
     if len(parts) > 1:
         acronyms = [p for p in parts if p.isupper() and len(p) <= _MAX_ACRONYM_LEN]
         sigla_orgao = acronyms[0] if acronyms else parts[0]
@@ -207,30 +230,25 @@ def _resolve_organ_from_list(
     return orgao_id, sigla_orgao
 
 
-def _resolve_organ_manual(
-    sigla_orgao_sistema: str,
-) -> tuple[str, str, str, str]:
-    """Prompt user to enter organ details manually.
+def _resolve_organ_manual(sigla_orgao_sistema: str) -> tuple[str, str, str, str]:
+    """Solicita dados do órgão manualmente.
 
-    Returns (sigla_orgao, sigla_orgao_sistema, orgao_id, default_sigla_sistema).
+    Retorna (sigla_orgao, sigla_orgao_sistema, orgao_id, default_sigla_sistema).
     """
     default_sigla = sigla_orgao_sistema or "PGE"
-    sigla_orgao = (
-        input(f"Digite a sigla do seu órgão no SEI (padrão: {default_sigla}): ").strip()
-        or default_sigla
-    )
+    sigla_orgao = Prompt.ask("  Sigla do órgão no SEI", default=default_sigla, console=_console)
     default_sigla_sistema = sigla_orgao_sistema or "RO"
-    sigla_orgao_sistema = (
-        input(f"Digite a sigla do órgão no sistema (padrão: {default_sigla_sistema}): ").strip()
-        or default_sigla_sistema
+    sigla_orgao_sistema = Prompt.ask(
+        "  Sigla do órgão no sistema", default=default_sigla_sistema, console=_console
     )
     default_id = "9" if default_sigla_sistema == "RO" else "0"
-    orgao_id = input(f"Digite o ID do órgão (padrão: {default_id}): ").strip() or default_id
+    orgao_id = Prompt.ask("  ID do órgão", default=default_id, console=_console)
     return sigla_orgao, sigla_orgao_sistema, orgao_id, default_sigla_sistema
 
 
+# ── Keyring ──────────────────────────────────────────────────────────────────
 def _compute_keyring_user(usuario: str, sei_root: str) -> str:
-    """Monta a chave do keyring igual ao client: '<usuario>@<host>' (host sem scheme)."""
+    """Monta a chave do keyring: '<usuario>@<host>' (sem scheme)."""
     instance_url = (
         sei_root.replace("https://", "").replace("http://", "").strip().rstrip("/").lower()
     )
@@ -238,7 +256,7 @@ def _compute_keyring_user(usuario: str, sei_root: str) -> str:
 
 
 def _read_existing_todos_env() -> dict[str, str] | None:
-    """Retorna o `env` do mcpServers.todos em ~/.claude.json, ou None se não configurado."""
+    """Retorna o `env` de mcpServers.todos em ~/.claude.json, ou None se não configurado."""
     config_path = Path.home() / ".claude.json"
     if not config_path.exists():
         return None
@@ -258,14 +276,16 @@ def _save_password_to_keyring(
     keyring_user: str,
     senha: str,
 ) -> tuple[str, str]:
-    """Store password in system keyring and return (senha_for_config, senha_validacao).
+    """Armazena a senha no keyring do sistema.
 
-    Returns (senha_config, senha_validacao) where senha_config is empty string
-    if keyring succeeded (password lives in keyring), or the original password
-    if keyring failed and user opted to use plaintext.
+    Retorna (senha_config, senha_validacao): senha_config é vazia se keyring OK,
+    ou a senha original se o keyring falhou e o usuário aceitou texto claro.
     """
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        with (
+            _console.status("  [dim]Gravando no Keyring do Sistema...[/]", spinner="dots"),
+            concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool,
+        ):
             future = pool.submit(_keyring.set_password, "todos-mcp", keyring_user, senha)
             try:
                 future.result(timeout=10)
@@ -275,46 +295,36 @@ def _save_password_to_keyring(
                     "Tente: PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring todos setup"
                 )
                 raise RuntimeError(msg) from exc
-        print_green("[+] Senha armazenada com sucesso no Keyring do Sistema!")
+        _ok("Senha armazenada no Keyring do Sistema!")
     except (RuntimeError, OSError, ValueError) as e:
-        print_red(f"[ERRO] Falha ao acessar o Keyring do Sistema: {e}")
-        print_yellow("[!] A senha não pôde ser salva de forma segura no Keyring nativo.")
-        confirm = (
-            input("Deseja salvar a senha em texto limpo nas configurações? (s/n): ").strip().lower()
-        )
-        if confirm != "s":
-            print_red("[ERRO] Cancelado pelo usuário.")
+        _err(f"Falha ao acessar o Keyring: {e}")
+        _warn("A senha não pôde ser salva de forma segura no Keyring.")
+        if not Confirm.ask("  Salvar senha em texto claro nas configurações?", console=_console):
+            _err("Configuração cancelada.")
             sys.exit(1)
-        return senha, senha  # plaintext fallback
+        return senha, senha
     else:
-        # set_password worked — try to read back to confirm
         lida: str | None = None
-        try:
+        with contextlib.suppress(OSError, ValueError):
             lida = _keyring.get_password("todos-mcp", keyring_user)
-        except (OSError, ValueError):
-            print_yellow(
-                "[!] Não foi possível ler de volta do Keyring. Usando senha local para validação."
-            )
         if lida:
-            print_green("[+] Validação do Keyring concluída com sucesso (leitura OK)!")
-            return "", lida  # keyring has it; empty in config
-        print_yellow(
-            "[!] Alerta: O Keyring confirmou a gravação, mas retornou vazio na leitura de teste."
-        )
-        print_yellow("    Usando senha local para a validação.")
-        return "", senha  # keyring has it; use local for validation only
+            _ok("Leitura de verificação do Keyring OK!")
+            return "", lida
+        _warn("Keyring confirmou gravação mas retornou vazio na leitura de teste.")
+        return "", senha
 
 
 def _confirmar_ou_abortar(msg_erro: str) -> None:
-    """Exibe mensagem de erro e pergunta se o usuário quer continuar mesmo assim."""
-    print_red(msg_erro)
-    if input("Deseja gravar as configurações mesmo assim? (s/n): ").strip().lower() != "s":
-        print_red("[ERRO] Configuração cancelada pelo usuário.")
+    """Exibe erro e pergunta se o usuário quer continuar mesmo assim."""
+    _err(msg_erro)
+    if not Confirm.ask("  Gravar configurações mesmo assim?", console=_console):
+        _err("Configuração cancelada.")
         sys.exit(1)
 
 
+# ── Validação de credenciais ─────────────────────────────────────────────────
 def _validate_credentials(conn: _SEIConnConfig) -> None:
-    """Perform a test login to validate SEI credentials. Prompts user on failure."""
+    """Efetua login de teste no SEI para validar as credenciais."""
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("todos").setLevel(logging.WARNING)
 
@@ -330,7 +340,8 @@ def _validate_credentials(conn: _SEIConnConfig) -> None:
         )
     )
 
-    async def do_test_login() -> dict:
+    async def _do_login() -> dict:
+        """Executa o login assíncrono e coleta informações do usuário."""
         try:
             await web_client.ensure_authenticated()
             info: dict = {
@@ -346,33 +357,36 @@ def _validate_credentials(conn: _SEIConnConfig) -> None:
             await web_client.close()
 
     try:
-        client_info = asyncio.run(do_test_login())
+        with _console.status("  [dim]Efetuando login de teste no SEI...[/]", spinner="dots"):
+            client_info = asyncio.run(_do_login())
         web_client.limpar_senha()
-        print_green("[+] Credenciais validadas com sucesso no SEI!")
+        _ok("Credenciais validadas com sucesso!")
         if client_info:
-            nome_usuario = client_info.get("nome") or conn.usuario
-            id_usuario = client_info.get("id") or "desconhecido"
-            orgao_usuario = client_info.get("orgao") or conn.sigla_orgao
-            unidade = client_info.get("unidade") or {}
-            sigla_unid = unidade.get("sigla") or "N/A"
-            nome_unid = unidade.get("nome") or "N/A"
-            id_unid = unidade.get("id_unidade") or "N/A"
-            print_green(f"    Usuário: {nome_usuario} (ID: {id_usuario}, Órgão: {orgao_usuario})")
-            print_green(f"    Unidade Ativa: {sigla_unid} - {nome_unid} (ID: {id_unid})")
+            nome = client_info.get("nome") or conn.usuario
+            uid = client_info.get("id") or "—"
+            orgao = client_info.get("orgao") or conn.sigla_orgao
+            unid: dict = client_info.get("unidade") or {}
+            sigla_u = unid.get("sigla") or "N/A"
+            nome_u = unid.get("nome") or "N/A"
+            grid = Table.grid(padding=(0, 2))
+            grid.add_column(style="dim", width=10)
+            grid.add_column(style="white")
+            grid.add_row("Usuário", f"{nome}  [dim]ID {uid} · {orgao}[/]")
+            grid.add_row("Unidade", f"{sigla_u}  [dim]{nome_u}[/]")
+            _console.print(Panel(grid, border_style="green", padding=(0, 3)))
     except SEICredenciaisError as e:
         web_client.limpar_senha()
-        _confirmar_ou_abortar(f"\n[ERRO] {e}")
+        _confirmar_ou_abortar(f"Credenciais rejeitadas pelo SEI: {e}")
     except SEIAuthError as e:
         web_client.limpar_senha()
-        _confirmar_ou_abortar(f"\n[ERRO] Falha de autenticação no SEI: {e}")
+        _confirmar_ou_abortar(f"Falha de autenticação: {e}")
     except (OSError, ValueError, RuntimeError) as e:
         web_client.limpar_senha()
-        print_yellow(
-            "[!] O login no SEI falhou. Pode ser que o usuário, senha ou órgão estejam incorretos."
-        )
-        _confirmar_ou_abortar(f"[ERRO] Falha na validação das credenciais no SEI: {e}")
+        _warn("Login no SEI falhou. Verifique usuário, senha e órgão.")
+        _confirmar_ou_abortar(f"Erro na validação: {e}")
 
 
+# ── Atualização de configs MCP ───────────────────────────────────────────────
 def _mcp_add_via_cli(
     claude_cli: str,
     todos_cmd: str,
@@ -380,20 +394,17 @@ def _mcp_add_via_cli(
     scope: str,
     cwd: Path | None = None,
 ) -> bool:
-    """Register the MCP server via `claude mcp add`. Returns True on success."""
+    """Registra o servidor MCP via `claude mcp add`. Retorna True em sucesso."""
     env_args = [item for k, v in mcp_env.items() for item in ("-e", f"{k}={v}")]
     cmd = [claude_cli, "mcp", "add", "-s", scope, *env_args, "todos", todos_cmd]
     cwd_str = str(cwd or Path.cwd())
     try:
-        # S603: claude_cli is an absolute path from shutil.which("claude") — not user input.
-        # cmd elements are string literals, MCP env key=value pairs, and todos_cmd (which comes
-        # from shutil.which("todos") or a hard-coded fallback "todos") — all controlled values.
+        # S603: claude_cli é um caminho absoluto de shutil.which — não é entrada do usuário.
         _sp.run(cmd, check=True, capture_output=True, text=True, cwd=cwd_str)
     except _sp.CalledProcessError as e:
         if "already exists" not in (e.stderr or "") and "already exists" not in (e.stdout or ""):
             return False
         with contextlib.suppress(_sp.CalledProcessError):
-            # S603: same rationale as above — claude_cli is an absolute path from shutil.which.
             _sp.run(
                 [claude_cli, "mcp", "remove", "-s", scope, "todos"],
                 check=True,
@@ -411,7 +422,7 @@ def _mcp_add_via_cli(
 
 
 def _mcp_add_via_json(config_path: Path, todos_cmd: str, mcp_env: dict[str, str]) -> bool:
-    """Edit the MCP config JSON directly as a fallback. Returns True on success."""
+    """Edita o JSON de config MCP diretamente como fallback. Retorna True em sucesso."""
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_data: dict = {"mcpServers": {}}
@@ -437,7 +448,7 @@ def _mcp_add_via_json(config_path: Path, todos_cmd: str, mcp_env: dict[str, str]
 
 
 def _update_antigravity(todos_cmd: str, mcp_env: dict[str, str]) -> None:
-    """Update Antigravity IDE MCP config files if they exist."""
+    """Atualiza os arquivos de config do Antigravity IDE, se existirem."""
     home = Path.home()
     for ag_path in [
         home / ".gemini" / "antigravity-ide" / "mcp_config.json",
@@ -445,13 +456,13 @@ def _update_antigravity(todos_cmd: str, mcp_env: dict[str, str]) -> None:
     ]:
         if ag_path.exists() or ag_path.parent.exists():
             if _mcp_add_via_json(ag_path, todos_cmd, mcp_env):
-                print_green(f"[+] Atualizado: {ag_path}")
+                _ok(f"Atualizado: {ag_path}")
             else:
-                print_yellow(f"[!] Não foi possível atualizar {ag_path}")
+                _warn(f"Não foi possível atualizar {ag_path}")
 
 
 def _claude_desktop_path() -> Path:
-    """Return the platform-specific Claude Desktop config path."""
+    """Retorna o caminho do arquivo de config do Claude Desktop para a plataforma atual."""
     home = Path.home()
     if sys.platform == "win32":
         appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
@@ -462,26 +473,26 @@ def _claude_desktop_path() -> Path:
 
 
 def _update_claude_desktop(todos_cmd: str, mcp_env: dict[str, str]) -> None:
-    """Update Claude Desktop config file if the directory exists."""
+    """Atualiza o arquivo de config do Claude Desktop, se o diretório existir."""
     claude_desktop = _claude_desktop_path()
     if claude_desktop.parent.exists():
         if _mcp_add_via_json(claude_desktop, todos_cmd, mcp_env):
-            print_green(f"[+] Atualizado: {claude_desktop}")
+            _ok(f"Atualizado: {claude_desktop}")
         else:
-            print_yellow(f"[!] Não foi possível atualizar {claude_desktop}")
+            _warn(f"Não foi possível atualizar {claude_desktop}")
 
 
 def _update_claude_code_global(
     claude_cli: str | None, todos_cmd: str, mcp_env: dict[str, str]
 ) -> None:
-    """Update Claude Code global config via CLI or direct JSON edit."""
+    """Atualiza a config global do Claude Code via CLI ou edição direta do JSON."""
     home = Path.home()
     if claude_cli and _mcp_add_via_cli(claude_cli, todos_cmd, mcp_env, "user"):
-        print_green("[+] Atualizado: Claude Code (global) via `claude mcp add -s user`")
+        _ok("Atualizado: Claude Code (global) via `claude mcp add -s user`")
     elif _mcp_add_via_json(home / ".claude.json", todos_cmd, mcp_env):
-        print_green(f"[+] Atualizado: {home / '.claude.json'}")
+        _ok(f"Atualizado: {home / '.claude.json'}")
     else:
-        print_yellow(f"[!] Não foi possível atualizar {home / '.claude.json'}")
+        _warn(f"Não foi possível atualizar {home / '.claude.json'}")
 
 
 def _update_workspace_local(
@@ -491,7 +502,7 @@ def _update_workspace_local(
     *,
     using_plaintext_password: bool,
 ) -> None:
-    """Update workspace-local .mcp.json if a project root is found."""
+    """Atualiza o .mcp.json local do workspace, se encontrado nos diretórios ancestrais."""
     mcp_search = Path.cwd()
     workspace_dir: Path | None = None
     for _ in range(_MAX_ANCESTOR_SEARCH):
@@ -508,33 +519,30 @@ def _update_workspace_local(
 
     mcp_json = workspace_dir / ".mcp.json"
     if using_plaintext_password:
-        print_yellow(
-            f"[!] Pulando {mcp_json}: senha em texto claro não deve "
-            "ser gravada em arquivo de projeto (pode ser enviada ao controle de versão)."
+        _warn(
+            f"Pulando {mcp_json}: senha em texto claro não deve ser "
+            "gravada em arquivo de projeto (risco de VCS)."
         )
     elif claude_cli and _mcp_add_via_cli(
         claude_cli, todos_cmd, mcp_env, "project", cwd=workspace_dir
     ):
-        print_green(f"[+] Atualizado: {mcp_json} via `claude mcp add -s project`")
+        _ok(f"Atualizado: {mcp_json} via `claude mcp add -s project`")
     elif _mcp_add_via_json(mcp_json, todos_cmd, mcp_env):
-        print_green(f"[+] Atualizado: {mcp_json}")
+        _ok(f"Atualizado: {mcp_json}")
     else:
-        print_yellow(f"[!] Não foi possível atualizar {mcp_json}")
+        _warn(f"Não foi possível atualizar {mcp_json}")
 
 
 def _update_codex_via_cli(codex_cli: str, todos_cmd: str, mcp_env: dict[str, str]) -> bool:
-    """Try to add via `codex mcp add`. Returns True if successful."""
+    """Tenta adicionar via `codex mcp add`. Retorna True em sucesso."""
     env_args = [item for k, v in mcp_env.items() for item in ("--env", f"{k}={v}")]
     cmd_codex = [codex_cli, "mcp", "add", "todos", *env_args, "--", todos_cmd]
     try:
-        # S603: codex_cli is an absolute path from shutil.which("codex") — not user input.
-        # cmd_codex elements are string literals, MCP env key=value pairs, and todos_cmd
-        # (shutil.which("todos") or "todos" fallback) — all controlled values.
+        # S603: codex_cli é caminho absoluto de shutil.which — não é entrada do usuário.
         _sp.run(cmd_codex, check=True, capture_output=True, text=True)
     except _sp.CalledProcessError as e:
         if "already" in (e.stderr or "") or "already" in (e.stdout or ""):
             with contextlib.suppress(_sp.CalledProcessError):
-                # S603: same rationale — codex_cli is an absolute path from shutil.which.
                 _sp.run(
                     [codex_cli, "mcp", "remove", "todos"],
                     check=True,
@@ -542,18 +550,18 @@ def _update_codex_via_cli(codex_cli: str, todos_cmd: str, mcp_env: dict[str, str
                     text=True,
                 )
                 _sp.run(cmd_codex, check=True, capture_output=True, text=True)
-                print_green("[+] Atualizado: Codex (global) via `codex mcp add`")
+                _ok("Atualizado: Codex (global) via `codex mcp add`")
                 return True
         return False
     except OSError:
         return False
     else:
-        print_green("[+] Atualizado: Codex (global) via `codex mcp add`")
+        _ok("Atualizado: Codex (global) via `codex mcp add`")
         return True
 
 
 def _update_codex_via_toml(codex_config: Path, todos_cmd: str, mcp_env: dict[str, str]) -> None:
-    """Edit ~/.codex/config.toml directly as a fallback for Codex CLI."""
+    """Edita ~/.codex/config.toml diretamente como fallback para o Codex CLI."""
     try:
         codex_config.parent.mkdir(parents=True, exist_ok=True)
         existing = codex_config.read_text(encoding="utf-8") if codex_config.exists() else ""
@@ -569,13 +577,13 @@ def _update_codex_via_toml(codex_config: Path, todos_cmd: str, mcp_env: dict[str
             f"[mcp_servers.todos.env]\n{env_lines}\n"
         )
         codex_config.write_text(existing + block, encoding="utf-8")
-        print_green(f"[+] Atualizado: {codex_config}")
+        _ok(f"Atualizado: {codex_config}")
     except OSError as e_codex:
-        print_yellow(f"[!] Não foi possível atualizar {codex_config}: {e_codex}")
+        _warn(f"Não foi possível atualizar {codex_config}: {e_codex}")
 
 
 def _update_codex(todos_cmd: str, mcp_env: dict[str, str]) -> None:
-    """Update Codex CLI config via CLI or direct TOML edit."""
+    """Atualiza a config do Codex CLI via CLI ou edição direta do TOML."""
     home = Path.home()
     codex_cli = shutil.which("codex")
     codex_config = home / ".codex" / "config.toml"
@@ -593,7 +601,7 @@ def _update_mcp_configs(
     *,
     using_plaintext_password: bool,
 ) -> None:
-    """Update all known MCP configuration files for Claude Code, Claude Desktop, Codex CLI."""
+    """Atualiza todos os arquivos de config MCP conhecidos."""
     _update_antigravity(todos_cmd, mcp_env)
     _update_claude_desktop(todos_cmd, mcp_env)
     _update_claude_code_global(claude_cli, todos_cmd, mcp_env)
@@ -603,22 +611,9 @@ def _update_mcp_configs(
     _update_codex(todos_cmd, mcp_env)
 
 
-@dataclass
-class _SEIInstanceConfig:
-    """Holds the resolved SEI instance parameters gathered during setup step 1."""
-
-    sei_root: str
-    rest_url: str
-    sigla_orgao: str
-    sigla_orgao_sistema: str
-    sigla_sistema: str
-    orgao_id: str
-    verify_ssl_disabled: bool
-    protocolo_pattern: str = ""
-
-
+# ── Detecção de mod-wssei ────────────────────────────────────────────────────
 def _infer_sigla_orgao_sistema(hostname: str) -> str:
-    """Infer the sigla_orgao_sistema from the SEI hostname."""
+    """Infere a sigla_orgao_sistema a partir do hostname do SEI."""
     if "ro.gov.br" in hostname:
         return "RO"
     parts = hostname.split(".")
@@ -630,24 +625,13 @@ def _infer_sigla_orgao_sistema(hostname: str) -> str:
     return "SEI"
 
 
-@dataclass
-class _ModseiDetection:
-    """Result of probing for mod-wssei."""
-
-    url: str
-    confirmed: bool  # False when Cloudflare blocked the probe; url is a best-guess
-
-
 _logger_setup = logging.getLogger(__name__)
 
 
 def _is_cloudflare_response(resp: httpx.Response) -> bool:
-    """Return True if the response came from an edge/CDN proxy, not from the PHP app.
+    """Retorna True se a resposta veio de um edge/CDN proxy, não do app PHP.
 
-    §35.3 — Uses multiple signals via any() to avoid false negatives:
-    - cf-ray header: Cloudflare primary signal
-    - server: cloudflare header: Cloudflare secondary signal
-    - x-amzn-requestid header: AWS API Gateway / CloudFront signal
+    Usa múltiplos sinais: cf-ray, server:cloudflare, x-amzn-requestid.
     """
     signals = {
         "cf-ray": "cf-ray" in resp.headers,
@@ -656,19 +640,16 @@ def _is_cloudflare_response(resp: httpx.Response) -> bool:
     }
     detected = [name for name, found in signals.items() if found]
     for name in detected:
-        _logger_setup.debug("Edge/CDN proxy signal detected in response: %s", name)
+        _logger_setup.debug("Edge/CDN proxy signal: %s", name)
     return any(signals.values())
 
 
 def _detect_modsei_url(sei_root: str, *, verify_ssl: bool) -> _ModseiDetection:
-    """Probe both known mod-wssei paths and return the first that responds.
+    """Sonda os dois caminhos conhecidos do mod-wssei e retorna o primeiro que responde.
 
-    Uses POST /autenticar with empty credentials as the probe: the module
-    returns 400/422 (invalid credentials) when present, while Apache returns
-    a plain 404 when the module is not installed at all.
-    Tries "wssei/" first (most common), then "mod-wssei/" (alternative install name).
-    When Cloudflare blocks the probe, returns the candidate URL as unconfirmed
-    (confirmed=False) rather than a false negative or false positive.
+    Usa POST /autenticar como sonda: módulo retorna 400/422 quando presente,
+    Apache retorna 404 quando não instalado. Quando Cloudflare bloqueia,
+    retorna a URL candidata como não-confirmada (confirmed=False).
     """
     first_cloudflare: str = ""
     try:
@@ -698,116 +679,162 @@ def _detect_modsei_url(sei_root: str, *, verify_ssl: bool) -> _ModseiDetection:
     return _ModseiDetection(url="", confirmed=False)
 
 
+# ── Etapas do wizard ─────────────────────────────────────────────────────────
 def _setup_protocolo_pattern() -> str:
-    """Pergunta opcionalmente por um regex de validação do número de processo.
-
-    Cada instância SEI pode usar um formato diferente — federais, estaduais e
-    municipais variam no comprimento do código de órgão. Deixar em branco
-    desativa a validação (qualquer string é aceita).
-    """
-    sys.stdout.write("\n")
-    print_yellow("[*] Padrão do número de processo (opcional)")
-    sys.stdout.write(
-        "    Cada instância SEI usa um formato diferente; sem configuração qualquer\n"
-        "    string é aceita. Informe um regex para rejeitar entradas malformadas.\n"
-        "    Exemplos:\n"
-        "      Federal/ANTAQ (5 dígitos): ^\\d{5}\\.\\d{6}/\\d{4}-\\d{2}$\n"
-        "      Estadual/RO   (4 dígitos): ^\\d{4}\\.\\d{6}/\\d{4}-\\d{2}$\n"
-        "      Qualquer SEI  (4-6 dig.):  ^\\d{4,6}\\.\\d{6}/\\d{4}-\\d{2}$\n"
+    """Solicita opcionalmente um regex de validação do número de processo."""
+    _console.print()
+    _console.rule("[dim]Padrão do número de processo [i](opcional)[/][/]", characters="·")
+    _console.print()
+    _console.print(
+        "  Cada instância SEI usa um formato diferente. Informe um regex para\n"
+        "  rejeitar entradas malformadas, ou pressione Enter para pular.\n\n"
+        "  [dim]Federal/ANTAQ (5 dígitos):  [cyan]^\\d{5}\\.\\d{6}/\\d{4}-\\d{2}$[/]\n"
+        "  Estadual/RO (4 dígitos):     [cyan]^\\d{4}\\.\\d{6}/\\d{4}-\\d{2}$[/]\n"
+        "  Qualquer SEI (4-6 dig.):     [cyan]^\\d{4,6}\\.\\d{6}/\\d{4}-\\d{2}$[/][/]"
     )
     while True:
-        raw = input("Regex (Enter para pular): ").strip()
+        raw = Prompt.ask(
+            "  Regex do protocolo",
+            default="",
+            show_default=False,
+            console=_console,
+        )
         if not raw:
             return ""
         try:
             TypeAdapter(Annotated[str, Field(pattern=raw)])
         except _PydanticSchemaError as exc:
             first_line = str(exc).split("\n")[0]
-            print_red(
-                f"[ERRO] Padrão rejeitado pelo motor de validação: {first_line}. Tente novamente."
-            )
+            _err(f"Padrão rejeitado: {first_line}. Tente novamente.")
             continue
-        print_green(f"[+] Padrão configurado: {raw}")
+        _ok(f"Padrão configurado: [cyan]{raw}[/]")
         return raw
 
 
-def _setup_sei_instance() -> _SEIInstanceConfig:
-    """Prompt the user for the SEI URL and organ, returning a resolved instance config."""
-    print_yellow("[*] Configuração da URL e Instância do SEI")
-    web_url_input = (
-        input("Digite ou cole a URL do seu SEI (ex: https://sei.sistemas.ro.gov.br): ").strip()
-        or "https://sei.sistemas.ro.gov.br"
+def _detect_organs_with_ssl_fallback(
+    login_url: str,
+    sigla_orgao_sistema: str,
+    sigla_sistema: str,
+) -> tuple[list[tuple[str, str]], str, str, bool]:
+    """Detecta órgãos com fallback para SSL desativado se solicitado pelo usuário.
+
+    Retorna (organs, sigla_orgao_sistema, sigla_sistema, verify_ssl_disabled).
+    """
+    try:
+        with _console.status("  [dim]Detectando órgãos disponíveis...[/]", spinner="dots"):
+            organs, sigla_orgao_sistema, sigla_sistema = _detect_organs(
+                login_url, sigla_orgao_sistema, sigla_sistema, verify_ssl=True
+            )
+        if organs:
+            _ok(f"{len(organs)} órgão(s) detectado(s) com sucesso.")
+        else:
+            _warn("Nenhum órgão encontrado na página de login. Configuração manual.")
+    except httpx.RequestError:
+        _console.print(
+            Panel(
+                "[bold white]A verificação SSL protege contra ataques man-in-the-middle.[/]\n"
+                "Desabilitá-la permite que um atacante intercepte suas credenciais em trânsito.\n\n"
+                "[dim]Use SOMENTE em redes com CA interna controlada "
+                "(ex.: rede corporativa com certificado auto-assinado).[/]",
+                title="[bold red]⚠  Aviso de Segurança — SSL[/]",
+                border_style="red",
+                padding=(1, 2),
+            )
+        )
+        if not Confirm.ask("  Desativar SSL e tentar novamente?", console=_console):
+            _warn("Continuando sem detecção automática de órgãos. Configure o órgão manualmente.")
+            return [], sigla_orgao_sistema, sigla_sistema, False
+    except httpx.HTTPStatusError as e:
+        _warn(
+            f"SEI retornou HTTP {e.response.status_code}. "
+            "Continuando sem detecção automática de órgãos."
+        )
+        return [], sigla_orgao_sistema, sigla_sistema, False
+    else:
+        return organs, sigla_orgao_sistema, sigla_sistema, False
+
+    # Reached only when httpx.RequestError was raised and user chose to disable SSL
+    try:
+        with _console.status("  [dim]Detectando órgãos (sem SSL)...[/]", spinner="dots"):
+            organs, sigla_orgao_sistema, sigla_sistema = _detect_organs(
+                login_url, sigla_orgao_sistema, sigla_sistema, verify_ssl=False
+            )
+        if organs:
+            _ok(f"{len(organs)} órgão(s) detectado(s).")
+        else:
+            _warn("Nenhum órgão encontrado. Configuração manual.")
+    except (httpx.RequestError, httpx.HTTPStatusError) as e2:
+        _warn(f"Não foi possível conectar: {e2}")
+        organs = []
+    return organs, sigla_orgao_sistema, sigla_sistema, True
+
+
+def _resolve_modsei_url(detection: _ModseiDetection) -> str:
+    """Confirma com o usuário qual URL REST do mod-wssei usar. Retorna a URL escolhida."""
+    if detection.url and detection.confirmed:
+        _ok(f"mod-wssei detectado: [cyan]{detection.url}[/]")
+    elif detection.url:
+        _warn(f"Possível mod-wssei em: [cyan]{detection.url}[/]")
+        _warn(
+            "  (Cloudflare bloqueou verificação automática — confirme se mod-wssei está instalado.)"
+        )
+    else:
+        _warn("mod-wssei não detectado automaticamente nesta instância.")
+
+    if detection.url and Confirm.ask("  Usar esta URL REST?", default=True, console=_console):
+        return detection.url
+
+    prompt_label = (
+        "  URL REST do mod-wssei (vazio = desativar)"
+        if detection.url
+        else "  URL REST do mod-wssei (vazio = web-only)"
     )
+    return Prompt.ask(prompt_label, default="", show_default=False, console=_console)
 
-    if not web_url_input.startswith(("http://", "https://")):
-        web_url_input = "https://" + web_url_input
 
-    parsed = urlparse(web_url_input)
+def _setup_sei_instance() -> _SEIInstanceConfig:
+    """Solicita a URL do SEI e o órgão, retornando a config da instância resolvida."""
+    sei_url_raw = Prompt.ask(
+        "  URL do SEI",
+        default="https://sei.sistemas.ro.gov.br",
+        console=_console,
+    )
+    if not sei_url_raw.startswith(("http://", "https://")):
+        sei_url_raw = "https://" + sei_url_raw
+
+    parsed = urlparse(sei_url_raw)
     if not parsed.netloc or ":" in parsed.netloc:
-        print_red("[ERRO] URL inválida. Use o formato: https://sei.exemplo.gov.br")
+        _err("URL inválida. Use o formato: https://sei.exemplo.gov.br")
         sys.exit(1)
     sei_root = f"{parsed.scheme}://{parsed.netloc}"
     query = parse_qs(parsed.query)
 
-    if "sigla_orgao_sistema" in query:
-        sigla_orgao_sistema: str = query["sigla_orgao_sistema"][0]
-    else:
-        sigla_orgao_sistema = _infer_sigla_orgao_sistema(parsed.netloc.lower())
-
+    sigla_orgao_sistema: str = (
+        query["sigla_orgao_sistema"][0]
+        if "sigla_orgao_sistema" in query
+        else _infer_sigla_orgao_sistema(parsed.netloc.lower())
+    )
     sigla_sistema = query.get("sigla_sistema", ["SEI"])[0]
     login_url = (
         f"{sei_root}/sip/login.php"
         f"?sigla_orgao_sistema={sigla_orgao_sistema}&sigla_sistema={sigla_sistema}"
     )
 
-    organs: list[tuple[str, str]] = []
-    verify_ssl_disabled = False
-    print_yellow("[*] Tentando detectar os órgãos disponíveis no SEI...")
-    try:
-        organs, verify_ssl_disabled, sigla_orgao_sistema, sigla_sistema = _detect_organs(
-            login_url, sigla_orgao_sistema, sigla_sistema
-        )
-    except (httpx.RequestError, httpx.HTTPStatusError) as e:
-        print_yellow(f"[!] Não foi possível conectar ao login do SEI para listar órgãos: {e}")
+    organs, sigla_orgao_sistema, sigla_sistema, verify_ssl_disabled = (
+        _detect_organs_with_ssl_fallback(login_url, sigla_orgao_sistema, sigla_sistema)
+    )
 
+    _console.print()
     if organs:
         orgao_id, sigla_orgao = _resolve_organ_from_list(organs)
     else:
         sigla_orgao, sigla_orgao_sistema, orgao_id, _ = _resolve_organ_manual(sigla_orgao_sistema)
+    _ok(f"Órgão: [bold]{sigla_orgao}[/]  [dim]ID {orgao_id}[/]")
 
-    print_green(f"[+] Configurado para o órgão: {sigla_orgao} (ID: {orgao_id})")
-
-    sys.stdout.write("\n")
-    print_yellow("[*] Detectando mod-wssei...")
-    detection = _detect_modsei_url(sei_root, verify_ssl=not verify_ssl_disabled)
-    if detection.url and detection.confirmed:
-        print_green(f"[+] mod-wssei detectado em: {detection.url}")
-        confirm = input("Usar esta URL REST? (s/n, padrão: s): ").strip().lower() or "s"
-        rest_url = (
-            detection.url
-            if confirm == "s"
-            else input(
-                "Digite a URL REST do mod-wssei (ou deixe em branco para desativar): "
-            ).strip()
-        )
-    elif detection.url:
-        print_yellow(f"[!] Possível mod-wssei em: {detection.url}")
-        print_yellow(
-            "    (Cloudflare bloqueou a verificação automática — confirme se mod-wssei está instalado.)"
-        )
-        confirm = input("Usar esta URL REST? (s/n, padrão: s): ").strip().lower() or "s"
-        rest_url = (
-            detection.url
-            if confirm == "s"
-            else input(
-                "Digite a URL REST do mod-wssei (ou deixe em branco para desativar): "
-            ).strip()
-        )
-    else:
-        print_yellow("[!] mod-wssei não detectado automaticamente nesta instância.")
-        rest_url = input(
-            "Digite a URL REST do mod-wssei manualmente (ou deixe em branco se não instalado): "
-        ).strip()
+    _console.print()
+    with _console.status("  [dim]Verificando mod-wssei...[/]", spinner="dots"):
+        detection = _detect_modsei_url(sei_root, verify_ssl=not verify_ssl_disabled)
+    rest_url = _resolve_modsei_url(detection)
 
     protocolo_pattern = _setup_protocolo_pattern()
 
@@ -824,65 +851,162 @@ def _setup_sei_instance() -> _SEIInstanceConfig:
 
 
 def _setup_credentials(sei_root: str) -> tuple[str, str, str]:
-    """Prompt for SEI user/password and store in keyring.
+    """Solicita usuário e senha, armazenando no keyring.
 
-    Returns (usuario, senha_for_config, senha_validacao).
+    Retorna (usuario, senha_config, senha_validacao).
     """
-    sys.stdout.write("\n")
-    print_yellow("[*] Configuração de Usuário e Senha")
-    usuario = input("Digite seu usuário do SEI (geralmente CPF ou iniciais): ").strip()
+    _console.print()
+    usuario = Prompt.ask("  Usuário do SEI (CPF ou iniciais)", console=_console)
     if not usuario:
-        print_red("[ERRO] Usuário é obrigatório.")
+        _err("Usuário é obrigatório.")
         sys.exit(1)
 
-    senha = getpass.getpass("Digite sua senha do SEI (entrada oculta): ")
+    senha = getpass.getpass("  Senha do SEI (oculta): ")
     if not senha:
-        print_red("[ERRO] Senha é obrigatória.")
+        _err("Senha é obrigatória.")
         sys.exit(1)
 
-    sys.stdout.write("\n")
-    print_yellow("[*] Gravando senha com segurança no Keyring do Sistema...")
+    _console.print()
     keyring_user = _compute_keyring_user(usuario, sei_root)
     senha_config, senha_validacao = _save_password_to_keyring(keyring_user, senha)
     return usuario, senha_config, senha_validacao
 
 
-def run_setup_wizard(*, force: bool = False) -> None:
-    """Run the interactive setup wizard to configure the MCP SEI server.
+# ── Helpers de build/deploy/summary ─────────────────────────────────────────
+def _build_mcp_env(
+    inst: _SEIInstanceConfig,
+    usuario: str,
+    senha: str,
+) -> tuple[dict[str, str], bool]:
+    """Constrói o dicionário de variáveis MCP e exibe tabela resumida.
 
-    Idempotente: se o MCP `todos` já está configurado e `force` é False, mostra
-    o estado atual e sai SEM sobrescrever (evita clobbar a config do MCP). Use
-    `--force` para reconfigurar do zero, ou `todos set-password` para trocar só
-    a senha.
+    Retorna (mcp_env, using_plaintext_password).
+    """
+    mcp_env: dict[str, str] = {
+        "SEI_URL": inst.rest_url,
+        "SEI_WEB_URL": inst.sei_root,
+        "SEI_SIGLA_ORGAO": inst.sigla_orgao,
+        "SEI_SIGLA_ORGAO_SISTEMA": inst.sigla_orgao_sistema,
+        "SEI_SIGLA_SISTEMA": inst.sigla_sistema,
+        "SEI_USUARIO": usuario,
+        "SEI_SENHA": senha,
+        "SEI_ORGAO": inst.orgao_id,
+    }
+    if inst.verify_ssl_disabled:
+        mcp_env["SEI_VERIFY_SSL"] = "false"
+    if inst.protocolo_pattern:
+        mcp_env["SEI_PROTOCOLO_PATTERN"] = inst.protocolo_pattern
+    using_plaintext = bool(mcp_env["SEI_SENHA"])
+
+    vars_table = Table(box=box.SIMPLE, padding=(0, 1), show_header=False)
+    vars_table.add_column(style="dim cyan", width=28)
+    vars_table.add_column(style="white")
+    for key, val in mcp_env.items():
+        display = "[dim]•••••••[/]" if key == "SEI_SENHA" and val else val or "[dim]—[/]"
+        vars_table.add_row(key, display)
+    _console.print(vars_table)
+    return mcp_env, using_plaintext
+
+
+def _deploy_mcp_configs(
+    mcp_env: dict[str, str],
+    *,
+    using_plaintext_password: bool,
+) -> None:
+    """Atualiza todos os arquivos de config MCP e apaga a senha do env em memória."""
+    claude_cli = shutil.which("claude")
+    todos_cmd = shutil.which("todos") or "todos"
+    _update_mcp_configs(
+        claude_cli, todos_cmd, mcp_env, using_plaintext_password=using_plaintext_password
+    )
+    mcp_env["SEI_SENHA"] = ""
+
+
+def _show_config_summary(
+    inst: _SEIInstanceConfig,
+    usuario: str,
+    *,
+    using_plaintext_password: bool,
+) -> None:
+    """Exibe o painel de sumário final da configuração concluída."""
+    _console.print()
+    summary = Table.grid(padding=(0, 2))
+    summary.add_column(style="dim", width=12)
+    summary.add_column(style="bold white")
+    summary.add_row("SEI URL", inst.sei_root)
+    summary.add_row("mod-wssei", inst.rest_url or "[dim]— (web-only)[/]")
+    summary.add_row("Órgão", f"{inst.sigla_orgao}  [dim]ID {inst.orgao_id}[/]")
+    summary.add_row("Usuário", usuario)
+    senha_label = "[green]Keyring[/]" if not using_plaintext_password else "[yellow]texto claro[/]"
+    summary.add_row("Senha", senha_label)
+    if inst.protocolo_pattern:
+        summary.add_row("Protocolo", f"[cyan]{inst.protocolo_pattern}[/]")
+    _console.print(
+        Panel(
+            summary,
+            title="[bold green]✓  Configuração concluída com sucesso![/]",
+            border_style="green",
+            padding=(1, 3),
+        )
+    )
+    _console.print()
+    _console.print(
+        "  Reinicie o [bold]Antigravity[/], [bold]Claude Desktop[/] ou [bold]Codex[/] "
+        "para ativar as [cyan bold]126 ferramentas SEI[/]."
+    )
+    _console.print()
+
+
+# ── Pontos de entrada públicos ───────────────────────────────────────────────
+def run_setup_wizard(*, force: bool = False) -> None:
+    """Executa o wizard interativo de configuração do MCP SEI.
+
+    Idempotente: se o MCP 'todos' já está configurado e `force` é False, exibe
+    o estado atual e sai SEM sobrescrever. Use `--force` para reconfigurar do
+    zero, ou `todos set-password` para trocar só a senha.
     """
     if not sys.stdin.isatty():
-        print_red("[ERRO] 'todos setup' requer um terminal interativo (stdin não é um TTY).")
+        _err("'todos setup' requer um terminal interativo (stdin não é TTY).")
         sys.exit(1)
+
     if not force:
         env = _read_existing_todos_env()
         if env is not None:
-            print_yellow("[!] MCP 'todos' já está configurado em ~/.claude.json:")
-            sys.stdout.write(f"    usuário: {env.get('SEI_USUARIO', '?')}\n")
-            sys.stdout.write(f"    SEI:     {env.get('SEI_WEB_URL') or env.get('SEI_URL', '?')}\n")
-            sys.stdout.write(f"    órgão:   {env.get('SEI_SIGLA_ORGAO', '?')}\n")
-            sys.stdout.write("\n")
-            print_cyan("    Trocar SÓ a senha:   todos set-password")
-            print_cyan("    Reconfigurar tudo:   todos setup --force")
+            _show_banner()
+            grid = Table.grid(padding=(0, 2))
+            grid.add_column(style="dim", width=12)
+            grid.add_column(style="bold white")
+            grid.add_row("Usuário", env.get("SEI_USUARIO") or "—")
+            grid.add_row("SEI URL", env.get("SEI_WEB_URL") or env.get("SEI_URL") or "—")
+            grid.add_row("Órgão", env.get("SEI_SIGLA_ORGAO") or "—")
+            _console.print(
+                Panel(
+                    grid,
+                    title="[bold cyan]MCP 'todos' já configurado[/]",
+                    border_style="cyan",
+                    padding=(1, 3),
+                )
+            )
+            _console.print()
+            _console.print(
+                "  [dim]Trocar só a senha:[/]   [bold cyan]todos set-password[/]\n"
+                "  [dim]Reconfigurar tudo:[/]   [bold cyan]todos setup --force[/]"
+            )
+            _console.print()
             return
-    print_cyan("=====================================================")
-    print_cyan("  Configurador do MCP SEI (todos)")
-    print_cyan("=====================================================")
-    sys.stdout.write("\n")
 
-    # 1. Configurar URL, instância e órgão do SEI
+    _show_banner()
+
+    # ── Passo 1 ─────────────────────────────────────────────────────────────
+    _step(1, "URL e Instância do SEI")
     inst = _setup_sei_instance()
 
-    # 2. Obter usuário e senha + Keyring
+    # ── Passo 2 ─────────────────────────────────────────────────────────────
+    _step(2, "Usuário e Senha")
     usuario, senha, senha_validacao = _setup_credentials(inst.sei_root)
 
-    # 3. Validar as credenciais efetuando um login de teste
-    sys.stdout.write("\n")
-    print_yellow("[*] Validando credenciais com o SEI...")
+    # ── Passo 3 ─────────────────────────────────────────────────────────────
+    _step(3, "Validação de Credenciais")
     _validate_credentials(
         _SEIConnConfig(
             sei_root=inst.sei_root,
@@ -897,85 +1021,69 @@ def run_setup_wizard(*, force: bool = False) -> None:
     senha_validacao = ""
     del senha_validacao
 
-    # 4. Preparar variáveis de ambiente MCP
-    mcp_env: dict[str, str] = {
-        "SEI_URL": inst.rest_url,
-        "SEI_WEB_URL": inst.sei_root,
-        "SEI_SIGLA_ORGAO": inst.sigla_orgao,
-        "SEI_SIGLA_ORGAO_SISTEMA": inst.sigla_orgao_sistema,
-        "SEI_SIGLA_SISTEMA": inst.sigla_sistema,
-        "SEI_USUARIO": usuario,
-        "SEI_SENHA": senha,  # Vazio se keyring foi usado
-        "SEI_ORGAO": inst.orgao_id,
-    }
-    if inst.verify_ssl_disabled:
-        mcp_env["SEI_VERIFY_SSL"] = "false"
-    if inst.protocolo_pattern:
-        mcp_env["SEI_PROTOCOLO_PATTERN"] = inst.protocolo_pattern
-    using_plaintext_password = bool(mcp_env["SEI_SENHA"])
+    # ── Passo 4 ─────────────────────────────────────────────────────────────
+    _step(4, "Variáveis de Ambiente MCP")
+    mcp_env, using_plaintext_password = _build_mcp_env(inst, usuario, senha)
     senha = ""
     del senha
 
-    # 5. Atualizar as configurações
-    sys.stdout.write("\n")
-    print_yellow("[*] Atualizando arquivos de configuração MCP...")
-    claude_cli = shutil.which("claude")
-    todos_cmd = shutil.which("todos") or "todos"
-    _update_mcp_configs(
-        claude_cli, todos_cmd, mcp_env, using_plaintext_password=using_plaintext_password
-    )
-    mcp_env["SEI_SENHA"] = ""
+    # ── Passo 5 ─────────────────────────────────────────────────────────────
+    _step(5, "Arquivos de Configuração MCP")
+    _deploy_mcp_configs(mcp_env, using_plaintext_password=using_plaintext_password)
 
-    sys.stdout.write("\n")
-    print_cyan("=====================================================")
-    print_green("  Configuração concluída com sucesso!")
-    print_green("  Agora você já pode iniciar o Antigravity, Claude ou Codex.")
-    print_cyan("=====================================================")
+    _show_config_summary(inst, usuario, using_plaintext_password=using_plaintext_password)
 
 
 def run_set_password() -> None:
-    """Atualiza SOMENTE a senha no keyring — não toca na config do MCP.
+    """Atualiza SOMENTE a senha no keyring, sem tocar na config MCP.
 
     Lê usuário/URL da config existente (~/.claude.json), grava a nova senha no
-    keyring e valida com um login real. Use quando só quer trocar a senha sem
+    keyring e valida com um login real. Use quando quiser trocar a senha sem
     risco de reconfigurar o MCP.
     """
     if not sys.stdin.isatty():
-        print_red("[ERRO] 'todos set-password' requer um terminal interativo (stdin não é um TTY).")
+        _err("'todos set-password' requer um terminal interativo (stdin não é TTY).")
         sys.exit(1)
+
     env = _read_existing_todos_env()
     if env is None:
-        print_red(
-            "[ERRO] MCP 'todos' não está configurado em ~/.claude.json. Rode 'todos setup' primeiro."
-        )
+        _err("MCP 'todos' não está configurado. Rode 'todos setup' primeiro.")
         sys.exit(1)
     usuario = (env.get("SEI_USUARIO") or "").strip()
     sei_root = (env.get("SEI_WEB_URL") or env.get("SEI_URL") or "").strip()
     if not usuario or not sei_root:
-        print_red("[ERRO] SEI_USUARIO/SEI_WEB_URL ausentes na config. Rode 'todos setup'.")
+        _err("SEI_USUARIO/SEI_WEB_URL ausentes na config. Rode 'todos setup'.")
         sys.exit(1)
     keyring_user = _compute_keyring_user(usuario, sei_root)
 
-    print_cyan("=====================================================")
-    print_cyan(f"  Atualizar senha do SEI ({keyring_user})")
-    print_cyan("=====================================================")
-    senha = getpass.getpass("Nova senha do SEI: ").strip()
+    _show_banner()
+    _console.print(
+        Panel(
+            f"  Conta: [bold cyan]{keyring_user}[/]",
+            title="[bold cyan]Atualizar Senha do SEI[/]",
+            border_style="cyan",
+            padding=(0, 2),
+        )
+    )
+    _console.print()
+
+    senha = getpass.getpass("  Nova senha do SEI (oculta): ")
     if not senha:
-        print_red("[ERRO] Senha vazia.")
+        _err("Senha vazia.")
         sys.exit(1)
 
-    print_yellow("[*] Gravando no Keyring do Sistema...")
-    try:
-        _keyring.set_password("todos-mcp", keyring_user, senha)
-        lida = _keyring.get_password("todos-mcp", keyring_user)
-    except (RuntimeError, OSError, ValueError, ImportError, AttributeError) as exc:
-        print_red(f"[ERRO] Não foi possível gravar no keyring: {exc}")
-        sys.exit(1)
+    with _console.status("  [dim]Gravando no Keyring...[/]", spinner="dots"):
+        try:
+            _keyring.set_password("todos-mcp", keyring_user, senha)
+            lida = _keyring.get_password("todos-mcp", keyring_user)
+        except (RuntimeError, OSError, ValueError, ImportError, AttributeError) as exc:
+            _err(f"Não foi possível gravar no keyring: {exc}")
+            sys.exit(1)
     if lida != senha:
-        print_red("[ERRO] Falha ao confirmar a senha no keyring (readback divergente).")
+        _err("Falha ao confirmar a senha no keyring (readback divergente).")
         sys.exit(1)
+    _ok("Senha gravada no Keyring com sucesso!")
 
-    print_yellow("[*] Validando com login real no SEI...")
     _validate_credentials(
         _SEIConnConfig(
             sei_root=sei_root,
@@ -989,4 +1097,6 @@ def run_set_password() -> None:
     )
     senha = ""
     del senha
-    print_green(f"[+] Senha atualizada no keyring ({keyring_user}). Config do MCP intacta.")
+    _console.print()
+    _ok(f"Senha atualizada com sucesso!  [dim]({keyring_user})[/]  Config MCP intacta.")
+    _console.print()
