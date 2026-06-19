@@ -28,13 +28,12 @@ from todos.exceptions import SEIValidationError
 from todos.mcp_app import _IDEM, _backend, _get_web_client, _json, mcp
 
 _keyring_mod: ModuleType | None = None
-# _KeyringError captures keyring.errors.KeyringError when keyring is installed so that
-# KeyringLocked and other backend-specific errors (not subclasses of any builtin) are
-# caught alongside the standard OS/runtime errors. Falls back to a never-matched sentinel.
-_KeyringError: type[Exception] = type("_NullError", (Exception,), {})
+# Sentinel: never raised naturally; replaced by keyring.errors.KeyringError when keyring is
+# installed so KeyringLocked and other backend-specific errors are caught alongside builtins.
+_KeyringError = type("_NullError", (Exception,), {})
 try:
     import keyring as _keyring_mod
-    from keyring.errors import KeyringError as _KeyringError  # type: ignore[assignment]
+    from keyring.errors import KeyringError as _KeyringError
 except ImportError:
     sys.stderr.write("[todos] keyring not available — use SEI_PROTOCOLO_PATTERN env var.\n")
 
@@ -116,7 +115,7 @@ else:
 # Descoberta automática do formato de protocolo
 # ---------------------------------------------------------------------------
 
-_MIN_AMOSTRAS = 10
+_MIN_AMOSTRAS = 3
 
 
 def _inferir_padrao_protocolo(amostras: list[str]) -> tuple[str, int, int]:
@@ -186,13 +185,6 @@ async def sei_detectar_formato_protocolo(
         raise SEIValidationError(msg)
 
     padrao, prefixo_min, prefixo_max = _inferir_padrao_protocolo(amostras)
-
-    # Valida que o Pydantic/Rust aceita o regex antes de persistir
-    try:
-        TypeAdapter(Annotated[str, Field(pattern=padrao)])
-    except _SchemaError as exc:
-        msg = f"Padrão inferido {padrao!r} é inválido para o motor Pydantic/Rust: {exc}"
-        raise SEIValidationError(msg) from exc
 
     host = await _sei_host_from_ctx(ctx)
     persistido = False
@@ -267,10 +259,9 @@ async def sei_redefinir_formato_protocolo(
             )
             if removido
             else (
-                f"Falha ao remover o padrão do keyring (chave: {key}) — "
-                "keyring bloqueado, indisponível ou timeout. "
-                "O padrão anterior ainda será carregado na próxima sessão. "
-                "Tente novamente ou remova SEI_PROTOCOLO_PATTERN manualmente."
+                f"Não foi possível remover a entrada do keyring (chave: {key}). "
+                "A entrada pode já ter sido removida anteriormente, ou o keyring está "
+                "bloqueado/indisponível. Verifique se o padrão persiste na próxima sessão."
             ),
         }
     )
