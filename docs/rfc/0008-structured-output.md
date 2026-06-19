@@ -1,6 +1,6 @@
 # RFC 0008 — Saída estruturada (structuredContent + outputSchema)
 
-**Status**: Parcialmente implementada (Fase 0 ✅ concluída; Fase 1 ✅ concluída; Fase 2 ⏳ em andamento)
+**Status**: ✅ Concluída (Fase 0 ✅; Fase 1 ✅; Fase 2 ✅)
 **Data**: 2026-06-17
 **Atualizado**: 2026-06-19
 **Autores**: Franklin Baldo (com Claude Code)
@@ -80,10 +80,11 @@ overload separado ou manter `str` nesse branch.
 
 Concluídas: `sei_arvore_processo` ✅, `sei_listar_documentos` ✅, `sei_consultar_processo` ✅, `sei_pesquisar_processos` ✅, `sei_listar_atividades` ✅
 
-### Fase 2 — Catálogos paginados: Paginado
+### Fase 2 — Catálogos paginados: Paginado ✅
 
-11 tools de catálogo e unidades retornam um dict com campos `Paginado`.
-Migrar `_add_cursor()` para retornar o modelo `Paginado` e tools para `-> Paginado`.
+19 tools de catálogo, unidades, acompanhamentos e blocos migradas de `-> str` /
+`return _json(_add_cursor(...))` para `-> ResultadoXxx` / `return ResultadoXxx.model_validate(_add_cursor(...))`.
+13 novas subclasses de `Paginado` adicionadas em `responses.py`.
 
 ---
 

@@ -13,6 +13,7 @@ ser objetos reais (não strings adiadas).
 from fastmcp import Context
 
 from todos.mcp_app import _IDEM, _READ, _add_cursor, _backend, _decode_cursor, _json, mcp
+from todos.responses import ResultadoUnidades, ResultadoUsuarios
 
 _DEFAULT_LIMIT = 50
 
@@ -62,7 +63,7 @@ async def sei_pesquisar_unidades(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> ResultadoUnidades:
     """Pesquisa unidades disponíveis no SEI por nome ou sigla.
 
     Útil para encontrar o ID de uma unidade destino ao tramitar processos.
@@ -83,7 +84,7 @@ async def sei_pesquisar_unidades(
     if filtro:
         extra["filtro"] = filtro
     extra["limit"] = limit
-    return _json(
+    return ResultadoUnidades.model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -160,7 +161,7 @@ async def sei_pesquisar_usuarios(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> ResultadoUsuarios:
     """Pesquisa usuários por palavra-chave no órgão.
 
     Diferente de sei_listar_usuarios (que lista por unidade),
@@ -187,7 +188,7 @@ async def sei_pesquisar_usuarios(
     if id_orgao:
         extra["id_orgao"] = id_orgao
     extra["limit"] = limit
-    return _json(
+    return ResultadoUsuarios.model_validate(
         _add_cursor(
             result,
             pagina=pagina,
@@ -205,7 +206,7 @@ async def sei_pesquisar_outras_unidades(
     pagina: int = 0,
     cursor: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> ResultadoUnidades:
     """Pesquisa unidades excluindo a unidade atual.
 
     Útil para tramitação — já filtra a unidade do usuário.
@@ -226,7 +227,7 @@ async def sei_pesquisar_outras_unidades(
     if filtro:
         extra["filtro"] = filtro
     extra["limit"] = limit
-    return _json(
+    return ResultadoUnidades.model_validate(
         _add_cursor(
             result,
             pagina=pagina,

@@ -49,6 +49,7 @@ from todos.responses import (
     ProcessoDetalhe,
     ProcessoInfo,
     RespostaEscrita,
+    ResultadoListaProcessos,
 )
 from todos.tools.configuracao import _ProtocoloFormatado
 
@@ -451,7 +452,7 @@ async def sei_listar_processos(
     filtro: str = "",
     cursor: str = "",
     ctx: Context | None = None,
-) -> str:
+) -> ResultadoListaProcessos:
     """Lista processos da caixa da unidade atual no SEI (Controle de Processos).
 
     Implementação via scraper do frontend web (~20x mais rápida que a REST API).
@@ -509,7 +510,7 @@ async def sei_listar_processos(
         cursor_extra["tipo"] = tipo
     if filtro:
         cursor_extra["filtro"] = filtro
-    return _json(
+    return ResultadoListaProcessos.model_validate(
         _add_cursor(
             result,
             pagina=pagina,

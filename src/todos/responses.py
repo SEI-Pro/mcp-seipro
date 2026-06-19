@@ -121,6 +121,90 @@ class ResultadoPesquisaProcessos(Paginado):
     )
 
 
+class ResultadoHipoteses(Paginado):
+    """Resposta de sei_pesquisar_hipoteses_legais."""
+
+    hipoteses: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoTipos(Paginado):
+    """Resposta de sei_pesquisar_tipos_processo / _documento / _externo / _conferencia."""
+
+    tipos: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoAssuntos(Paginado):
+    """Resposta de sei_pesquisar_assuntos."""
+
+    assuntos: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoContatos(Paginado):
+    """Resposta de sei_pesquisar_contatos."""
+
+    contatos: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoTextos(Paginado):
+    """Resposta de sei_pesquisar_textos_padrao."""
+
+    textos: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoGruposModelos(Paginado):
+    """Resposta de sei_listar_grupos_modelos."""
+
+    grupos: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoModelos(Paginado):
+    """Resposta de sei_listar_modelos."""
+
+    modelos: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoUnidades(Paginado):
+    """Resposta de sei_pesquisar_unidades / sei_pesquisar_outras_unidades."""
+
+    unidades: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoUsuarios(Paginado):
+    """Resposta de sei_pesquisar_usuarios."""
+
+    usuarios: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoAcompanhamentos(Paginado):
+    """Resposta de sei_listar_meus_acompanhamentos / sei_listar_acompanhamentos_unidade."""
+
+    acompanhamentos: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoBlocos(Paginado):
+    """Resposta de sei_pesquisar_blocos_assinatura."""
+
+    blocos: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoDocumentosBloco(Paginado):
+    """Resposta de sei_listar_documentos_bloco_assinatura."""
+
+    documentos: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ResultadoListaProcessos(Paginado):
+    """Resposta de sei_listar_processos."""
+
+    processos: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ProcessosBloco(Paginado):
+    """Resposta de sei_listar_processos_bloco_interno."""
+
+    processos: list[dict[str, object]] = Field(default_factory=list)
+
+
 class ProcessoDetalhe(BaseModel):
     """Resposta shaped de sei_consultar_processo."""
 
