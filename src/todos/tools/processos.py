@@ -26,12 +26,15 @@ from todos.backends import EnvioProcesso, NovoProcesso
 from todos.exceptions import SEIValidationError
 from todos.hints import get_hints
 from todos.mcp_app import (
+    _DEST,
     _IDEM,
     _MAX_PDF_MB,
     _MAX_ZIP_MB,
     _READ,
     _WRITE,
+    _add_cursor,
     _backend,
+    _decode_cursor,
     _json,
     _shape_resposta_escrita,
     access_control,
@@ -448,6 +451,7 @@ async def sei_listar_processos(
     apenas_meus: str = "",
     tipo: str = "",
     filtro: str = "",
+    cursor: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Lista processos da caixa da unidade atual no SEI (Controle de Processos).
@@ -463,6 +467,7 @@ async def sei_listar_processos(
       (filtro client-side, sobre a coluna "Tipo")
     - filtro: substring (case-insensitive) aplicada a qualquer campo do processo
       (protocolo, tipo, especificação, interessados — filtro client-side)
+    - cursor: cursor opaco de paginação — passe `proximo_cursor` da resposta anterior.
 
     Campos retornados por processo (visualização Detalhada):
     - id_procedimento: id interno do SEI
@@ -485,6 +490,9 @@ async def sei_listar_processos(
     - Login web é executado uma vez por sessão (~3 s); listagens subsequentes
       custam ~600 ms cada, contra ~14 s da REST API.
     """
+    if cursor:
+        decoded = _decode_cursor(cursor)
+        pagina = decoded.get("p", pagina)
     backend = await _backend(ctx)
     result = await backend.listar_processos(
         pagina=pagina,
@@ -493,7 +501,7 @@ async def sei_listar_processos(
         filtro=filtro,
     )
     result["_hints"] = get_hints()
-    return _json(result)
+    return _json(_add_cursor(result, pagina=pagina, limit=500, tool_name="sei_listar_processos"))
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +594,7 @@ async def sei_alterar_processo(
 # destino ainda é orquestração de camada de tool (o backend REST não a faz).
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_DEST)
 async def sei_concluir_processo(numero_processo: str, ctx: Context | None = None) -> str:
     """Conclui um processo na unidade atual do SEI.
 

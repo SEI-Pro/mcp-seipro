@@ -17,10 +17,10 @@ from todos.exceptions import (
 )
 from todos.hints import get_hints
 from todos.mcp_app import (
+    _DEST,
     _IDEM,
     _MAX_GRUPO_INLINE,
     _READ,
-    _WRITE,
     _add_cursor,
     _backend,
     _decode_cursor,
@@ -611,7 +611,7 @@ async def sei_pesquisar_processos(
         raise SEIError(msg) from e2
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_DEST)
 async def sei_enviar_processo(
     numero_processo: str,
     unidades_destino: str,

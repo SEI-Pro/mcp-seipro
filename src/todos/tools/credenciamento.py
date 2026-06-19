@@ -10,7 +10,7 @@ ser objetos reais (não strings adiadas).
 
 from fastmcp import Context
 
-from todos.mcp_app import _DEST, _READ, _WRITE, _backend, _json, mcp
+from todos.mcp_app import _DEST, _READ, _backend, _json, mcp
 
 
 @mcp.tool(annotations=_READ)
@@ -28,7 +28,7 @@ async def sei_listar_credenciamentos(
     return _json(result)
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_DEST)
 async def sei_conceder_credenciamento(
     processo: str,
     id_usuario: str,

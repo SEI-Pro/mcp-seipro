@@ -439,7 +439,7 @@ class SEIBackend:
         """Pesquisa assuntos para classificação de processos."""
         raise NotImplementedError
 
-    async def pesquisar_contatos(self, filtro: str = "", limit: int = 50) -> dict:
+    async def pesquisar_contatos(self, filtro: str = "", limit: int = 50, pagina: int = 0) -> dict:
         """Pesquisa contatos cadastrados."""
         raise NotImplementedError
 
@@ -620,7 +620,9 @@ class SEIBackend:
         """Cancela a disponibilização de um bloco de assinatura."""
         raise NotImplementedError
 
-    async def pesquisar_blocos_assinatura(self, filtro: str = "", limit: int = 50) -> dict:
+    async def pesquisar_blocos_assinatura(
+        self, filtro: str = "", limit: int = 50, pagina: int = 0
+    ) -> dict:
         """Pesquisa blocos de assinatura existentes."""
         raise NotImplementedError
 

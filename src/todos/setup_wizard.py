@@ -28,7 +28,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from todos.backends.models import SEIWebClientConfig
-from todos.exceptions import SEIAuthError, SEICredenciaisError
+from todos.exceptions import SEIAuthError, SEICredenciaisError, SEIError
 from todos.sei_web_client import SEIWebClient
 
 # ── Constantes ──────────────────────────────────────────────────────────────
@@ -350,7 +350,8 @@ def _validate_credentials(conn: _SEIConnConfig) -> None:
                 "orgao": web_client.orgao_usuario,
                 "unidade": {},
             }
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(SEIError, httpx.HTTPError, OSError):
+                _logger_setup.debug("setup_wizard: obtendo unidade atual (best-effort)")
                 info["unidade"] = await web_client.unidade_atual()
             return info
         finally:
