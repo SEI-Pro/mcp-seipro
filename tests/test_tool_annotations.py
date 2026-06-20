@@ -25,6 +25,24 @@ def _all_tool_files() -> list[Path]:
     return [*list(_SRC_TOOLS.glob("*.py")), _SRC_SERVER]
 
 
+def _find_mcp_tool_calls(py_file: Path) -> list[ast.Call]:
+    """Return all ast.Call nodes for mcp.tool(...) in py_file."""
+    tree = ast.parse(py_file.read_text(encoding="utf-8"))
+    calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "tool"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "mcp"
+        ):
+            calls.append(node)
+    return calls
+
+
 # ---------------------------------------------------------------------------
 # Profile dict correctness
 # ---------------------------------------------------------------------------
@@ -64,25 +82,14 @@ def test_dest_is_not_read_only() -> None:
 
 
 def _tool_annotation_refs() -> list[tuple[str, int, str]]:
-    """Return (file, lineno, annotation_name) for each @mcp.tool(annotations=...) call."""
+    """Return (file, lineno, annotation_name) for each @mcp.tool(annotations=<Name>) call."""
     refs: list[tuple[str, int, str]] = []
     for py_file in _all_tool_files():
-        tree = ast.parse(py_file.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if not (
-                isinstance(func, ast.Attribute)
-                and func.attr == "tool"
-                and isinstance(func.value, ast.Name)
-                and func.value.id == "mcp"
-            ):
-                continue
-            for kw in node.keywords:
+        for call in _find_mcp_tool_calls(py_file):
+            for kw in call.keywords:
                 if kw.arg == "annotations" and isinstance(kw.value, ast.Name):
                     rel = str(py_file.relative_to(Path(__file__).parent.parent))
-                    refs.append((rel, node.lineno, kw.value.id))
+                    refs.append((rel, call.lineno, kw.value.id))
     return refs
 
 
@@ -105,37 +112,30 @@ def test_annotation_coverage_not_empty() -> None:
 
 
 # ---------------------------------------------------------------------------
-# @mcp.tool decorator without annotations= must not exist
+# @mcp.tool decorator without a named annotations= profile must not exist
 # ---------------------------------------------------------------------------
 
 
 def _unannotated_tool_defs() -> list[tuple[str, int]]:
-    """Return (file, lineno) for @mcp.tool calls that have NO annotations= keyword."""
+    """Return (file, lineno) for @mcp.tool calls lacking a named annotations= profile.
+
+    Flags both missing annotations= keyword and inline-dict annotations
+    (e.g. annotations={"destructiveHint": True}) — only named profiles are allowed.
+    """
     missing: list[tuple[str, int]] = []
     for py_file in _all_tool_files():
-        tree = ast.parse(py_file.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if not (
-                isinstance(func, ast.Attribute)
-                and func.attr == "tool"
-                and isinstance(func.value, ast.Name)
-                and func.value.id == "mcp"
-            ):
-                continue
-            has_annotations = any(kw.arg == "annotations" for kw in node.keywords)
-            if not has_annotations:
+        for call in _find_mcp_tool_calls(py_file):
+            ann_kw = next((kw for kw in call.keywords if kw.arg == "annotations"), None)
+            if ann_kw is None or not isinstance(ann_kw.value, ast.Name):
                 rel = str(py_file.relative_to(Path(__file__).parent.parent))
-                missing.append((rel, node.lineno))
+                missing.append((rel, call.lineno))
     return missing
 
 
 def test_every_mcp_tool_has_annotations() -> None:
-    """Every @mcp.tool() call must pass annotations= to avoid defaulting to destructiveHint=True."""
+    """Every @mcp.tool() call must use a named annotations= profile."""
     missing = _unannotated_tool_defs()
     if missing:
         lines = "\n".join(f"  {path}:{lineno}" for path, lineno in missing)
-        msg = f"{len(missing)} @mcp.tool() call(s) missing annotations=:\n{lines}"
+        msg = f"{len(missing)} @mcp.tool() call(s) missing a named annotations= profile:\n{lines}"
         raise AssertionError(msg)

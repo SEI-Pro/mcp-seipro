@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from todos.backends.rest._session import _RestBase
+from todos.backends.rest._session import _MIN_DOC_CONTENT_LENGTH, _RestBase
 from todos.backends.rest.catalogos import _validar_pagina
 from todos.exceptions import SEINotFoundError, SEIValidationError
 
@@ -41,16 +41,11 @@ class TestValidarPagina:
             _validar_pagina(-100)
 
     def test_raises_sei_validation_error_not_value_error(self) -> None:
-        with pytest.raises(SEIValidationError):
+        with pytest.raises(SEIValidationError) as exc_info:
             _validar_pagina(-1)
-        # Confirm it is NOT a plain ValueError (a subclass would pass isinstance
-        # but the hierarchy must be SEIValidationError, not ValueError).
-        try:
-            _validar_pagina(-1)
-        except SEIValidationError:
-            pass
-        except ValueError:
-            pytest.fail("_validar_pagina raised ValueError instead of SEIValidationError")
+        assert not isinstance(exc_info.value, ValueError), (
+            "_validar_pagina must raise SEIValidationError, not a plain ValueError"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +136,8 @@ class TestResolverDocumentoExceptions:
         base = _make_rest_base_for_doc(
             pesquisar_retorno={"processos": [{"idProcedimento": "1"}]},
             listar_retorno=transport_exc,
-            visualizar_retorno="short",  # < _MIN_DOC_CONTENT_LENGTH (10), so falls through
+            visualizar_retorno="x"
+            * (_MIN_DOC_CONTENT_LENGTH - 1),  # below threshold → falls through
         )
         # Transport error is swallowed; SEINotFoundError is raised at end (doc not found).
         # If ConnectError were NOT swallowed, pytest.raises(SEINotFoundError) would fail
