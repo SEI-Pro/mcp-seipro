@@ -138,7 +138,7 @@ async def _ler_documento_via_backend(
     if tipo_documento == "auto":
         try:
             raw = await backend.visualizar_documento_interno(str(id_documento), processo)
-        except (SEINotFoundError, SEIPermissionError, SEIConnectionError, SEINotImplementedError):
+        except (SEINotFoundError, SEIPermissionError, SEINotImplementedError):
             content = await backend.baixar_anexo(str(id_documento), processo)
             return _formatar_doc_externo(content, formato, disclaimer)
         return _formatar_doc_interno(raw, formato, disclaimer)

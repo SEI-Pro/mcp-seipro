@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Literal
 import httpx
 from fastmcp import Context
 
-from todos.exceptions import SEIError, SEIValidationError
+from todos.exceptions import SEIConnectionError, SEIError, SEIValidationError
 from todos.html_utils import sanitize_iso8859
 from todos.mcp_app import (
     _DEST,
@@ -50,6 +50,8 @@ async def _validar_cargo(backend: "SEIBackend", cargo: str) -> None:
     if not cargo:
         try:
             cargos = await backend.listar_assinantes()
+        except SEIConnectionError:
+            raise
         except (SEIError, httpx.HTTPError):
             cargos = []
         raise _exigir_cargo(cargos)
