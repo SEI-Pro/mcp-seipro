@@ -424,9 +424,12 @@ class SEIWebClient:
                 keyring_user,
             )
             return None
-        except (OSError, RuntimeError, ValueError, AttributeError) as e:
-            # AttributeError: Linux SecretService/dbus backend raises this on headless sessions
-            logger.debug("_ler_senha_keyring %r: erro ao buscar senha: %s", keyring_user, e)
+        except AttributeError as e:
+            # Linux SecretService/dbus backend raises this on headless sessions — expected
+            logger.debug("_ler_senha_keyring %r: keyring indisponível: %s", keyring_user, e)
+            return None
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning("_ler_senha_keyring %r: erro ao buscar senha: %s", keyring_user, e)
             return None
 
     async def login(self, *, _retry_keyring: bool = True) -> None:

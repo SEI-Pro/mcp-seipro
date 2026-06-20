@@ -225,7 +225,7 @@ class SEIClient:
                 msg = f"Recurso não encontrado: {method} {path}"
                 raise SEINotFoundError(msg)
             resp.raise_for_status()
-        except (httpx.TimeoutException, httpx.ConnectError) as e:
+        except httpx.TransportError as e:
             msg = f"SEI inacessível: {e}"
             raise SEIConnectionError(msg) from e
         except SEIError:
@@ -271,7 +271,7 @@ class SEIClient:
                 },
             )
             resp.raise_for_status()
-        except (httpx.TimeoutException, httpx.ConnectError) as e:
+        except httpx.TransportError as e:
             msg = f"SEI inacessível durante autenticação: {e}"
             raise SEIConnectionError(msg) from e
         except httpx.HTTPStatusError as e:
