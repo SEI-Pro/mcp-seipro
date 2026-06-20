@@ -22,7 +22,7 @@ from todos.mcp_app import (
     _json,
     mcp,
 )
-from todos.responses import AcompanhamentoSEI, PaginadoGenerico
+from todos.responses import AcompanhamentoSEI, NextAction, PaginadoGenerico
 
 _DEFAULT_LIMIT = 50
 
@@ -111,6 +111,11 @@ async def sei_listar_grupos_acompanhamento(
     """
     backend = await _backend(ctx)
     result = await backend.listar_grupos_acompanhamento(filtro=filtro)
+    if isinstance(result, dict):
+        result.setdefault(
+            "_next",
+            [{"tool": "sei_acompanhar_processo", "args": {"grupo": "<id do grupo>"}}],
+        )
     return _json(result)
 
 
@@ -135,15 +140,21 @@ async def sei_listar_meus_acompanhamentos(
     backend = await _backend(ctx)
     result = await backend.listar_meus_acompanhamentos(limit=limit, pagina=pagina)
     result["itens"] = result.pop("acompanhamentos", [])
-    return PaginadoGenerico[AcompanhamentoSEI].model_validate(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_listar_meus_acompanhamentos",
-            cursor_extra={"limit": limit},
-        )
+    paginado = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_listar_meus_acompanhamentos",
+        cursor_extra={"limit": limit},
     )
+    paginado.setdefault("next_actions", []).append(
+        NextAction(
+            tool="sei_consultar_processo",
+            args={"protocolo_formatado": "<protocolo do processo>"},
+            reason="Use o protocolo de um acompanhamento para ver o processo completo.",
+        ).model_dump()
+    )
+    return PaginadoGenerico[AcompanhamentoSEI].model_validate(paginado)
 
 
 @mcp.tool(annotations=_READ)
@@ -167,15 +178,21 @@ async def sei_listar_acompanhamentos_unidade(
     backend = await _backend(ctx)
     result = await backend.listar_acompanhamentos_unidade(limit=limit, pagina=pagina)
     result["itens"] = result.pop("acompanhamentos", [])
-    return PaginadoGenerico[AcompanhamentoSEI].model_validate(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_listar_acompanhamentos_unidade",
-            cursor_extra={"limit": limit},
-        )
+    paginado = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_listar_acompanhamentos_unidade",
+        cursor_extra={"limit": limit},
     )
+    paginado.setdefault("next_actions", []).append(
+        NextAction(
+            tool="sei_consultar_processo",
+            args={"protocolo_formatado": "<protocolo do processo>"},
+            reason="Use o protocolo de um acompanhamento para ver o processo completo.",
+        ).model_dump()
+    )
+    return PaginadoGenerico[AcompanhamentoSEI].model_validate(paginado)
 
 
 @mcp.tool(annotations=_IDEM)

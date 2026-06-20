@@ -99,6 +99,9 @@ async def sei_buscar_documento(
     backend = await _backend(ctx)
     # Composite: estratégia Solr (REST) quando há mod-wssei, senão árvore web.
     result = await backend.buscar_documento(numero_sei, processo)
+    doc_id = result.get("id") or result.get("idDocumento")
+    if doc_id:
+        result.setdefault("_next", [{"tool": "sei_ler_documento", "args": {"documento": doc_id}}])
     return _json(result)
 
 
