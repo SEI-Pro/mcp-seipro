@@ -418,8 +418,15 @@ class SEIWebClient:
                 asyncio.to_thread(_keyring.get_password, "todos-mcp", keyring_user),
                 timeout=5.0,
             )
-        except (TimeoutError, OSError, RuntimeError, ValueError, AttributeError):
+        except TimeoutError:
+            logger.warning(
+                "Timeout ao buscar senha do keyring (>5s) para %r; use SEI_SENHA como fallback",
+                keyring_user,
+            )
+            return None
+        except (OSError, RuntimeError, ValueError, AttributeError) as e:
             # AttributeError: Linux SecretService/dbus backend raises this on headless sessions
+            logger.debug("_ler_senha_keyring %r: erro ao buscar senha: %s", keyring_user, e)
             return None
 
     async def login(self, *, _retry_keyring: bool = True) -> None:
@@ -1070,7 +1077,7 @@ class SEIWebClient:
                 data={"txtPesquisaRapida": ""},
                 headers={"Referer": str(self._inbox_url)},
             )
-            r0.raise_for_status()
+            _check(r0)
             soup0 = BeautifulSoup(r0.text, "html.parser")
             for f in soup0.find_all("form"):
                 if "acao_origem=protocolo_pesquisa_rapida" in _tag_str(f, "action"):
@@ -1114,7 +1121,7 @@ class SEIWebClient:
         }
 
         r1 = await self._http.post(action, data=post_data, headers={"Referer": str(r0.url)})
-        r1.raise_for_status()
+        _check(r1)
         soup1 = BeautifulSoup(r1.text, "html.parser")
 
         # Passo 3: parse dos resultados.
@@ -2087,7 +2094,7 @@ class SEIWebClient:
 
         r2 = await self._http.post(
             save_url,
-            content=urlencode(post_data).encode(),
+            content=urlencode(post_data, encoding="iso-8859-1", errors="replace").encode("ascii"),
             headers={"Referer": editor_url, "Content-Type": "application/x-www-form-urlencoded"},
         )
         _check(r2)
@@ -2176,7 +2183,7 @@ class SEIWebClient:
 
         r2 = await self._http.post(
             save_url,
-            content=urlencode(updated).encode(),
+            content=urlencode(updated, encoding="iso-8859-1", errors="replace").encode("ascii"),
             headers={"Referer": doc_url, "Content-Type": "application/x-www-form-urlencoded"},
         )
         _check(r2)
@@ -2334,8 +2341,6 @@ class SEIWebClient:
         """
         await self.ensure_authenticated()
         content = await self._gerar_arquivo_processo(protocolo_formatado, "procedimento_gerar_pdf")
-        if "pdf" not in self._http.headers.get("accept", "").lower():
-            pass  # conteúdo válido independente do accept
         if not content.startswith(b"%PDF") and b"pdf" not in content[:32].lower():
             ct = "(desconhecido)"
             msg = f"Esperado PDF mas recebeu Content-Type: {ct}"
@@ -2617,7 +2622,7 @@ class SEIWebClient:
 
         r2 = await self._http.post(
             post_url,
-            content=urlencode(post_data).encode(),
+            content=urlencode(post_data, encoding="iso-8859-1", errors="replace").encode("ascii"),
             headers={"Referer": tramitar_url, "Content-Type": "application/x-www-form-urlencoded"},
         )
         if r2.status_code not in (200, 302):
@@ -2816,7 +2821,7 @@ class SEIWebClient:
         sei_base = f"{self.sei_root}/sei/"
         try:
             incluir_url = await self._obter_link_toolbar("bloco_assinatura_incluir")
-        except RuntimeError:
+        except SEINotFoundError:
             incluir_url = await self._obter_link_toolbar("bloco_assinatura_cadastrar")
         r = await self._http.get(incluir_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
@@ -2884,7 +2889,7 @@ class SEIWebClient:
             acao_url = await self._obter_acao_bloco_url(
                 id_bloco, "bloco_assinatura_cancelar_disponibilizacao"
             )
-        except RuntimeError:
+        except SEINotFoundError:
             acao_url = await self._obter_acao_bloco_url(id_bloco, "bloco_assinatura_cancelar")
         r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
         if r.status_code not in (200, 302):
@@ -2951,6 +2956,10 @@ class SEIWebClient:
         )
         m = pat.search(body)
         if not m:
+            logger.warning(
+                "listar_documentos_bloco_assinatura_web: link de detalhe não encontrado para bloco %s",
+                id_bloco,
+            )
             return []
         detail_url = urljoin(sei_base, m.group().replace("&amp;", "&"))
         r2 = await self._http.get(detail_url, headers={"Referer": lista_url})
@@ -3039,10 +3048,19 @@ class SEIWebClient:
             headers={"Referer": str(self._inbox_url)},
         )
         if not r.is_success:
+            logger.warning(
+                "_autocomplete_ajax %r: HTTP %s para termo=%r", acao_ajax, r.status_code, termo
+            )
             return []
         try:
             raw = r.json()
         except ValueError:
+            logger.warning(
+                "_autocomplete_ajax %r: resposta não-JSON (HTTP %s) para termo=%r",
+                acao_ajax,
+                r.status_code,
+                termo,
+            )
             return []
         return raw if isinstance(raw, list) else []
 
@@ -4385,7 +4403,7 @@ class SEIWebClient:
             try:
                 lista_url = await self._obter_link_toolbar(nome_acao)
                 break
-            except RuntimeError:
+            except SEINotFoundError:
                 continue
         if not lista_url:
             return {
@@ -4395,6 +4413,7 @@ class SEIWebClient:
             }
         r = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
         if not r.is_success:
+            logger.warning("listar_grupos_modelos_web: HTTP %s de %s", r.status_code, lista_url)
             return {"grupos": [], "total_itens": 0}
         soup = BeautifulSoup(
             _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
@@ -4425,7 +4444,7 @@ class SEIWebClient:
             try:
                 lista_url = await self._obter_link_toolbar(nome_acao)
                 break
-            except RuntimeError:
+            except SEINotFoundError:
                 continue
         if not lista_url:
             return {
@@ -4435,6 +4454,7 @@ class SEIWebClient:
             }
         r = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
         if not r.is_success:
+            logger.warning("listar_modelos_web: HTTP %s de %s", r.status_code, lista_url)
             return {"modelos": [], "total_itens": 0}
         soup = BeautifulSoup(
             _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
