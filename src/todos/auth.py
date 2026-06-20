@@ -24,6 +24,7 @@ import logging
 import os
 import secrets
 import time
+from html import escape as _html_escape
 from typing import cast
 
 from fastmcp.server.auth import AccessToken, OAuthProvider
@@ -487,8 +488,10 @@ async def login_submit(request: Request) -> HTMLResponse:
     )
 
     usuario = sei_creds["sei_usuario"]
-    html = _SUCCESS_HTML.replace("{redirect_uri}", str(redirect_uri)).replace("{usuario}", usuario)
-    return HTMLResponse(html)
+    page = _SUCCESS_HTML.replace("{redirect_uri}", str(redirect_uri)).replace(
+        "{usuario}", _html_escape(usuario)
+    )
+    return HTMLResponse(page)
 
 
 _SUCCESS_HTML = """<!DOCTYPE html>

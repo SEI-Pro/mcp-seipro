@@ -822,6 +822,6 @@ def _add_cursor(
 
 # Tool annotation profiles
 _READ = {"readOnlyHint": True, "idempotentHint": True}
-_IDEM = {"readOnlyHint": False, "idempotentHint": True}
-_WRITE = {"readOnlyHint": False, "idempotentHint": False}
+_IDEM = {"readOnlyHint": False, "idempotentHint": True, "destructiveHint": False}
+_WRITE = {"readOnlyHint": False, "idempotentHint": False, "destructiveHint": False}
 _DEST = {"readOnlyHint": False, "destructiveHint": True}
