@@ -501,6 +501,7 @@ class SEIClient:
                 nome_arquivo=Path(arquivo_path).name,
                 data=payload,
             )
+            resp.raise_for_status()
         else:
             resp = await self._request(
                 "POST", f"/documento/externo/{id_documento}/alterar", data=payload
@@ -1834,6 +1835,9 @@ class SEIClient:
                 data=data,
                 files={"anexo": (nome_arquivo, file_bytes)},
             )
+            if resp.status_code in (401, 403):
+                msg = "Credenciais rejeitadas durante upload após re-autenticação (401/403)."
+                raise SEIAuthError(msg)
         return resp
 
     async def criar_documento_externo(
