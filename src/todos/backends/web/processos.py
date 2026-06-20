@@ -12,9 +12,13 @@ from typing import TYPE_CHECKING
 
 from todos.backends.models import NovoProcessoWeb, OpcoesTramitacaoWeb
 from todos.backends.web._session import _WebMixin
-from todos.exceptions import SEIConnectionError, SEIValidationError
+from todos.exceptions import SEIParseError, SEIValidationError
 
 logger = logging.getLogger(__name__)
+
+# Constantes para valores literais usados em campos do formulário SEI web.
+_SEI_SIM = "S"  # flag booleana afirmativa no SEI (ex.: chkSinPrioridade)
+_PRIORIDADE_ALTA = "2"  # valor do campo prioridade para anotações de alta prioridade
 
 if TYPE_CHECKING:
     from todos.backends.base import EnvioProcesso, FiltrosPesquisaProcessos, NovoProcesso
@@ -161,6 +165,12 @@ class ProcessosWeb(_WebMixin):
                 None,
             )
             if not exact:
+                if not matches:
+                    logger.warning(
+                        "enviar_processo: autocomplete_unidades retornou vazio para '%s'"
+                        " — verifique conectividade",
+                        destino,
+                    )
                 candidatos = ", ".join(m.get("sigla", "") for m in matches)
                 msg = (
                     f"Unidade '{destino}' não encontrada via autocomplete web. "
@@ -198,7 +208,7 @@ class ProcessosWeb(_WebMixin):
                 f"Selects disponíveis: {list(_selects.keys())}"
             )
             logger.warning(msg)
-            raise SEIConnectionError(msg)
+            raise SEIParseError(msg)
         opcoes_usuario = _selects.get("selAtribuicao", [])
         if not opcoes_usuario:
             msg = "Nenhum usuário disponível para atribuição nesta unidade."
@@ -289,10 +299,10 @@ class ProcessosWeb(_WebMixin):
     async def criar_anotacao(self, processo: str, descricao: str, prioridade: str = "1") -> dict:
         """Cria uma anotação (post-it) em um processo."""
         campos = {"txaDescricao": descricao}
-        if prioridade == "2":
+        if prioridade == _PRIORIDADE_ALTA:
             # Checkbox "Sin" do SEI: o backend testa == "S" (o value no HTML é
             # vazio); enviar "1" perde a flag silenciosamente.
-            campos["chkSinPrioridade"] = "S"
+            campos["chkSinPrioridade"] = _SEI_SIM
         return await self._web.executar_acao_processo(processo, "anotacao_registrar", campos)
 
     async def gerar_pdf_processo(self, processo: str) -> bytes:

@@ -91,7 +91,7 @@ class _RestBase(_RestMixin):
                     continue
                 try:
                     docs = await self._rest.listar_documentos(id_proc, limit=200)
-                except (SEIError, httpx.RequestError) as exc:
+                except (SEIError, httpx.HTTPError) as exc:
                     logger.warning(
                         "Falha ao listar documentos do processo %s ao resolver '%s': %s",
                         id_proc,
@@ -109,7 +109,7 @@ class _RestBase(_RestMixin):
                             continue
                         tipo = d.get("atributos", {}).get("tipoDocumento", "I")
                         return doc_id, tipo
-        except (SEIError, httpx.RequestError) as exc:
+        except (SEIError, httpx.HTTPError) as exc:
             logger.warning(
                 "Estratégia de pesquisa Solr falhou ao resolver documento '%s': %s",
                 referencia,

@@ -63,6 +63,9 @@ class DocumentosRest(_RestMixin):
                         "id_procedimento": id_proc,
                         "documento": d,
                     }
+        logger.debug(
+            "buscar_documento: %s não encontrado (%d candidatos)", numero_sei, len(candidatos)
+        )
         return {
             "encontrado": False,
             "processos_pesquisados": len(candidatos),

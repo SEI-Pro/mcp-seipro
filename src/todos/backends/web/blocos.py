@@ -151,5 +151,9 @@ class BlocosWeb(_WebMixin):
     async def alterar_anotacao_bloco_assinatura(
         self, id_bloco: str, documento: str, descricao: str
     ) -> dict:
-        """Altera a anotação de um documento em um bloco de assinatura."""
+        """Altera a anotação de um documento em um bloco de assinatura.
+
+        Alias de `anotar_documento_bloco_assinatura`: o SEI usa o mesmo endpoint
+        para criar e alterar anotações de bloco (idempotente via POST).
+        """
         return await self._web.anotar_documento_bloco_assinatura_web(id_bloco, documento, descricao)
