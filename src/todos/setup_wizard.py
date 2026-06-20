@@ -74,6 +74,7 @@ _UFS: frozenset[str] = frozenset(
 )
 
 _console = Console()
+_logger_setup = logging.getLogger(__name__)
 
 _BANNER_ART: str = """\
   ████████╗  ██████╗  ██████╗   ██████╗  ███████╗
@@ -262,7 +263,8 @@ def _read_existing_todos_env() -> dict[str, str] | None:
         return None
     try:
         data = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        _logger_setup.warning("Não foi possível ler ~/.claude.json: %s", exc)
         return None
     servers = data.get("mcpServers")
     todos = servers.get("todos") if isinstance(servers, dict) else None
@@ -443,7 +445,8 @@ def _mcp_add_via_json(config_path: Path, todos_cmd: str, mcp_env: dict[str, str]
         }
         with config_path.open("w", encoding="utf-8") as f:
             json.dump(config_data, f, indent=2, ensure_ascii=False)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        _logger_setup.warning("_mcp_add_via_json: falha ao ler/escrever arquivo de config: %s", exc)
         return False
     else:
         return True
@@ -625,9 +628,6 @@ def _infer_sigla_orgao_sistema(hostname: str) -> str:
         if parts[0] not in ("gov", "com", "org", "net", "edu"):
             return parts[0].upper()
     return "SEI"
-
-
-_logger_setup = logging.getLogger(__name__)
 
 
 def _is_cloudflare_response(resp: httpx.Response) -> bool:

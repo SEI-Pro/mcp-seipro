@@ -13,9 +13,9 @@ ser objetos reais (não strings adiadas).
 
 import asyncio
 import concurrent.futures
+import logging
 import os
 import re
-import sys
 from types import ModuleType
 from typing import Annotated
 from urllib.parse import urlparse
@@ -27,6 +27,8 @@ from pydantic_core import SchemaError as _SchemaError
 from todos.exceptions import SEIValidationError
 from todos.mcp_app import _IDEM, _backend, _get_web_client, _json, mcp
 
+logger = logging.getLogger(__name__)
+
 _keyring_mod: ModuleType | None = None
 # Sentinel: never raised naturally; replaced by keyring.errors.KeyringError when keyring is
 # installed so KeyringLocked and other backend-specific errors are caught alongside builtins.
@@ -35,7 +37,7 @@ try:
     import keyring as _keyring_mod
     from keyring.errors import KeyringError as _KeyringError
 except ImportError:
-    sys.stderr.write("[todos] keyring not available — use SEI_PROTOCOLO_PATTERN env var.\n")
+    logger.info("keyring not available — use SEI_PROTOCOLO_PATTERN env var.")
 
 _PROTOCOLO_DESC = (
     "Número de protocolo SEI no formato NNNNN.NNNNNN/AAAA-DD, ex: 50300.000123/2025-00"
@@ -83,7 +85,8 @@ def _read_keyring_pattern_sync(host: str) -> str:
     try:
         future = pool.submit(_keyring_mod.get_password, _KEYRING_SERVICE, key)
         return future.result(timeout=2.0) or ""
-    except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
+    except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError) as exc:
+        logger.debug("keyring read failed: %s", exc)
         return ""
     finally:
         # cancel_futures=True (Python 3.9+) abandons the thread if get_password is
@@ -104,9 +107,10 @@ if _SEI_PROTOCOLO_PATTERN:
         TypeAdapter(_candidate)  # forces Pydantic/Rust to compile the regex now
         _ProtocoloFormatado = _candidate
     except _SchemaError:
-        sys.stderr.write(
-            f"[todos] SEI_PROTOCOLO_PATTERN={_SEI_PROTOCOLO_PATTERN!r} é um regex inválido "
-            "para o motor Pydantic/Rust — constraint ignorado, qualquer string será aceita.\n"
+        logger.warning(
+            "SEI_PROTOCOLO_PATTERN=%r é um regex inválido "
+            "para o motor Pydantic/Rust — constraint ignorado, qualquer string será aceita.",
+            _SEI_PROTOCOLO_PATTERN,
         )
         _ProtocoloFormatado = _ProtocoloFormatadoBase
 else:
@@ -200,6 +204,10 @@ async def sei_detectar_formato_protocolo(
         except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
             persistido = False
 
+    if not persistido:
+        logger.warning(
+            "sei_detectar_formato_protocolo: padrão detectado mas não persistido no keyring"
+        )
     return _json(
         {
             "padrao": padrao,
@@ -213,6 +221,7 @@ async def sei_detectar_formato_protocolo(
                 if persistido
                 else "keyring indisponível — configure SEI_PROTOCOLO_PATTERN manualmente."
             ),
+            "_next": ["sei_listar_processos"],
         }
     )
 
@@ -264,5 +273,6 @@ async def sei_redefinir_formato_protocolo(
                 "A entrada pode já ter sido removida anteriormente, ou o keyring está "
                 "bloqueado/indisponível. Verifique se o padrão persiste na próxima sessão."
             ),
+            "_next": ["sei_detectar_formato_protocolo"],
         }
     )
