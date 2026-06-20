@@ -21,6 +21,7 @@ from todos.mcp_app import (
     _IDEM,
     _MAX_GRUPO_INLINE,
     _READ,
+    _WRITE,
     _add_cursor,
     _backend,
     _decode_cursor,
@@ -688,7 +689,7 @@ async def sei_atribuir_processo(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_sobrestar_processo(
     processo: str,
     motivo: str,

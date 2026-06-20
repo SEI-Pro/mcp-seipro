@@ -62,7 +62,7 @@ async def sei_incluir_documento_bloco_assinatura(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_disponibilizar_bloco_assinatura(
     id_bloco: str,
     ctx: Context | None = None,
@@ -77,7 +77,7 @@ async def sei_disponibilizar_bloco_assinatura(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_cancelar_disponibilizacao_bloco(
     id_bloco: str,
     ctx: Context | None = None,
@@ -167,7 +167,7 @@ async def sei_listar_documentos_bloco_assinatura(
     )
 
 
-@mcp.tool(annotations=_DEST)
+@mcp.tool(annotations=_WRITE)
 async def sei_retirar_documentos_bloco_assinatura(
     id_bloco: str,
     documentos: str,
@@ -216,7 +216,7 @@ async def sei_excluir_bloco_assinatura(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_concluir_bloco_assinatura(
     ids_blocos: str,
     ctx: Context | None = None,
@@ -232,7 +232,7 @@ async def sei_concluir_bloco_assinatura(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_reabrir_bloco_assinatura(
     id_bloco: str,
     ctx: Context | None = None,
@@ -248,7 +248,7 @@ async def sei_reabrir_bloco_assinatura(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_retornar_bloco_assinatura(
     id_bloco: str,
     ctx: Context | None = None,

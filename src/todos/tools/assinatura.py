@@ -22,6 +22,7 @@ from todos.mcp_app import (
     _DEST,
     _IDEM,
     _READ,
+    _WRITE,
     _backend,
     _json,
     mcp,
@@ -54,7 +55,7 @@ async def _validar_cargo(backend: "SEIBackend", cargo: str) -> None:
         raise _exigir_cargo(cargos)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_cancelar_assinatura(
     id_documento: str,
     processo: str | None = None,

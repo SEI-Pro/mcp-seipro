@@ -61,7 +61,7 @@ async def sei_incluir_processo_bloco_interno(
     return _json(result)
 
 
-@mcp.tool(annotations=_DEST)
+@mcp.tool(annotations=_WRITE)
 async def sei_retirar_processo_bloco_interno(
     id_bloco: str,
     processos: str,
@@ -148,7 +148,7 @@ async def sei_excluir_bloco_interno(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_concluir_bloco_interno(
     ids_blocos: str,
     ctx: Context | None = None,

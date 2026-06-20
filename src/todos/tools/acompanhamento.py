@@ -27,7 +27,7 @@ from todos.responses import AcompanhamentoSEI, PaginadoGenerico
 _DEFAULT_LIMIT = 50
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_acompanhar_processo(
     processo: str,
     grupo: str = "",
