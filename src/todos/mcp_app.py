@@ -25,6 +25,7 @@ from todos.backends import (
 from todos.backends.models import FiltrosPesquisaProcessos, SEIClientConfig, SEIWebClientConfig
 from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import (
+    SEIAuthError,
     SEIConnectionError,
     SEIError,
     SEINotFoundError,
@@ -123,17 +124,17 @@ async def _get_client(ctx: Context | None) -> SEIClient:
     """Obtém o SEIClient REST, criando sob demanda em modo HTTP."""
     if ctx is None:
         msg = "Contexto MCP nao disponivel."
-        raise ValueError(msg)
+        raise SEIError(msg)
 
     if _http_mode:
         access_token = get_access_token()
         if not access_token:
             msg = "Autenticacao necessaria. Reconecte o MCP."
-            raise ValueError(msg)
+            raise SEIAuthError(msg)
         creds = get_sei_credentials_from_token(access_token.token)
         if not creds:
             msg = "Token invalido ou expirado. Reconecte o MCP."
-            raise ValueError(msg)
+            raise SEIAuthError(msg)
 
         max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
         lock: asyncio.Lock = ctx.lifespan_context["sei_by_session_lock"]
@@ -150,14 +151,14 @@ async def _get_client(ctx: Context | None) -> SEIClient:
             try:
                 await evicted.close()
             except (httpx.TransportError, OSError, RuntimeError) as exc:
-                logger.debug("Falha ao fechar SEIClient evictado (ignorada): %s", exc)
+                logger.warning("Falha ao fechar SEIClient evictado (ignorada): %s", exc)
         return client
 
     client = ctx.lifespan_context.get("sei")
     if client is not None:
         return client
     msg = "SEIClient nao configurado. Verifique as variaveis de ambiente."
-    raise ValueError(msg)
+    raise SEIError(msg)
 
 
 async def _get_web_client(ctx: Context | None) -> SEIWebClient:
@@ -168,17 +169,17 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
     """
     if ctx is None:
         msg = "Contexto MCP nao disponivel."
-        raise ValueError(msg)
+        raise SEIError(msg)
 
     if _http_mode:
         access_token = get_access_token()
         if not access_token:
             msg = "Autenticacao necessaria. Reconecte o MCP."
-            raise ValueError(msg)
+            raise SEIAuthError(msg)
         creds = get_sei_credentials_from_token(access_token.token)
         if not creds:
             msg = "Token invalido ou expirado. Reconecte o MCP."
-            raise ValueError(msg)
+            raise SEIAuthError(msg)
 
         max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
         lock: asyncio.Lock = ctx.lifespan_context["sei_web_by_session_lock"]
@@ -195,14 +196,14 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
             try:
                 await evicted.close()
             except (httpx.TransportError, OSError, RuntimeError) as exc:
-                logger.debug("Falha ao fechar SEIWebClient evictado (ignorada): %s", exc)
+                logger.warning("Falha ao fechar SEIWebClient evictado (ignorada): %s", exc)
         return client
 
     client = ctx.lifespan_context.get("sei_web")
     if client is not None:
         return client
     msg = "SEIWebClient nao configurado."
-    raise ValueError(msg)
+    raise SEIError(msg)
 
 
 async def _has_rest(ctx: Context | None) -> bool:
@@ -221,9 +222,10 @@ async def _backend(ctx: Context | None) -> _SEIBackendV2:
     rest = await _get_client(ctx)
     try:
         web = await _get_web_client(ctx)
-    except ValueError:
+    except SEIError as exc:
         if _http_mode:
             raise
+        logger.debug("_backend: usando fallback SEIWebClient (stdio) — %s", exc)
         web = SEIWebClient()  # stdio fallback: web client not configured
     return build_backend(rest, web)
 
@@ -383,6 +385,7 @@ async def sei_status_resource(ctx: Context) -> str:
             linhas.append(f"  {marker} {u['sigla']} — {u['nome']} (id: {u.get('id_unidade', '?')})")
         return "\n".join(linhas)
     except (SEIError, httpx.HTTPError, AttributeError) as exc:
+        logger.warning("sei_status: erro ao consultar status — %s: %s", type(exc).__name__, exc)
         return f"Status: erro ao obter sessão — {exc}"
 
 
@@ -684,11 +687,13 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
     except SEIConnectionError:
         # Não mascarar uma falha de conectividade como "documento não encontrado".
         raise
-    except (SEIError, httpx.HTTPError):
+    except (SEIError, httpx.HTTPError) as exc:
         # A tentativa por id direto não resolveu (não encontrado, sem acesso, ou
         # um id que coincidiu com outro protocolo — não confiável). Desiste e cai
         # para o SEINotFoundError acionável abaixo.
-        pass
+        logger.debug(
+            "_resolver_documento: tentativa de id direto falhou (%s: %s)", type(exc).__name__, exc
+        )
 
     # Não tentar como externo automaticamente — risco alto de confusão id/proto
     # O fallback para externo só deve ser usado com id_procedimento conhecido
@@ -822,6 +827,6 @@ def _add_cursor(
 
 # Tool annotation profiles
 _READ = {"readOnlyHint": True, "idempotentHint": True}
-_IDEM = {"readOnlyHint": False, "idempotentHint": True}
-_WRITE = {"readOnlyHint": False, "idempotentHint": False}
+_IDEM = {"readOnlyHint": False, "idempotentHint": True, "destructiveHint": False}
+_WRITE = {"readOnlyHint": False, "idempotentHint": False, "destructiveHint": False}
 _DEST = {"readOnlyHint": False, "destructiveHint": True}

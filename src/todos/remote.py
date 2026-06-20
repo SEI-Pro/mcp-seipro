@@ -52,6 +52,8 @@ def build_remote_app(mcp: FastMCP, *, base_url: str) -> StarletteWithLifespan:
     icon = _icon_bytes()
 
     async def favicon(_request: Request) -> Response:
+        if not icon:
+            return Response(b"", status_code=404)
         return Response(
             icon,
             media_type="image/png",

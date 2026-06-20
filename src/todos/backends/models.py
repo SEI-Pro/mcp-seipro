@@ -8,7 +8,11 @@ kwargs planos — mantém `PLR0913` limpo no backend sem per-file-ignore (a obje
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+NIVEL_ACESSO_PUBLICO = "0"
+NIVEL_ACESSO_RESTRITO = "1"
+NIVEL_ACESSO_SIGILOSO = "2"
 
 
 @dataclass(frozen=True)
@@ -46,7 +50,7 @@ class NovoProcesso:
     assuntos: str = ""
     interessados: str = ""
     observacoes: str = ""
-    nivel_acesso: str = "0"
+    nivel_acesso: str = NIVEL_ACESSO_PUBLICO
     hipotese_legal: str = ""
 
 
@@ -70,7 +74,7 @@ class NovoDocumentoInterno:
 
     id_serie: str = ""
     descricao: str = ""
-    nivel_acesso: str = "0"
+    nivel_acesso: str = NIVEL_ACESSO_PUBLICO
     hipotese_legal: str = ""
     id_unidade: str = ""
 
@@ -85,7 +89,7 @@ class NovoDocumentoExterno:
     nome_arquivo: str = ""
     descricao: str = ""
     data_elaboracao: str = ""
-    nivel_acesso: str = "0"
+    nivel_acesso: str = NIVEL_ACESSO_PUBLICO
     hipotese_legal: str = ""
     id_unidade: str = ""
 
@@ -116,8 +120,8 @@ class CredenciaisAssinatura:
     """Credenciais para assinatura eletrônica de documentos ou blocos."""
 
     login: str
-    senha: str
-    cargo: str
+    senha: str = field(repr=False)
+    cargo: str = ""
     orgao: str = ""
     id_usuario: str = ""
 
@@ -150,7 +154,7 @@ class SEIWebClientConfig:
     sei_verify_ssl: str | bool | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class NovoProcessoWeb:
     """Dados para criação de processo via scraper web."""
 
@@ -158,7 +162,7 @@ class NovoProcessoWeb:
     especificacao: str = ""
     assuntos_ids: list[str] | None = None
     interessados_ids: list[str] | None = None
-    nivel_acesso: str = "0"
+    nivel_acesso: str = NIVEL_ACESSO_PUBLICO
     hipotese_legal: str = ""
 
 
@@ -173,7 +177,7 @@ class OpcoesTramitacaoWeb:
     dias_retorno: str = ""
 
 
-@dataclass
+@dataclass(frozen=True)
 class DocumentoExternoInclusaoWeb:
     """Parâmetros de inclusão de documento externo via scraper web."""
 
@@ -181,6 +185,6 @@ class DocumentoExternoInclusaoWeb:
     nome_arquivo: str | None = None
     id_serie: str | None = None
     data_elaboracao: str = ""
-    nivel_acesso: str = "0"
+    nivel_acesso: str = NIVEL_ACESSO_PUBLICO
     hipotese_legal: str = ""
     conteudo: bytes | None = None

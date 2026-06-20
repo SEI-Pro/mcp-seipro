@@ -69,7 +69,11 @@ class _RestBase(_RestMixin):
         referencia = referencia.strip()
         if "." in referencia or "/" in referencia:
             proc = await self._rest.consultar_processo(referencia)
-            return str(proc.get("IdProcedimento", ""))
+            id_proc = str(proc.get("IdProcedimento", ""))
+            if not id_proc:
+                msg = f"Processo '{referencia}' não retornou IdProcedimento."
+                raise SEINotFoundError(msg)
+            return id_proc
         return referencia
 
     async def _resolver_documento(self, referencia: str) -> tuple[str, str]:
@@ -116,7 +120,7 @@ class _RestBase(_RestMixin):
             raw = await self._rest.visualizar_documento_interno(referencia)
             if raw and len(raw) > _MIN_DOC_CONTENT_LENGTH:
                 return referencia, "I"
-        except (SEIError, httpx.HTTPError) as exc:
+        except (SEIError, httpx.RequestError) as exc:
             logger.warning(
                 "Estratégia de visualização direta falhou ao resolver documento '%s': %s",
                 referencia,

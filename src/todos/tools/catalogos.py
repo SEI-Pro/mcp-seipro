@@ -19,6 +19,7 @@ from todos.responses import (
     GrupoModelos,
     HipoteseLegal,
     ModeloDocumento,
+    NextAction,
     PaginadoGenerico,
     TextoPadrao,
     TipoCatalogo,
@@ -62,15 +63,21 @@ async def sei_pesquisar_hipoteses_legais(
     if filtro:
         extra["filtro"] = filtro
     result["itens"] = result.pop("hipoteses", [])
-    return PaginadoGenerico[HipoteseLegal].model_validate(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_pesquisar_hipoteses_legais",
-            cursor_extra=extra,
-        )
+    paginado = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_pesquisar_hipoteses_legais",
+        cursor_extra=extra,
     )
+    paginado.setdefault("next_actions", []).append(
+        NextAction(
+            tool="sei_criar_processo",
+            args={"hipotese_legal": "<id da hipótese>"},
+            reason="Use o id retornado como hipotese_legal em sei_criar_processo ao criar processo restrito/sigiloso.",
+        ).model_dump()
+    )
+    return PaginadoGenerico[HipoteseLegal].model_validate(paginado)
 
 
 @mcp.tool(annotations=_READ)
@@ -112,15 +119,21 @@ async def sei_pesquisar_tipos_processo(
     if favoritos:
         extra["favoritos"] = favoritos
     result["itens"] = result.pop("tipos", [])
-    return PaginadoGenerico[TipoCatalogo].model_validate(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_pesquisar_tipos_processo",
-            cursor_extra=extra,
-        )
+    paginado = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_pesquisar_tipos_processo",
+        cursor_extra=extra,
     )
+    paginado.setdefault("next_actions", []).append(
+        NextAction(
+            tool="sei_criar_processo",
+            args={"tipo_processo": "<id do tipo>"},
+            reason="Use o id retornado como tipo_processo em sei_criar_processo.",
+        ).model_dump()
+    )
+    return PaginadoGenerico[TipoCatalogo].model_validate(paginado)
 
 
 @mcp.tool(annotations=_READ)
@@ -169,15 +182,21 @@ async def sei_pesquisar_tipos_documento(
     if aplicabilidade:
         extra["aplicabilidade"] = aplicabilidade
     result["itens"] = result.pop("tipos", [])
-    return PaginadoGenerico[TipoCatalogo].model_validate(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_pesquisar_tipos_documento",
-            cursor_extra=extra,
-        )
+    paginado = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_pesquisar_tipos_documento",
+        cursor_extra=extra,
     )
+    paginado.setdefault("next_actions", []).append(
+        NextAction(
+            tool="sei_criar_documento",
+            args={"id_serie": "<id do tipo>"},
+            reason="Use o id retornado como id_serie em sei_criar_documento.",
+        ).model_dump()
+    )
+    return PaginadoGenerico[TipoCatalogo].model_validate(paginado)
 
 
 @mcp.tool(annotations=_READ)
@@ -257,15 +276,21 @@ async def sei_pesquisar_tipos_conferencia(
     if filtro:
         extra["filtro"] = filtro
     result["itens"] = result.pop("tipos", [])
-    return PaginadoGenerico[TipoCatalogo].model_validate(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_pesquisar_tipos_conferencia",
-            cursor_extra=extra,
-        )
+    paginado = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_pesquisar_tipos_conferencia",
+        cursor_extra=extra,
     )
+    paginado.setdefault("next_actions", []).append(
+        NextAction(
+            tool="sei_criar_documento_externo",
+            args={"tipo_conferencia": "<id do tipo>"},
+            reason="Use o id retornado como tipo_conferencia em sei_criar_documento_externo.",
+        ).model_dump()
+    )
+    return PaginadoGenerico[TipoCatalogo].model_validate(paginado)
 
 
 @mcp.tool(annotations=_READ)
@@ -339,15 +364,21 @@ async def sei_pesquisar_contatos(
     if filtro:
         cursor_extra["filtro"] = filtro
     result["itens"] = result.pop("contatos", [])
-    return PaginadoGenerico[ContatoSEI].model_validate(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_pesquisar_contatos",
-            cursor_extra=cursor_extra,
-        )
+    paginado = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_pesquisar_contatos",
+        cursor_extra=cursor_extra,
     )
+    paginado.setdefault("next_actions", []).append(
+        NextAction(
+            tool="sei_criar_processo",
+            args={"interessados": ["<id do contato>"]},
+            reason="Use o id retornado no campo interessados em sei_criar_processo.",
+        ).model_dump()
+    )
+    return PaginadoGenerico[ContatoSEI].model_validate(paginado)
 
 
 @mcp.tool(annotations=_WRITE)

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from todos.backends.models import DocumentoExternoInclusaoWeb
 from todos.backends.web._session import _WebMixin
-from todos.exceptions import SEINotFoundError, SEINotImplementedError
+from todos.exceptions import SEINotFoundError, SEINotImplementedError, SEIValidationError
 from todos.html_utils import sanitize_iso8859
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,9 @@ class DocumentosWeb(_WebMixin):
     async def buscar_documento(self, numero_sei: str, processo: str = "") -> dict:
         """Busca um documento pelo número SEI."""
         numero_sei = numero_sei.strip()
+        if not numero_sei:
+            msg = "numero_sei não pode ser vazio"
+            raise SEIValidationError(msg)
 
         def _match(proto: str) -> bool:
             return proto == numero_sei or proto.lstrip("0") == numero_sei.lstrip("0")

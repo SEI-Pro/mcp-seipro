@@ -64,19 +64,6 @@ _CAMPOS_PESQUISA_PROCESSO: dict[str, str] = {
 }
 
 
-_CAMPOS_PESQUISA_PROCESSO: dict[str, str] = {
-    "palavras_chave": "palavrasChave",
-    "descricao": "descricao",
-    "busca_rapida": "buscaRapida",
-    "data_inicio": "dataInicio",
-    "data_fim": "dataFim",
-    "sta_tipo_data": "staTipoData",
-    "id_unidade_geradora": "idUnidadeGeradora",
-    "id_assunto": "idAssunto",
-    "grupo": "grupo",
-}
-
-
 class SEIClient:
     """Cliente REST assíncrono para qualquer instância do SEI com mod-wssei v2."""
 
@@ -238,7 +225,7 @@ class SEIClient:
                 msg = f"Recurso não encontrado: {method} {path}"
                 raise SEINotFoundError(msg)
             resp.raise_for_status()
-        except (httpx.TimeoutException, httpx.ConnectError) as e:
+        except httpx.TransportError as e:
             msg = f"SEI inacessível: {e}"
             raise SEIConnectionError(msg) from e
         except SEIError:
@@ -273,16 +260,25 @@ class SEIClient:
     async def autenticar(self) -> str:
         """Autentica no SEI e obtém token."""
         await self._buscar_senha_keyring()
-        resp = await self._client.post(
-            f"{self.base_url}/autenticar",
-            data={
-                "usuario": self._usuario,
-                "senha": self._senha,
-                "orgao": self._orgao,
-                "contexto": self._contexto,
-            },
-        )
-        resp.raise_for_status()
+        try:
+            resp = await self._client.post(
+                f"{self.base_url}/autenticar",
+                data={
+                    "usuario": self._usuario,
+                    "senha": self._senha,
+                    "orgao": self._orgao,
+                    "contexto": self._contexto,
+                },
+            )
+            resp.raise_for_status()
+        except httpx.TransportError as e:
+            msg = f"SEI inacessível durante autenticação: {e}"
+            raise SEIConnectionError(msg) from e
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                msg = "Credenciais rejeitadas pelo SEI REST (401/403)."
+                raise SEIAuthError(msg) from e
+            raise SEIError(str(e)) from e
         data = resp.json()
         if not data.get("sucesso"):
             msg = f"Falha na autenticação SEI: {data.get('mensagem')}"
@@ -397,6 +393,11 @@ class SEIClient:
         j2 = resp2.json()
         if not j2.get("sucesso"):
             # se a segunda call falhar, retorna pelo menos a primeira
+            logger.warning(
+                "consultar_processo_completo: segunda chamada falhou para %s: %s",
+                protocolo_formatado,
+                j2.get("mensagem"),
+            )
             return d1
         rich = j2.get("data", {}) or {}
 
@@ -494,14 +495,13 @@ class SEIClient:
             payload["idHipoteseLegal"] = id_hipotese_legal
 
         if arquivo_path:
-            headers = await self._get_headers()
-            _file_bytes = await asyncio.to_thread(Path(arquivo_path).read_bytes)
-            resp = await self._client.post(
-                f"{self.base_url}/documento/externo/{id_documento}/alterar",
-                headers=headers,
+            resp = await self._post_with_file_reopen(
+                url=f"{self.base_url}/documento/externo/{id_documento}/alterar",
+                arquivo_path=arquivo_path,
+                nome_arquivo=Path(arquivo_path).name,
                 data=payload,
-                files={"anexo": (Path(arquivo_path).name, _file_bytes)},
             )
+            resp.raise_for_status()
         else:
             resp = await self._request(
                 "POST", f"/documento/externo/{id_documento}/alterar", data=payload
@@ -1133,10 +1133,6 @@ class SEIClient:
         if not filtro and not favoritos:
             await self._cache_set(cache_key, result)
         return result
-
-    # ------------------------------------------------------------------
-    # Ciência
-    # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
     # Sobrestamento
@@ -1831,7 +1827,7 @@ class SEIClient:
         if resp.status_code in (401, 403):
             logger.info("Token expirado durante upload, re-autenticando...")
             await self.autenticar()
-            headers = {"token": self._token or ""}
+            headers = await self._get_headers()
             file_bytes = await asyncio.to_thread(Path(arquivo_path).read_bytes)
             resp = await self._client.post(
                 url,
@@ -1839,6 +1835,9 @@ class SEIClient:
                 data=data,
                 files={"anexo": (nome_arquivo, file_bytes)},
             )
+            if resp.status_code in (401, 403):
+                msg = "Credenciais rejeitadas durante upload após re-autenticação (401/403)."
+                raise SEIAuthError(msg)
         return resp
 
     async def criar_documento_externo(

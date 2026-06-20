@@ -22,7 +22,7 @@ from todos.mcp_app import (
     _json,
     mcp,
 )
-from todos.responses import ResultadoListaProcessos
+from todos.responses import NextAction, ResultadoListaProcessos
 
 
 @mcp.tool(annotations=_WRITE)
@@ -61,7 +61,7 @@ async def sei_incluir_processo_bloco_interno(
     return _json(result)
 
 
-@mcp.tool(annotations=_DEST)
+@mcp.tool(annotations=_WRITE)
 async def sei_retirar_processo_bloco_interno(
     id_bloco: str,
     processos: str,
@@ -106,15 +106,27 @@ async def sei_listar_processos_bloco_interno(
         "tem_proxima": len(all_items) > offset + limit,
         "itens_pagina": len(page_items),
     }
-    return ResultadoListaProcessos.model_validate(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_listar_processos_bloco_interno",
-            cursor_extra={"limit": limit},
-        )
+    enriched = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_listar_processos_bloco_interno",
+        cursor_extra={"limit": limit},
     )
+    primeiro_protocolo = (
+        page_items[0].get("protocoloFormatado", "") or page_items[0].get("protocolo", "")
+        if page_items
+        else ""
+    )
+    if primeiro_protocolo:
+        enriched["next_actions"].append(
+            NextAction(
+                tool="sei_consultar_processo",
+                args={"protocolo": primeiro_protocolo},
+                reason="Consulte o primeiro processo do bloco para ver detalhes e documentos.",
+            ).model_dump()
+        )
+    return ResultadoListaProcessos.model_validate(enriched)
 
 
 @mcp.tool(annotations=_IDEM)
@@ -148,7 +160,7 @@ async def sei_excluir_bloco_interno(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_concluir_bloco_interno(
     ids_blocos: str,
     ctx: Context | None = None,

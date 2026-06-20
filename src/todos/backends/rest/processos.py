@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,8 @@ if TYPE_CHECKING:
         FiltrosPesquisaProcessos,
         NovoProcesso,
     )
+
+logger = logging.getLogger(__name__)
 
 _RE_ID_NUMERICO = re.compile(r"^\d+$")
 _MAX_ERROS_LEN = 500
@@ -182,6 +185,7 @@ class ProcessosRest(_RestMixin):
             try:
                 return await self._rest.atribuir_processo(processo, str(id_usuario))
             except (SEIError, httpx.HTTPError) as e:
+                logger.warning("Falha ao atribuir processo a %s: %s", id_usuario, e)
                 erros.append(f"{u.get('nome', '')} ({u.get('sigla', '')}): {e}")
         tentativas_str = "; ".join(erros)
         if len(tentativas_str) > _MAX_ERROS_LEN:

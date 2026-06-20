@@ -138,7 +138,7 @@ async def _ler_documento_via_backend(
     if tipo_documento == "auto":
         try:
             raw = await backend.visualizar_documento_interno(str(id_documento), processo)
-        except (SEINotFoundError, SEIPermissionError, SEIConnectionError, SEINotImplementedError):
+        except (SEINotFoundError, SEIPermissionError, SEINotImplementedError):
             content = await backend.baixar_anexo(str(id_documento), processo)
             return _formatar_doc_externo(content, formato, disclaimer)
         return _formatar_doc_interno(raw, formato, disclaimer)
@@ -278,7 +278,20 @@ async def sei_baixar_anexo(
             return _json(payload)
 
         content = await backend.baixar_anexo(str(id_documento), processo)
-        return _envelopar_anexo(content, payload)
+        if len(content) > MAX_BINARY_SIZE:
+            msg = (
+                f"Documento muito grande ({len(content)} bytes, limite {MAX_BINARY_SIZE}). "
+                "Baixe manualmente pelo SEI."
+            )
+            raise SEIValidationError(msg)
+        resposta: dict = {
+            "base64": base64.b64encode(content).decode(),
+            "size_bytes": len(content),
+        }
+        if payload:
+            resposta["aviso_acesso"] = payload
+        resposta["_next"] = [{"tool": "sei_ler_documento", "args": {"id_documento": id_documento}}]
+        return _json(resposta)
     except httpx.RequestError as e:
         msg = f"SEI inacessível: {e}"
         raise SEIConnectionError(msg) from e
@@ -342,6 +355,7 @@ async def sei_listar_secoes(
     - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
     """
     result = await (await _backend(ctx)).listar_secoes(id_documento, processo=processo)
+    result["_next"] = [{"tool": "sei_editar_secao", "args": {"id_documento": id_documento}}]
     return _json(result)
 
 
@@ -378,6 +392,9 @@ async def sei_gerar_referencia(
                 "id_documento": doc_id,
                 "html": snippet,
                 "uso": f"...SEI n&ordm; {snippet}...",
+                "_next": [
+                    {"tool": "sei_editar_secao", "args": {"id_documento": doc_id}},
+                ],
             }
         )
     except httpx.RequestError as e:
@@ -659,8 +676,13 @@ async def sei_sugestao_assuntos_documento(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    result = await (await _backend(ctx)).sugestao_assuntos_documento(id_serie)
-    return _json(result)
+    assuntos = await (await _backend(ctx)).sugestao_assuntos_documento(id_serie)
+    return _json(
+        {
+            "assuntos": assuntos,
+            "_next": [{"tool": "sei_criar_processo", "args": {"assuntos": assuntos}}],
+        }
+    )
 
 
 @mcp.tool(annotations=_READ)
@@ -673,8 +695,10 @@ async def sei_listar_blocos_documento(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    result = await (await _backend(ctx)).listar_blocos_documento(id_documento)
-    return _json(result)
+    blocos = await (await _backend(ctx)).listar_blocos_documento(id_documento)
+    return _json(
+        {"blocos": blocos, "_next": [{"tool": "sei_consultar_processo", "args": {"protocolo": ""}}]}
+    )
 
 
 @mcp.tool(annotations=_WRITE)

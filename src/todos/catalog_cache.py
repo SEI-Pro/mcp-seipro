@@ -36,7 +36,9 @@ if CATALOG_CACHE_TTL <= 0:
     _ttl_zero_err = f"SEI_CACHE_TTL_SECONDS / CATALOG_CACHE_TTL deve ser positivo; recebido: {CATALOG_CACHE_TTL}"
     raise RuntimeError(_ttl_zero_err)
 _SWEEP_PROBABILITY = 0.05  # probabilistic expired-row sweep: run on ~5% of writes
-_rng = secrets.SystemRandom()  # non-crypto RNG for probabilistic sweep
+# secrets.SystemRandom used here to satisfy ruff S311; this is NOT a security use —
+# just a probabilistic sweep trigger that avoids importing the bare random module.
+_rng = secrets.SystemRandom()
 
 
 class CatalogCache:
@@ -96,6 +98,7 @@ class CatalogCache:
                 if expires_at > now:
                     return json.loads(val_str)
                 # Limpa entrada expirada
+                logger.debug("cache entry expired: %s/%s", namespace, key)
                 conn.execute("DELETE FROM catalogs WHERE key = ?", (db_key,))
         return None
 
@@ -168,7 +171,10 @@ class CatalogCache:
             return cursor.rowcount
 
     async def close(self) -> None:
-        """Feche o armazenamento em disco."""
+        """Feche o armazenamento em disco.
+
+        # SQLite connections are opened/closed per-call — nothing persistent to close here
+        """
 
 
 @lru_cache(maxsize=1)

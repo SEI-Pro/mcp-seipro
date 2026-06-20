@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
+import httpx
+
 from todos.backends.models import CredenciaisAssinatura
 from todos.backends.rest._session import _RestMixin
 from todos.backends.rest.catalogos import _validar_pagina
+from todos.exceptions import SEIError, SEIValidationError
+
+logger = logging.getLogger(__name__)
 
 
 class BlocosRest(_RestMixin):
@@ -148,24 +155,49 @@ class BlocosRest(_RestMixin):
         """Altera a anotação de um documento em um bloco de assinatura."""
         return await self._rest.alterar_anotacao_bloco_assinatura(id_bloco, documento, descricao)
 
+    async def _resolver_id_usuario(self) -> str:
+        """Resolve o id do usuário autenticado; levanta SEIValidationError se não encontrar."""
+        login = self._rest.usuario
+        id_usuario = await self._rest.garantir_autenticacao()
+        if not id_usuario:
+            try:
+                res = await self._rest.listar_usuarios(filtro=login, apenas_unidade=False)
+                for u in res.get("usuarios", []):
+                    if u.get("sigla", "").lower() == login.lower():
+                        raw = u.get("id_usuario")
+                        if raw is not None:
+                            id_usuario = str(raw)
+                        break
+            except (SEIError, httpx.HTTPError) as exc:
+                logger.warning(
+                    "Falha ao resolver id do usuário '%s' via listar_usuarios: %s", login, exc
+                )
+        if not id_usuario:
+            msg = (
+                f"Não foi possível resolver o id do usuário para o login '{login}'. "
+                "Verifique se o login está correto e se o usuário pertence à unidade ativa."
+            )
+            raise SEIValidationError(msg)
+        return id_usuario
+
     async def assinar_bloco(self, id_bloco: str, cargo: str = "") -> dict:
         """Assina todos os documentos de um bloco de assinatura."""
-        id_usuario = await self._rest.garantir_autenticacao()
+        id_usuario = await self._resolver_id_usuario()
         cred = CredenciaisAssinatura(
             login=self._rest.usuario,
             senha=self._rest.senha,
             cargo=cargo,
-            id_usuario=id_usuario or "",
+            id_usuario=id_usuario,
         )
         return await self._rest.assinar_bloco(id_bloco, cred)
 
     async def assinar_documentos_bloco(self, documentos: str, cargo: str = "") -> dict:
         """Assina documentos específicos de um bloco de assinatura."""
-        id_usuario = await self._rest.garantir_autenticacao()
+        id_usuario = await self._resolver_id_usuario()
         cred = CredenciaisAssinatura(
             login=self._rest.usuario,
             senha=self._rest.senha,
             cargo=cargo,
-            id_usuario=id_usuario or "",
+            id_usuario=id_usuario,
         )
         return await self._rest.assinar_documentos_bloco(cred, documentos)

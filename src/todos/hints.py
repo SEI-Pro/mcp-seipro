@@ -7,7 +7,10 @@ Override via SEI_HINTS env var with a JSON array of strings.
 from __future__ import annotations
 
 import json
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_HINTS: list[str] = [
     "Após listar processos, use sei_consultar_processo com o protocolo_formatado para ver detalhes.",
@@ -25,7 +28,8 @@ def get_hints() -> list[str]:
     if raw:
         try:
             parsed = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("SEI_HINTS inválido — usando hints padrão: %s", exc)
             return _DEFAULT_HINTS
         if isinstance(parsed, list):
             return [str(h) for h in parsed if str(h)]

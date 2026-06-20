@@ -626,7 +626,7 @@ async def sei_concluir_processo(numero_processo: str, ctx: Context | None = None
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_reabrir_processo(processo: str, ctx: Context | None = None) -> str:
     """Reabre um processo que foi concluído na unidade.
 
@@ -639,7 +639,7 @@ async def sei_reabrir_processo(processo: str, ctx: Context | None = None) -> str
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_receber_processo(
     processo: str,
     ctx: Context | None = None,
@@ -653,7 +653,7 @@ async def sei_receber_processo(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_remover_atribuicao(
     processo: str,
     ctx: Context | None = None,
@@ -667,7 +667,7 @@ async def sei_remover_atribuicao(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_remover_sobrestamento(
     processo: str,
     ctx: Context | None = None,
@@ -753,7 +753,7 @@ async def sei_criar_observacao(
     return _json(result)
 
 
-@mcp.tool(annotations=_IDEM)
+@mcp.tool(annotations=_WRITE)
 async def sei_marcar_nao_lido(
     numero_processo: str,
     ctx: Context | None = None,
@@ -787,7 +787,7 @@ async def sei_marcar_nao_lido(
     )
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_DEST)
 async def sei_executar_acao(
     processo: str,
     acao: str,

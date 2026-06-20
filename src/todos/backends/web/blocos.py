@@ -6,7 +6,7 @@ import asyncio
 import logging
 
 from todos.backends.web._session import _WebMixin
-from todos.exceptions import SEIError
+from todos.exceptions import SEIError, SEIValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,9 @@ class BlocosWeb(_WebMixin):
         levanta SEIError.
         """
         ids = [d.strip() for d in documentos.split(",") if d.strip()]
+        if not ids:
+            msg = "Lista vazia — forneça pelo menos um id."
+            raise SEIValidationError(msg)
         coros = [
             self._web.retirar_documento_bloco_assinatura_web(id_bloco, id_doc) for id_doc in ids
         ]
@@ -57,7 +60,9 @@ class BlocosWeb(_WebMixin):
         erros: list[str] = []
         resultados: list[dict] = []
         for id_doc, outcome in zip(ids, raw, strict=True):
-            if isinstance(outcome, BaseException):
+            if not isinstance(outcome, Exception) and isinstance(outcome, BaseException):
+                raise outcome
+            if isinstance(outcome, Exception):
                 logger.warning(
                     "Falha ao retirar documento %s do bloco %s: %s", id_doc, id_bloco, outcome
                 )
@@ -81,12 +86,17 @@ class BlocosWeb(_WebMixin):
         levanta SEIError.
         """
         ids = [b.strip() for b in ids_blocos.split(",") if b.strip()]
+        if not ids:
+            msg = "Lista vazia — forneça pelo menos um id."
+            raise SEIValidationError(msg)
         coros = [self._web.excluir_bloco_assinatura_web(id_bloco) for id_bloco in ids]
         raw = await asyncio.gather(*coros, return_exceptions=True)
         erros: list[str] = []
         resultados: list[dict] = []
         for id_bloco, outcome in zip(ids, raw, strict=True):
-            if isinstance(outcome, BaseException):
+            if not isinstance(outcome, Exception) and isinstance(outcome, BaseException):
+                raise outcome
+            if isinstance(outcome, Exception):
                 logger.warning("Falha ao excluir bloco %s: %s", id_bloco, outcome)
                 erros.append(f"{id_bloco}: {outcome}")
             else:
@@ -104,12 +114,17 @@ class BlocosWeb(_WebMixin):
         levanta SEIError.
         """
         ids = [b.strip() for b in ids_blocos.split(",") if b.strip()]
+        if not ids:
+            msg = "Lista vazia — forneça pelo menos um id."
+            raise SEIValidationError(msg)
         coros = [self._web.concluir_bloco_assinatura_web(id_bloco) for id_bloco in ids]
         raw = await asyncio.gather(*coros, return_exceptions=True)
         erros: list[str] = []
         resultados: list[dict] = []
         for id_bloco, outcome in zip(ids, raw, strict=True):
-            if isinstance(outcome, BaseException):
+            if not isinstance(outcome, Exception) and isinstance(outcome, BaseException):
+                raise outcome
+            if isinstance(outcome, Exception):
                 logger.warning("Falha ao concluir bloco %s: %s", id_bloco, outcome)
                 erros.append(f"{id_bloco}: {outcome}")
             else:
@@ -136,5 +151,9 @@ class BlocosWeb(_WebMixin):
     async def alterar_anotacao_bloco_assinatura(
         self, id_bloco: str, documento: str, descricao: str
     ) -> dict:
-        """Altera a anotação de um documento em um bloco de assinatura."""
+        """Altera a anotação de um documento em um bloco de assinatura.
+
+        Alias de `anotar_documento_bloco_assinatura`: o SEI usa o mesmo endpoint
+        para criar e alterar anotações de bloco (idempotente via POST).
+        """
         return await self._web.anotar_documento_bloco_assinatura_web(id_bloco, documento, descricao)
