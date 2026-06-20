@@ -69,7 +69,11 @@ class _RestBase(_RestMixin):
         referencia = referencia.strip()
         if "." in referencia or "/" in referencia:
             proc = await self._rest.consultar_processo(referencia)
-            return str(proc.get("IdProcedimento", ""))
+            id_proc = str(proc.get("IdProcedimento", ""))
+            if not id_proc:
+                msg = f"Processo '{referencia}' não retornou IdProcedimento."
+                raise SEINotFoundError(msg)
+            return id_proc
         return referencia
 
     async def _resolver_documento(self, referencia: str) -> tuple[str, str]:

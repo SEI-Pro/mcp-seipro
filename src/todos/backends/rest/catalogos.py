@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from todos.backends.rest._session import _RestMixin
+from todos.exceptions import SEIValidationError
 
 
 def _validar_pagina(pagina: int) -> None:
@@ -14,7 +15,7 @@ def _validar_pagina(pagina: int) -> None:
     """
     if pagina < 0:
         msg = f"pagina deve ser >= 0, recebido: {pagina}"
-        raise ValueError(msg)
+        raise SEIValidationError(msg)
 
 
 class CatalogosRest(_RestMixin):
