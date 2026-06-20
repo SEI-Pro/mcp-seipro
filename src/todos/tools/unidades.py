@@ -27,6 +27,7 @@ async def sei_unidade_atual(ctx: Context) -> str:
     """
     backend = await _backend(ctx)
     result = await backend.unidade_atual()
+    result.setdefault("_next", [{"tool": "sei_listar_processos", "args": {}}])
     return _json(result)
 
 
@@ -39,7 +40,13 @@ async def sei_listar_unidades(ctx: Context) -> str:
     """
     backend = await _backend(ctx)
     units = await backend.listar_unidades()
-    return _json({"data": units, "total": len(units)})
+    return _json(
+        {
+            "data": units,
+            "total": len(units),
+            "_next": [{"tool": "sei_trocar_unidade", "args": {"id_unidade": "<id da unidade>"}}],
+        }
+    )
 
 
 @mcp.tool(annotations=_IDEM)
@@ -114,6 +121,11 @@ async def sei_listar_usuarios(
     """
     backend = await _backend(ctx)
     result = await backend.listar_usuarios(filtro=filtro, apenas_unidade=apenas_unidade)
+    if isinstance(result, dict):
+        result.setdefault(
+            "_next",
+            [{"tool": "sei_atribuir_processo", "args": {"id_usuario": "<id do usuário>"}}],
+        )
     return _json(result)
 
 
@@ -139,6 +151,11 @@ async def sei_listar_orgaos(ctx: Context) -> str:
     """
     backend = await _backend(ctx)
     result = await backend.listar_orgaos()
+    if isinstance(result, dict):
+        result.setdefault(
+            "_next",
+            [{"tool": "sei_listar_contextos", "args": {"id_orgao": "<id do órgão>"}}],
+        )
     return _json(result)
 
 
@@ -250,6 +267,11 @@ async def sei_parametros_upload(ctx: Context) -> str:
     """
     backend = await _backend(ctx)
     result = await backend.parametros_upload()
+    if isinstance(result, dict):
+        result.setdefault(
+            "_next",
+            [{"tool": "sei_criar_documento_externo", "args": {}}],
+        )
     return _json(result)
 
 
@@ -263,6 +285,11 @@ async def sei_listar_assinantes(ctx: Context) -> str:
     """
     backend = await _backend(ctx)
     result = await backend.listar_assinantes()
+    if isinstance(result, dict):
+        result.setdefault(
+            "_next",
+            [{"tool": "sei_assinar_documento", "args": {"cargo": "<cargo do assinante>"}}],
+        )
     return _json(result)
 
 
@@ -275,4 +302,9 @@ async def sei_listar_orgaos_assinante(ctx: Context) -> str:
     """
     backend = await _backend(ctx)
     result = await backend.listar_orgaos_assinante()
+    if isinstance(result, dict):
+        result.setdefault(
+            "_next",
+            [{"tool": "sei_assinar_documento", "args": {"id_orgao_assinante": "<id do órgão>"}}],
+        )
     return _json(result)

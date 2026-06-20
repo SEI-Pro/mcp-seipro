@@ -151,7 +151,7 @@ async def _get_client(ctx: Context | None) -> SEIClient:
             try:
                 await evicted.close()
             except (httpx.TransportError, OSError, RuntimeError) as exc:
-                logger.debug("Falha ao fechar SEIClient evictado (ignorada): %s", exc)
+                logger.warning("Falha ao fechar SEIClient evictado (ignorada): %s", exc)
         return client
 
     client = ctx.lifespan_context.get("sei")
@@ -196,7 +196,7 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
             try:
                 await evicted.close()
             except (httpx.TransportError, OSError, RuntimeError) as exc:
-                logger.debug("Falha ao fechar SEIWebClient evictado (ignorada): %s", exc)
+                logger.warning("Falha ao fechar SEIWebClient evictado (ignorada): %s", exc)
         return client
 
     client = ctx.lifespan_context.get("sei_web")
@@ -222,9 +222,10 @@ async def _backend(ctx: Context | None) -> _SEIBackendV2:
     rest = await _get_client(ctx)
     try:
         web = await _get_web_client(ctx)
-    except SEIError:
+    except SEIError as exc:
         if _http_mode:
             raise
+        logger.debug("_backend: usando fallback SEIWebClient (stdio) — %s", exc)
         web = SEIWebClient()  # stdio fallback: web client not configured
     return build_backend(rest, web)
 
@@ -384,6 +385,7 @@ async def sei_status_resource(ctx: Context) -> str:
             linhas.append(f"  {marker} {u['sigla']} — {u['nome']} (id: {u.get('id_unidade', '?')})")
         return "\n".join(linhas)
     except (SEIError, httpx.HTTPError, AttributeError) as exc:
+        logger.warning("sei_status: erro ao consultar status — %s: %s", type(exc).__name__, exc)
         return f"Status: erro ao obter sessão — {exc}"
 
 
@@ -685,11 +687,13 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
     except SEIConnectionError:
         # Não mascarar uma falha de conectividade como "documento não encontrado".
         raise
-    except (SEIError, httpx.HTTPError):
+    except (SEIError, httpx.HTTPError) as exc:
         # A tentativa por id direto não resolveu (não encontrado, sem acesso, ou
         # um id que coincidiu com outro protocolo — não confiável). Desiste e cai
         # para o SEINotFoundError acionável abaixo.
-        pass
+        logger.debug(
+            "_resolver_documento: tentativa de id direto falhou (%s: %s)", type(exc).__name__, exc
+        )
 
     # Não tentar como externo automaticamente — risco alto de confusão id/proto
     # O fallback para externo só deve ser usado com id_procedimento conhecido
