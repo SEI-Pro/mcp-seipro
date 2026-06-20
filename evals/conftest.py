@@ -7,6 +7,11 @@ responses for fixture process 50300.001234/2025-00 — no live SEI, no network.
 from __future__ import annotations
 
 import importlib
+import importlib.util
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 import pytest
 
@@ -26,6 +31,13 @@ _TOOL_MODULES = [
     "todos.tools.processos",
     "todos.tools.unidades",
 ]
+
+
+def pytest_ignore_collect(collection_path: Path) -> bool | None:
+    """Skip test_evals.py when the anthropic package is not installed."""
+    if collection_path.name == "test_evals.py":
+        return importlib.util.find_spec("anthropic") is None
+    return None
 
 
 def pytest_configure(config: pytest.Config) -> None:
