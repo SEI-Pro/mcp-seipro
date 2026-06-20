@@ -77,7 +77,11 @@ class ListaAtividades(BaseModel):
     andamentos: list[Andamento]
     truncado: bool = Field(
         default=False,
-        description="True se há mais andamentos além do limite exibido (50)",
+        description="True se há mais andamentos além desta página",
+    )
+    next_actions: list[NextAction] = Field(
+        default_factory=list,
+        description="Próximas ações sugeridas (paginação via cursor)",
     )
 
 

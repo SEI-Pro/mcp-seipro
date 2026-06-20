@@ -35,6 +35,7 @@ from todos.mcp_app import (
     _add_cursor,
     _backend,
     _decode_cursor,
+    _encode_cursor,
     _json,
     _shape_resposta_escrita,
     access_control,
@@ -122,20 +123,45 @@ def _shape_lista_documentos(result: dict, protocolo: str, *, tool_name: str) -> 
     )
 
 
-def _shape_atividades(result: dict, *, ordem: str = "desc") -> ListaAtividades:
+def _shape_atividades(
+    result: dict,
+    *,
+    processo_ref: str = "",
+    ordem: str = "desc",
+    pagina: int = 0,
+) -> ListaAtividades:
     """Retorna andamentos em formato shaped a partir do payload bruto de listar_atividades."""
     raw: list[dict] = list(result.get("andamentos", []))
     # Raw list from web scraper is newest-first; reverse only when ascending order is requested.
     if ordem == "asc":
         raw.reverse()
     total = result.get("total_andamentos", len(raw))
-    truncated = raw[:_ATIVIDADES_LIMIT]
+    offset = pagina * _ATIVIDADES_LIMIT
+    page_items = raw[offset : offset + _ATIVIDADES_LIMIT]
+    has_more = (offset + len(page_items)) < total
     processo_info = ProcessoInfo.model_validate(result.get("processo", {}))
+    actions: list[NextAction] = []
+    if has_more:
+        next_cursor = _encode_cursor(pagina + 1)
+        ref = processo_ref or processo_info.protocolo
+        shown_start = offset + 1
+        shown_end = offset + len(page_items)
+        actions = [
+            NextAction(
+                tool="sei_listar_atividades",
+                args={"processo": ref, "cursor": next_cursor, "ordem": ordem},
+                reason=(
+                    f"Exibindo andamentos {shown_start}-{shown_end} de {total}; "
+                    "passe cursor para a próxima página."
+                ),
+            )
+        ]
     return ListaAtividades(
         processo=processo_info,
         total_andamentos=total,
-        andamentos=[Andamento(**a) for a in truncated],
-        truncado=total > _ATIVIDADES_LIMIT,
+        andamentos=[Andamento(**a) for a in page_items],
+        truncado=has_more,
+        next_actions=actions,
     )
 
 
@@ -422,6 +448,7 @@ async def sei_listar_atividades(
     ctx: Context | None = None,
     *,
     ordem: Literal["desc", "asc"] = "desc",
+    cursor: str = "",
     include_raw: bool = False,
 ) -> ListaAtividades | str:
     """Lista o histórico de atividades/andamentos de um processo.
@@ -434,14 +461,17 @@ async def sei_listar_atividades(
 
     Parâmetros:
     - ordem: "desc" (padrão — mais recente primeiro) ou "asc" (cronológica)
-    - include_raw: false (padrão) retorna até 50 andamentos shaped;
-      true retorna o payload bruto completo.
+    - cursor: cursor opaco de paginação — passe `next_actions[0].args.cursor`
+      da resposta anterior para obter a próxima página (50 andamentos/página).
+    - include_raw: false (padrão) retorna shaped com cursor;
+      true retorna o payload bruto completo (sem paginação).
     """
     backend = await _backend(ctx)
     result = await backend.listar_atividades(processo)
     if include_raw:
         return _json(result)
-    return _shape_atividades(result, ordem=ordem)
+    pagina = _decode_cursor(cursor).get("p", 0)
+    return _shape_atividades(result, processo_ref=processo, ordem=ordem, pagina=pagina)
 
 
 @mcp.tool(annotations=_READ)
