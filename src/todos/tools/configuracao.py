@@ -221,7 +221,7 @@ async def sei_detectar_formato_protocolo(
                 if persistido
                 else "keyring indisponível — configure SEI_PROTOCOLO_PATTERN manualmente."
             ),
-            "_next": ["sei_listar_processos"],
+            "_next": [{"tool": "sei_listar_processos", "args": {}}],
         }
     )
 
@@ -273,6 +273,6 @@ async def sei_redefinir_formato_protocolo(
                 "A entrada pode já ter sido removida anteriormente, ou o keyring está "
                 "bloqueado/indisponível. Verifique se o padrão persiste na próxima sessão."
             ),
-            "_next": ["sei_detectar_formato_protocolo"],
+            "_next": [{"tool": "sei_detectar_formato_protocolo", "args": {}}],
         }
     )

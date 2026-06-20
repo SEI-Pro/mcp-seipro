@@ -91,7 +91,7 @@ class _RestBase(_RestMixin):
                     continue
                 try:
                     docs = await self._rest.listar_documentos(id_proc, limit=200)
-                except (SEIError, httpx.HTTPError) as exc:
+                except (SEIError, httpx.RequestError) as exc:
                     logger.warning(
                         "Falha ao listar documentos do processo %s ao resolver '%s': %s",
                         id_proc,
@@ -109,7 +109,7 @@ class _RestBase(_RestMixin):
                             continue
                         tipo = d.get("atributos", {}).get("tipoDocumento", "I")
                         return doc_id, tipo
-        except (SEIError, httpx.HTTPError) as exc:
+        except (SEIError, httpx.RequestError) as exc:
             logger.warning(
                 "Estratégia de pesquisa Solr falhou ao resolver documento '%s': %s",
                 referencia,
@@ -120,7 +120,7 @@ class _RestBase(_RestMixin):
             raw = await self._rest.visualizar_documento_interno(referencia)
             if raw and len(raw) > _MIN_DOC_CONTENT_LENGTH:
                 return referencia, "I"
-        except (SEIError, httpx.HTTPError) as exc:
+        except (SEIError, httpx.RequestError) as exc:
             logger.warning(
                 "Estratégia de visualização direta falhou ao resolver documento '%s': %s",
                 referencia,
