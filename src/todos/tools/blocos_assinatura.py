@@ -23,7 +23,7 @@ from todos.mcp_app import (
     _json,
     mcp,
 )
-from todos.responses import BlocoAssinatura, DocumentoBloco, PaginadoGenerico
+from todos.responses import BlocoAssinatura, DocumentoBloco, NextAction, PaginadoGenerico
 
 
 @mcp.tool(annotations=_WRITE)
@@ -118,15 +118,23 @@ async def sei_pesquisar_blocos_assinatura(
     if filtro:
         extra["filtro"] = filtro
     result["itens"] = result.pop("blocos", [])
-    return PaginadoGenerico[BlocoAssinatura].model_validate(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_pesquisar_blocos_assinatura",
-            cursor_extra=extra,
-        )
+    enriched = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_pesquisar_blocos_assinatura",
+        cursor_extra=extra,
     )
+    bloco_id = enriched["itens"][0].get("id", "") if enriched.get("itens") else ""
+    if bloco_id:
+        enriched["next_actions"].append(
+            NextAction(
+                tool="sei_listar_documentos_bloco_assinatura",
+                args={"id_bloco": bloco_id},
+                reason="Liste os documentos do primeiro bloco para ver pendências de assinatura.",
+            ).model_dump()
+        )
+    return PaginadoGenerico[BlocoAssinatura].model_validate(enriched)
 
 
 @mcp.tool(annotations=_READ)
@@ -156,15 +164,21 @@ async def sei_listar_documentos_bloco_assinatura(
         "tem_proxima": len(all_items) > offset + limit,
         "itens_pagina": len(page_items),
     }
-    return PaginadoGenerico[DocumentoBloco].model_validate(
-        _add_cursor(
-            result,
-            pagina=pagina,
-            limit=limit,
-            tool_name="sei_listar_documentos_bloco_assinatura",
-            cursor_extra={"limit": limit},
-        )
+    enriched = _add_cursor(
+        result,
+        pagina=pagina,
+        limit=limit,
+        tool_name="sei_listar_documentos_bloco_assinatura",
+        cursor_extra={"limit": limit},
     )
+    enriched["next_actions"].append(
+        NextAction(
+            tool="sei_assinar_bloco",
+            args={"id_bloco": id_bloco},
+            reason="Assine todos os documentos deste bloco de uma vez.",
+        ).model_dump()
+    )
+    return PaginadoGenerico[DocumentoBloco].model_validate(enriched)
 
 
 @mcp.tool(annotations=_WRITE)

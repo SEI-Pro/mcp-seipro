@@ -165,8 +165,14 @@ async def sei_listar_assinaturas(
 
     """
     backend = await _backend(ctx)
-    result = await backend.listar_assinaturas(id_documento, processo=processo)
-    return _json(result)
+    assinaturas = await backend.listar_assinaturas(id_documento, processo=processo)
+    tem_nao_assinado = any(not a.get("assinado", True) for a in assinaturas if isinstance(a, dict))
+    next_hint: list[dict] = (
+        [{"tool": "sei_assinar_documento", "args": {"id_documento": id_documento}}]
+        if tem_nao_assinado
+        else []
+    )
+    return _json({"assinaturas": assinaturas, "_next": next_hint})
 
 
 @mcp.tool(annotations=_DEST)
@@ -255,5 +261,12 @@ async def sei_listar_ciencias(
 
     """
     backend = await _backend(ctx)
-    result = await backend.listar_ciencias(referencia, tipo=tipo, processo=processo)
-    return _json(result)
+    ciencias = await backend.listar_ciencias(referencia, tipo=tipo, processo=processo)
+    return _json(
+        {
+            "ciencias": ciencias,
+            "_next": [
+                {"tool": "sei_dar_ciencia", "args": {"referencia": referencia, "tipo": tipo}}
+            ],
+        }
+    )
