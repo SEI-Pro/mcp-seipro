@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from todos.backends.web._session import _WebMixin
+
+logger = logging.getLogger(__name__)
 
 
 class CatalogosWeb(_WebMixin):
@@ -26,10 +30,13 @@ class CatalogosWeb(_WebMixin):
         """
         del favoritos, pagina  # parâmetros do contrato não suportados pelo scraper
         result = await self._web.pesquisar_tipos_processo_web(filtro=filtro)
+        if "tipos" not in result:
+            logger.warning("pesquisar_tipos_processo: chave 'tipos' ausente na resposta do scraper")
         tipos = result.get("tipos", [])
+        total_before = len(tipos)
         if limit >= 0:
             tipos = tipos[:limit]
-        return {"tipos": tipos, "total_itens": len(tipos)}
+        return {"tipos": tipos, "total_itens": total_before}
 
     async def pesquisar_tipos_documento(
         self,
@@ -46,10 +53,15 @@ class CatalogosWeb(_WebMixin):
         """
         del favoritos, aplicabilidade, pagina  # parâmetros do contrato não suportados
         result = await self._web.pesquisar_tipos_documento_web(filtro=filtro)
+        if "tipos" not in result:
+            logger.warning(
+                "pesquisar_tipos_documento: chave 'tipos' ausente na resposta do scraper"
+            )
         tipos = result.get("tipos", [])
+        total_before = len(tipos)
         if limit >= 0:
             tipos = tipos[:limit]
-        return {"tipos": tipos, "total_itens": len(tipos)}
+        return {"tipos": tipos, "total_itens": total_before}
 
     async def pesquisar_tipos_documento_externo(
         self, filtro: str = "", limit: int = 50, pagina: int = 0
@@ -60,10 +72,15 @@ class CatalogosWeb(_WebMixin):
         """
         del pagina  # parâmetro do contrato não suportado pelo scraper
         result = await self._web.pesquisar_tipos_documento_externo_web(filtro=filtro)
+        if "tipos" not in result:
+            logger.warning(
+                "pesquisar_tipos_documento_externo: chave 'tipos' ausente na resposta do scraper"
+            )
         tipos = result.get("tipos", [])
+        total_before = len(tipos)
         if limit >= 0:
             tipos = tipos[:limit]
-        return {"tipos": tipos, "total_itens": len(tipos)}
+        return {"tipos": tipos, "total_itens": total_before}
 
     async def pesquisar_tipos_conferencia(
         self, filtro: str = "", limit: int = 50, pagina: int = 0
@@ -74,10 +91,15 @@ class CatalogosWeb(_WebMixin):
         """
         del pagina  # parâmetro do contrato não suportado pelo scraper
         result = await self._web.pesquisar_tipos_conferencia_web(filtro=filtro)
+        if "tipos" not in result:
+            logger.warning(
+                "pesquisar_tipos_conferencia: chave 'tipos' ausente na resposta do scraper"
+            )
         tipos = result.get("tipos", [])
+        total_before = len(tipos)
         if limit >= 0:
             tipos = tipos[:limit]
-        return {"tipos": tipos, "total_itens": len(tipos)}
+        return {"tipos": tipos, "total_itens": total_before}
 
     async def pesquisar_hipoteses_legais(
         self, filtro: str = "", limit: int = 50, pagina: int = 0
@@ -88,10 +110,15 @@ class CatalogosWeb(_WebMixin):
         """
         del pagina  # parâmetro do contrato não suportado pelo scraper
         result = await self._web.pesquisar_hipoteses_legais_web(filtro=filtro)
+        if "hipoteses" not in result:
+            logger.warning(
+                "pesquisar_hipoteses_legais: chave 'hipoteses' ausente na resposta do scraper"
+            )
         hipoteses = result.get("hipoteses", [])
+        total_before = len(hipoteses)
         if limit >= 0:
             hipoteses = hipoteses[:limit]
-        return {"hipoteses": hipoteses, "total_itens": len(hipoteses)}
+        return {"hipoteses": hipoteses, "total_itens": total_before}
 
     async def pesquisar_assuntos(self, filtro: str = "", limit: int = 50, pagina: int = 0) -> dict:
         """Pesquisa assuntos para classificação de processos.
@@ -123,10 +150,13 @@ class CatalogosWeb(_WebMixin):
         """
         del pagina  # parâmetro do contrato não suportado pelo scraper
         result = await self._web.listar_grupos_modelos_web()
+        if "grupos" not in result:
+            logger.warning("listar_grupos_modelos: chave 'grupos' ausente na resposta do scraper")
         grupos = result.get("grupos", [])
+        total_before = len(grupos)
         if limit >= 0:
             grupos = grupos[:limit]
-        return {"grupos": grupos, "total_itens": len(grupos)}
+        return {"grupos": grupos, "total_itens": total_before}
 
     async def listar_modelos(
         self, id_grupo: str = "", filtro: str = "", limit: int = 50, pagina: int = 0
@@ -137,7 +167,10 @@ class CatalogosWeb(_WebMixin):
         """
         del pagina  # parâmetro do contrato não suportado pelo scraper
         result = await self._web.listar_modelos_web(filtro=filtro, id_grupo=id_grupo)
+        if "modelos" not in result:
+            logger.warning("listar_modelos: chave 'modelos' ausente na resposta do scraper")
         modelos = result.get("modelos", [])
+        total_before = len(modelos)
         if limit >= 0:
             modelos = modelos[:limit]
-        return {"modelos": modelos, "total_itens": len(modelos)}
+        return {"modelos": modelos, "total_itens": total_before}

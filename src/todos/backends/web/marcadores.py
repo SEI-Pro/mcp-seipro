@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from todos.backends.web._session import _WebMixin
+
+logger = logging.getLogger(__name__)
 
 
 class MarcadoresWeb(_WebMixin):
@@ -34,6 +38,10 @@ class MarcadoresWeb(_WebMixin):
         aplicado no cliente após obter a lista completa.
         """
         result = await self._web.pesquisar_marcadores_web(filtro=filtro)
+        if "marcadores" not in result:
+            logger.warning(
+                "pesquisar_marcadores: chave 'marcadores' ausente na resposta do scraper"
+            )
         marcadores = result.get("marcadores", [])
         if limit >= 0:
             marcadores = marcadores[:limit]

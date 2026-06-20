@@ -8,10 +8,14 @@ indica erro retornado pelo próprio SEI (processo inexistente, sem permissão et
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from todos.backends.web._session import _WebMixin
 from todos.exceptions import SEIConnectionError
+
+logger = logging.getLogger(__name__)
 
 
 class AcompanhamentoWeb(_WebMixin):
@@ -54,12 +58,20 @@ class AcompanhamentoWeb(_WebMixin):
 
     async def listar_meus_acompanhamentos(self, limit: int = 50, pagina: int = 0) -> dict:
         """Lista os acompanhamentos especiais do usuário."""
-        del pagina  # contrato exige o parâmetro; o scraper aplica o limite sem paginar por offset
+        if pagina > 0:
+            logger.warning(
+                "sei_listar_meus_acompanhamentos: paginação não suportada em modo web"
+                " — retornando página 0"
+            )
         return await self._web.listar_meus_acompanhamentos_web(limit=limit)
 
     async def listar_acompanhamentos_unidade(self, limit: int = 50, pagina: int = 0) -> dict:
         """Lista os acompanhamentos especiais da unidade."""
-        del pagina  # contrato exige o parâmetro; o scraper aplica o limite sem paginar por offset
+        if pagina > 0:
+            logger.warning(
+                "sei_listar_acompanhamentos_unidade: paginação não suportada em modo web"
+                " — retornando página 0"
+            )
         return await self._web.listar_acompanhamentos_unidade_web(limit=limit)
 
     async def listar_grupos_acompanhamento(self, filtro: str = "") -> dict:

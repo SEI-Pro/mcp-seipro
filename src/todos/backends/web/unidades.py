@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from todos.backends.web._session import _WebMixin
 from todos.exceptions import SEINotImplementedError
+
+logger = logging.getLogger(__name__)
 
 
 class UnidadesWeb(_WebMixin):
@@ -29,6 +33,10 @@ class UnidadesWeb(_WebMixin):
         # pesquisar_outras_unidades, esta op deve incluí-la. Reinsere-a quando
         # casa o filtro (mesma forma {id, sigla, nome} dos demais itens).
         atual = await self._web.unidade_atual()
+        if "sigla" not in atual:
+            logger.warning(
+                "pesquisar_unidades: unidade atual sem campo 'sigla' — excluindo de deduplicação"
+            )
         sigla = atual.get("sigla", "")
         nome = atual.get("nome", "")
         f = (filtro or "").lower()

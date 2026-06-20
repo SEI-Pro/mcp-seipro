@@ -26,7 +26,7 @@ try:
 
     _HAS_OCR = True
 except ImportError:
-    pass
+    logging.getLogger(__name__).debug("pytesseract/pdf2image não disponíveis — OCR desabilitado")
 
 # Optional PDF text-extraction dep
 _pdfplumber: ModuleType | None = None
@@ -39,7 +39,9 @@ try:
 
     _HAS_PDFPLUMBER = True
 except ImportError:
-    pass
+    logging.getLogger(__name__).debug(
+        "pdfplumber não disponível — extração de texto PDF desabilitada"
+    )
 
 logger = logging.getLogger(__name__)
 
