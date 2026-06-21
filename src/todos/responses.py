@@ -187,6 +187,8 @@ class UnidadeSEI(BaseModel):
             d = cast("dict[str, object]", data)
             if not d.get("id") and "id_unidade" in d:
                 d["id"] = d["id_unidade"]
+            if not d.get("sigla") and "unidade" in d:
+                d["sigla"] = d["unidade"]
         return data
 
 
@@ -300,13 +302,15 @@ class DocumentoBloco(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class InteressadoSEI(BaseModel):
+class InteressadoSEI(ItemSEI):
     """Interessado cadastrado em um processo SEI."""
 
-    model_config = ConfigDict(extra="allow")
-
-    id: str = Field(default="", description="Identificador interno do interessado")
-    nome: str = Field(default="", description="Nome do interessado")
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_entrada(cls, data: object) -> object:
+        if isinstance(data, str):
+            return {"nome": data}
+        return data
 
 
 class SobrestamentoSEI(BaseModel):
