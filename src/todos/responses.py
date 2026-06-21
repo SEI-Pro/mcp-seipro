@@ -225,6 +225,8 @@ class CredenciamentoSEI(BaseModel):
             d = cast("dict[str, object]", data)
             if not d.get("id") and "idUsuario" in d:
                 d["id"] = d["idUsuario"]
+            elif not d.get("id") and "id_usuario" in d:
+                d["id"] = d["id_usuario"]
             if not d.get("sigla") and "login" in d:
                 d["sigla"] = d["login"]
         return data

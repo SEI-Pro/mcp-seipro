@@ -27,17 +27,27 @@ async def sei_listar_credenciamentos(
     backend = await _backend(ctx)
     raw = await backend.listar_credenciamentos(processo)
     itens = [CredenciamentoSEI.model_validate(c) for c in raw]
+    if itens:
+        actions = [
+            NextAction(
+                tool="sei_cassar_credenciamento",
+                args={"processo": processo},
+                reason="Revogar acesso de um usuário credenciado neste processo sigiloso.",
+            )
+        ]
+    else:
+        actions = [
+            NextAction(
+                tool="sei_conceder_credenciamento",
+                args={"processo": processo},
+                reason="Nenhum credenciamento encontrado — conceder acesso ao primeiro usuário.",
+            )
+        ]
     return PaginadoGenerico[CredenciamentoSEI](
         total_itens=len(itens),
         proximo_cursor=None,
         itens=itens,
-        next_actions=[
-            NextAction(
-                tool="sei_conceder_credenciamento",
-                args={"processo": processo},
-                reason="Conceder acesso a outro usuário no mesmo processo sigiloso.",
-            )
-        ],
+        next_actions=actions,
     )
 
 
