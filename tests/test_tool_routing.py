@@ -1182,3 +1182,87 @@ def test_listar_atividades_ordem_asc(monkeypatch: pytest.MonkeyPatch) -> None:
     # After reverse, A (older) should come first
     assert result.andamentos[0].descricao == "A"
     assert result.andamentos[1].descricao == "B"
+
+
+def test_listar_atividades_next_action_when_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sei_listar_atividades populates next_actions when more pages exist."""
+    fake = RecordingBackend(
+        {
+            "processo": {"protocolo": "50300.000123/2025-00", "id_procedimento": "P1"},
+            "total_andamentos": 51,
+            "andamentos": [
+                {
+                    "data_hora": f"19/06/2026 {i:02d}:00:00",
+                    "unidade": "GPF",
+                    "usuario": "u",
+                    "descricao": f"Acao {i}",
+                }
+                for i in range(51)
+            ],
+        }
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
+    assert result.truncado
+    assert len(result.next_actions) == 1
+    action = result.next_actions[0]
+    assert action.tool == "sei_listar_atividades"
+    assert "cursor" in action.args
+    assert action.args["processo"] == "50300.000123/2025-00"
+
+
+def test_listar_atividades_no_next_action_when_fits_in_one_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """next_actions is empty when all andamentos fit on the first page."""
+    fake = RecordingBackend(
+        {
+            "processo": {"protocolo": "50300.000123/2025-00", "id_procedimento": "P1"},
+            "total_andamentos": 3,
+            "andamentos": [
+                {"data_hora": "19/06/2026 10:00:00", "unidade": "", "usuario": "", "descricao": "X"}
+                for _ in range(3)
+            ],
+        }
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
+    assert not result.truncado
+    assert result.next_actions == []
+
+
+def test_listar_atividades_cursor_fetches_next_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Passing cursor from next_actions returns the next 50 andamentos."""
+    andamentos = [
+        {
+            "data_hora": f"19/06/2026 {i:02d}:00:00",
+            "unidade": "",
+            "usuario": "",
+            "descricao": f"A{i}",
+        }
+        for i in range(75)
+    ]
+    fake = RecordingBackend(
+        {
+            "processo": {"protocolo": "50300.000123/2025-00", "id_procedimento": "P1"},
+            "total_andamentos": 75,
+            "andamentos": andamentos,
+        }
+    )
+    monkeypatch.setattr(processos, "_backend", aconst(fake))
+
+    # First page
+    page1 = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
+    assert len(page1.andamentos) == 50
+    assert page1.truncado
+    cursor = page1.next_actions[0].args["cursor"]
+
+    # Second page via cursor
+    page2 = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00", cursor=cursor))
+    assert len(page2.andamentos) == 25
+    assert not page2.truncado
+    assert page2.next_actions == []
+    # Items on page 2 are offset by 50
+    assert page2.andamentos[0].descricao == "A50"
