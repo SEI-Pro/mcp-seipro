@@ -115,6 +115,66 @@ T1_CASES: list[tuple[str, str]] = [
         "Assine o documento 2843449 com o cargo de Analista",
         "sei_assinar_documento",
     ),
+    (
+        "Abra um novo processo do tipo 'Contratos: Celebração'",
+        "sei_criar_processo",
+    ),
+    (
+        "Pesquise processos que mencionam 'licitação' no conteúdo",
+        "sei_pesquisar_processos",
+    ),
+    (
+        "Registre um andamento manual no processo 50300.001234/2025-00 descrevendo a ação tomada",
+        "sei_registrar_andamento",
+    ),
+    (
+        "Quem assinou o documento 2843449?",
+        "sei_listar_assinaturas",
+    ),
+    (
+        "Quais hipóteses legais existem para classificar um documento como restrito?",
+        "sei_pesquisar_hipoteses_legais",
+    ),
+    (
+        "Pesquise assuntos de classificação com 'ambiental' para usar no processo",
+        "sei_pesquisar_assuntos",
+    ),
+    (
+        "Pesquise contatos cadastrados no SEI pelo nome 'Silva'",
+        "sei_pesquisar_contatos",
+    ),
+    (
+        "Adicione o processo 50300.001234/2025-00 ao meu acompanhamento especial",
+        "sei_acompanhar_processo",
+    ),
+    (
+        "Liste os processos que estou acompanhando especialmente",
+        "sei_listar_meus_acompanhamentos",
+    ),
+    (
+        "Crie um bloco de assinatura com a descrição 'Despachos de junho'",
+        "sei_criar_bloco_assinatura",
+    ),
+    (
+        "Sobrestei o processo 50300.001234/2025-00 aguardando decisão judicial",
+        "sei_sobrestar_processo",
+    ),
+    (
+        "Dê ciência ao documento 2843449",
+        "sei_dar_ciencia",
+    ),
+    (
+        "Qual é a unidade atualmente ativa na minha sessão SEI?",
+        "sei_unidade_atual",
+    ),
+    (
+        "Liste os usuários disponíveis na minha unidade",
+        "sei_listar_usuarios",
+    ),
+    (
+        "Gere o PDF completo do processo 50300.001234/2025-00",
+        "sei_gerar_pdf_processo",
+    ),
 ]
 
 
