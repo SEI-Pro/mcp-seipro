@@ -27,6 +27,7 @@ from todos.mcp_app import (
     _json,
     mcp,
 )
+from todos.responses import AssinaturaSEI, NextAction, PaginadoGenerico
 
 if TYPE_CHECKING:
     from todos.backends.base import SEIBackend
@@ -157,7 +158,7 @@ async def sei_listar_assinaturas(
     id_documento: str,
     processo: str | None = None,
     ctx: Context | None = None,
-) -> str:
+) -> PaginadoGenerico[AssinaturaSEI]:
     """Lista as assinaturas de um documento.
 
     - id_documento: id interno do documento
@@ -165,14 +166,26 @@ async def sei_listar_assinaturas(
 
     """
     backend = await _backend(ctx)
-    assinaturas = await backend.listar_assinaturas(id_documento, processo=processo)
-    tem_nao_assinado = any(not a.get("assinado", True) for a in assinaturas if isinstance(a, dict))
-    next_hint: list[dict] = (
-        [{"tool": "sei_assinar_documento", "args": {"id_documento": id_documento}}]
+    raw = await backend.listar_assinaturas(id_documento, processo=processo)
+    itens = [AssinaturaSEI.model_validate(a) for a in raw]
+    tem_nao_assinado = any(not a.get("assinado", True) for a in raw if isinstance(a, dict))
+    actions = (
+        [
+            NextAction(
+                tool="sei_assinar_documento",
+                args={"id_documento": id_documento},
+                reason="Há assinaturas pendentes neste documento.",
+            )
+        ]
         if tem_nao_assinado
         else []
     )
-    return _json({"assinaturas": assinaturas, "_next": next_hint})
+    return PaginadoGenerico[AssinaturaSEI](
+        total_itens=len(itens),
+        proximo_cursor=None,
+        itens=itens,
+        next_actions=actions,
+    )
 
 
 @mcp.tool(annotations=_DEST)

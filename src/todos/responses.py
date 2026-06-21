@@ -187,6 +187,8 @@ class UnidadeSEI(BaseModel):
             d = cast("dict[str, object]", data)
             if not d.get("id") and "id_unidade" in d:
                 d["id"] = d["id_unidade"]
+            if not d.get("sigla") and "unidade" in d:
+                d["sigla"] = d["unidade"]
         return data
 
 
@@ -298,6 +300,73 @@ class DocumentoBloco(BaseModel):
 # ---------------------------------------------------------------------------
 # Respostas paginadas especializadas (mantêm campos extras além de `itens`)
 # ---------------------------------------------------------------------------
+
+
+class InteressadoSEI(ItemSEI):
+    """Interessado cadastrado em um processo SEI."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_entrada(cls, data: object) -> object:
+        if isinstance(data, str):
+            return {"nome": data}
+        return data
+
+
+class SobrestamentoSEI(BaseModel):
+    """Evento de sobrestamento ou dessobrestamento de um processo."""
+
+    model_config = ConfigDict(extra="allow")
+
+    data: str = Field(default="", description="Data do evento, ex: '10/05/2025'")
+    motivo: str = Field(default="", description="Motivo informado ao sobrestar")
+    tipo: str = Field(
+        default="",
+        description="'sobrestamento' ou 'dessobrestamento'",
+    )
+
+
+class AtribuicaoSEI(BaseModel):
+    """Atribuição atual de um processo (quem está responsável)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    login: str = Field(default="", description="Login/sigla do usuário atribuído")
+    nome: str = Field(default="", description="Nome completo do usuário atribuído")
+    atribuido: bool = Field(
+        default=False,
+        description="True se há um usuário atribuído; False se o processo está sem atribuição",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_campos(cls, data: object) -> object:
+        if isinstance(data, dict):
+            d = cast("dict[str, object]", data)
+            if not d.get("login") and "id_usuario" in d:
+                d["login"] = d["id_usuario"]
+            if "atribuido" not in d:
+                d["atribuido"] = bool(d.get("login") or d.get("id_usuario") or d.get("nome"))
+        return data
+
+
+class AssinaturaSEI(BaseModel):
+    """Assinatura de um documento interno SEI."""
+
+    model_config = ConfigDict(extra="allow")
+
+    assinante: str = Field(default="", description="Nome ou login do assinante")
+    cargo: str = Field(default="", description="Cargo utilizado na assinatura")
+    data_hora: str = Field(default="", description="Data e hora da assinatura")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_campos(cls, data: object) -> object:
+        if isinstance(data, dict):
+            d = cast("dict[str, object]", data)
+            if not d.get("assinante") and "nome" in d:
+                d["assinante"] = d["nome"]
+        return data
 
 
 class ResultadoPesquisaProcessos(Paginado):
