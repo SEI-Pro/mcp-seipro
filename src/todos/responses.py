@@ -209,6 +209,27 @@ class UsuarioSEI(BaseModel):
         return data
 
 
+class CredenciamentoSEI(BaseModel):
+    """Usuário credenciado em um processo sigiloso."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(default="", description="Identificador interno do usuário")
+    nome: str = Field(default="", description="Nome completo do usuário")
+    sigla: str = Field(default="", description="Login/sigla do usuário")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_campos(cls, data: object) -> object:
+        if isinstance(data, dict):
+            d = cast("dict[str, object]", data)
+            if not d.get("id") and "idUsuario" in d:
+                d["id"] = d["idUsuario"]
+            if not d.get("sigla") and "login" in d:
+                d["sigla"] = d["login"]
+        return data
+
+
 class AcompanhamentoSEI(BaseModel):
     """Processo em acompanhamento especial."""
 

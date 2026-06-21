@@ -54,7 +54,7 @@ from todos.mcp_app import (
     _shape_resposta_escrita,
     mcp,
 )
-from todos.responses import RespostaEscrita
+from todos.responses import BlocoAssinatura, PaginadoGenerico, RespostaEscrita
 from todos.sei_styles import (
     SEI_STYLES,
     STYLE_SHORTCUTS,
@@ -689,15 +689,18 @@ async def sei_sugestao_assuntos_documento(
 async def sei_listar_blocos_documento(
     id_documento: str,
     ctx: Context | None = None,
-) -> str:
+) -> PaginadoGenerico[BlocoAssinatura]:
     """Lista blocos de assinatura em que um documento está incluído.
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    blocos = await (await _backend(ctx)).listar_blocos_documento(id_documento)
-    return _json(
-        {"blocos": blocos, "_next": [{"tool": "sei_pesquisar_blocos_assinatura", "args": {}}]}
+    raw = await (await _backend(ctx)).listar_blocos_documento(id_documento)
+    itens = [BlocoAssinatura.model_validate(b) for b in raw]
+    return PaginadoGenerico[BlocoAssinatura](
+        total_itens=len(itens),
+        proximo_cursor=None,
+        itens=itens,
     )
 
 
