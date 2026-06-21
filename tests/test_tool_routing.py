@@ -1236,7 +1236,12 @@ def test_listar_atividades_no_next_action_when_fits_in_one_page(
 def test_listar_atividades_cursor_fetches_next_page(monkeypatch: pytest.MonkeyPatch) -> None:
     """Passing cursor from next_actions returns the next 50 andamentos."""
     andamentos = [
-        {"data_hora": f"19/06/2026 {i:02d}:00:00", "unidade": "", "usuario": "", "descricao": f"A{i}"}
+        {
+            "data_hora": f"19/06/2026 {i:02d}:00:00",
+            "unidade": "",
+            "usuario": "",
+            "descricao": f"A{i}",
+        }
         for i in range(75)
     ]
     fake = RecordingBackend(

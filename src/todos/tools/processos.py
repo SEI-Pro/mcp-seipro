@@ -470,7 +470,11 @@ async def sei_listar_atividades(
     result = await backend.listar_atividades(processo)
     if include_raw:
         return _json(result)
-    pagina = _decode_cursor(cursor).get("p", 0)
+    try:
+        pagina = int(_decode_cursor(cursor).get("p", 0))
+    except (ValueError, TypeError) as exc:
+        msg = f"cursor inválido: {exc}"
+        raise SEIValidationError(msg) from exc
     return _shape_atividades(result, processo_ref=processo, ordem=ordem, pagina=pagina)
 
 
