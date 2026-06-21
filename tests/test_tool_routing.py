@@ -62,10 +62,14 @@ for _m in _MODULES:
 
 _LIST_RETURNING_OPS: frozenset[str] = frozenset(
     {
-        "listar_credenciamentos",
+        "listar_assinaturas",
         "listar_blocos_documento",
-        "listar_processos_bloco_interno",
+        "listar_credenciamentos",
         "listar_documentos_bloco_assinatura",
+        "listar_interessados",
+        "listar_processos_bloco_interno",
+        "listar_sobrestamentos",
+        "listar_unidades_processo",
     }
 )
 

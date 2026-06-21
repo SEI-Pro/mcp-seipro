@@ -43,14 +43,19 @@ from todos.mcp_app import (
 )
 from todos.responses import (
     Andamento,
+    AtribuicaoSEI,
     DocumentoResumo,
+    InteressadoSEI,
     ListaAtividades,
     ListaDocumentos,
     NextAction,
+    PaginadoGenerico,
     ProcessoDetalhe,
     ProcessoInfo,
     RespostaEscrita,
     ResultadoListaProcessos,
+    SobrestamentoSEI,
+    UnidadeSEI,
 )
 from todos.tools.configuracao import _ProtocoloFormatado
 
@@ -326,7 +331,7 @@ async def sei_listar_documentos(
 async def sei_listar_unidades_processo(
     processo: str,
     ctx: Context | None = None,
-) -> str:
+) -> PaginadoGenerico[UnidadeSEI]:
     """Lista as unidades onde o processo está aberto atualmente.
 
     - processo: protocolo formatado (ex: 50300.000123/2025-00) ou IdProcedimento
@@ -335,15 +340,16 @@ async def sei_listar_unidades_processo(
     quais setores o processo está distribuído antes de tramitar ou consultar.
     """
     backend = await _backend(ctx)
-    result = await backend.listar_unidades_processo(processo)
-    return _json(result)
+    raw = await backend.listar_unidades_processo(processo)
+    itens = [UnidadeSEI.model_validate(u) for u in raw]
+    return PaginadoGenerico[UnidadeSEI](total_itens=len(itens), proximo_cursor=None, itens=itens)
 
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_interessados(
     processo: str,
     ctx: Context | None = None,
-) -> str:
+) -> PaginadoGenerico[InteressadoSEI]:
     """Lista os interessados cadastrados em um processo.
 
     - processo: protocolo formatado (ex: 50300.000123/2025-00) ou IdProcedimento
@@ -352,15 +358,18 @@ async def sei_listar_interessados(
     ou auditar os interessados antes de alterar o processo via sei_alterar_processo.
     """
     backend = await _backend(ctx)
-    result = await backend.listar_interessados(processo)
-    return _json(result)
+    raw = await backend.listar_interessados(processo)
+    itens = [InteressadoSEI.model_validate(i) for i in raw]
+    return PaginadoGenerico[InteressadoSEI](
+        total_itens=len(itens), proximo_cursor=None, itens=itens
+    )
 
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_sobrestamentos(
     processo: str,
     ctx: Context | None = None,
-) -> str:
+) -> PaginadoGenerico[SobrestamentoSEI]:
     """Lista o histórico de sobrestamentos de um processo.
 
     - processo: protocolo formatado (ex: 50300.000123/2025-00) ou IdProcedimento
@@ -370,15 +379,18 @@ async def sei_listar_sobrestamentos(
     o processo ativo.
     """
     backend = await _backend(ctx)
-    result = await backend.listar_sobrestamentos(processo)
-    return _json(result)
+    raw = await backend.listar_sobrestamentos(processo)
+    itens = [SobrestamentoSEI.model_validate(s) for s in raw]
+    return PaginadoGenerico[SobrestamentoSEI](
+        total_itens=len(itens), proximo_cursor=None, itens=itens
+    )
 
 
 @mcp.tool(annotations=_READ)
 async def sei_consultar_atribuicao(
     processo: str,
     ctx: Context | None = None,
-) -> str:
+) -> AtribuicaoSEI:
     """Consulta a atribuição atual de um processo (quem está responsável).
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
@@ -387,7 +399,7 @@ async def sei_consultar_atribuicao(
     """
     backend = await _backend(ctx)
     result = await backend.consultar_atribuicao(processo)
-    return _json(result)
+    return AtribuicaoSEI.model_validate(result)
 
 
 @mcp.tool(annotations=_READ)
