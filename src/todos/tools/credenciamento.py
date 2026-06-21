@@ -11,21 +11,44 @@ ser objetos reais (não strings adiadas).
 from fastmcp import Context
 
 from todos.mcp_app import _DEST, _READ, _backend, _json, mcp
+from todos.responses import CredenciamentoSEI, NextAction, PaginadoGenerico
 
 
 @mcp.tool(annotations=_READ)
 async def sei_listar_credenciamentos(
     processo: str,
     ctx: Context | None = None,
-) -> str:
+) -> PaginadoGenerico[CredenciamentoSEI]:
     """Lista credenciamentos de acesso a um processo sigiloso.
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
     backend = await _backend(ctx)
-    result = await backend.listar_credenciamentos(processo)
-    return _json(result)
+    raw = await backend.listar_credenciamentos(processo)
+    itens = [CredenciamentoSEI.model_validate(c) for c in raw]
+    if itens:
+        actions = [
+            NextAction(
+                tool="sei_cassar_credenciamento",
+                args={"processo": processo},
+                reason="Revogar acesso de um usuário credenciado neste processo sigiloso.",
+            )
+        ]
+    else:
+        actions = [
+            NextAction(
+                tool="sei_conceder_credenciamento",
+                args={"processo": processo},
+                reason="Nenhum credenciamento encontrado — conceder acesso ao primeiro usuário.",
+            )
+        ]
+    return PaginadoGenerico[CredenciamentoSEI](
+        total_itens=len(itens),
+        proximo_cursor=None,
+        itens=itens,
+        next_actions=actions,
+    )
 
 
 @mcp.tool(annotations=_DEST)

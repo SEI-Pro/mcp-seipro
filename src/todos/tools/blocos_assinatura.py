@@ -171,13 +171,14 @@ async def sei_listar_documentos_bloco_assinatura(
         tool_name="sei_listar_documentos_bloco_assinatura",
         cursor_extra={"limit": limit},
     )
-    enriched["next_actions"].append(
-        NextAction(
-            tool="sei_assinar_bloco",
-            args={"id_bloco": id_bloco},
-            reason="Assine todos os documentos deste bloco de uma vez.",
-        ).model_dump()
-    )
+    if page_items:
+        enriched["next_actions"].append(
+            NextAction(
+                tool="sei_assinar_bloco",
+                args={"id_bloco": id_bloco},
+                reason="Assine todos os documentos deste bloco de uma vez.",
+            ).model_dump()
+        )
     return PaginadoGenerico[DocumentoBloco].model_validate(enriched)
 
 
