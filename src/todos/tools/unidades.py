@@ -44,7 +44,7 @@ async def sei_listar_unidades(ctx: Context) -> str:
         {
             "data": units,
             "total": len(units),
-            "_next": [{"tool": "sei_trocar_unidade", "args": {"id_unidade": "<id da unidade>"}}],
+            "_next": [{"tool": "sei_trocar_unidade", "args": {}}],
         }
     )
 
