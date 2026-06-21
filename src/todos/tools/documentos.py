@@ -697,7 +697,7 @@ async def sei_listar_blocos_documento(
     """
     blocos = await (await _backend(ctx)).listar_blocos_documento(id_documento)
     return _json(
-        {"blocos": blocos, "_next": [{"tool": "sei_consultar_processo", "args": {"protocolo": ""}}]}
+        {"blocos": blocos, "_next": [{"tool": "sei_pesquisar_blocos_assinatura", "args": {}}]}
     )
 
 
