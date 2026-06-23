@@ -4,15 +4,13 @@
 
 **126 tools** para gerenciar processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais. Operações de leitura críticas usam scraper web (**23×** mais rápido que REST). Catálogos estáticos usam cache em disco com TTL de 24h.
 
-## Origem
+## Créditos
 
-Este projeto é um fork de [**mcp-seipro**](https://github.com/SEI-Pro/mcp-seipro), criado e mantido por [@opedrosoares](https://github.com/opedrosoares) como parte do ecossistema [SEI Pro](https://github.com/SEI-Pro/sei-pro).
+O `todos` nasceu inspirado no trabalho pioneiro de [@opedrosoares](https://github.com/opedrosoares) no [**mcp-seipro**](https://github.com/SEI-Pro/mcp-seipro) — um agradecimento especial pela base que tornou este projeto possível.
 
-Um agradecimento especial ao Pedro Soares pela dedicação em construir o mcp-seipro do zero — sem esse trabalho pioneiro, este fork não existiria.
+**Por que o `todos` existe?** O mcp-seipro depende exclusivamente da API REST mod-wssei — um módulo opcional que precisa ser instalado pelo administrador do SEI. O [SEI de Rondônia](https://sei.sistemas.ro.gov.br) (e diversas outras instâncias públicas) não tem o mod-wssei instalado, tornando todas as 126 tools inoperantes nessas instâncias.
 
-**Por que o fork?** O mcp-seipro depende exclusivamente da API REST mod-wssei — um módulo opcional que precisa ser instalado pelo administrador do SEI. O [SEI de Rondônia](https://sei.sistemas.ro.gov.br) (e diversas outras instâncias públicas) não tem o mod-wssei instalado, tornando todas as 126 tools inoperantes nessas instâncias.
-
-A solução foi implementar um **scraper HTTP do próprio frontend web do SEI** como backend primário: sem dependência de módulo extra, sem configuração no servidor, funciona em qualquer instância que o usuário consiga acessar pelo navegador. O projeto upstream está focado na API REST; este fork mantém compatibilidade total com ela quando disponível e adiciona paridade web completa para quem não tem.
+A solução foi implementar um **scraper HTTP do próprio frontend web do SEI** como backend primário: sem dependência de módulo extra, sem configuração no servidor, funciona em qualquer instância que o usuário consiga acessar pelo navegador. O `todos` mantém compatibilidade total com a API REST quando disponível e adiciona paridade web completa para quem não tem.
 
 ## Instalação
 
@@ -535,7 +533,7 @@ railway up
 
 ## Links
 
-- [mcp-seipro](https://github.com/SEI-Pro/mcp-seipro) — Projeto upstream (fork origin), por [@opedrosoares](https://github.com/opedrosoares)
+- [mcp-seipro](https://github.com/SEI-Pro/mcp-seipro) — Projeto que inspirou o `todos`, por [@opedrosoares](https://github.com/opedrosoares)
 - [SEI Pro](https://github.com/SEI-Pro/sei-pro) — Extensão de navegador para o SEI
 - [Repositório](https://github.com/franklinbaldo/todos)
 - [RFC 0001 — Web-first](docs/rfc/0001-web-first.md)
