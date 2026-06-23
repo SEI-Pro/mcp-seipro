@@ -26,7 +26,7 @@ import time
 import warnings
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 from urllib.parse import quote as _quote
 
@@ -1204,164 +1204,22 @@ class SEIWebClient:
         1. Garante que o protocolo está no cache `_trabalhar_links` (links
            pré-assinados extraídos da inbox). Se não, faz fetch_inbox uma vez
            para popular.
-        2. GET procedimento_trabalhar.php (frameset, ~70 ms) — confirma o
-           id_procedimento e captura a URL assinada do iframe da árvore.
-        3. GET procedimento_visualizar / arvore_montar.php (~1 s) — extrai o
-           array Nos[] do JS e popula a lista de documentos.
-        4. Se houver PASTA colapsadas, faz GET com abrir_pastas=1 para expandir
-           todos os processos relacionados.
-
-        Retorna:
-            {
-              "id_procedimento": str,
-              "protocolo": str,
-              "tipo": str,           # da tooltip do nó raiz
-              "documentos": [{id, label, tipo_no, link}, ...],
-              "total_documentos": int,
-              "relacionados": [str, ...],
-            }
-
-        Raises se o protocolo não for encontrado nos links da inbox.
-        Para enriquecer com especificacao/assuntos/interessados (que só estão
-        na REST), combine com `SEIClient.consultar_processo_completo()`.
+        2. Chama `_arvore_do_processo` para obter a árvore totalmente expandida.
+        3. Parseia a árvore para extrair documentos e processos relacionados.
         """
         await self.ensure_authenticated()
 
-        # garante que o protocolo está no cache de links da inbox
-        async with self._form_lock:
-            _in_links = protocolo_formatado in self._trabalhar_links
-            _inbox_loaded = self._form_action is not None
-        if not _in_links and not _inbox_loaded:
-            # inbox nunca foi carregada (sessão recém-criada sem startup bem-sucedido)
-            await self.fetch_inbox(detalhada=False)
-            async with self._form_lock:
-                _in_links = protocolo_formatado in self._trabalhar_links
-        if not _in_links:
-            # processo fora da caixa (ou inbox já foi carregada e não o contém)
-            # — usa pesquisa rápida em vez de re-fetch da inbox
-            await self.pesquisar_processo(protocolo_formatado)
-
-        async with self._form_lock:
-            trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
-
-        # Step 1: procedimento_trabalhar.php (frameset, leve)
-        r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
-        _check(r1)
-
-        # detecta sessão expirada
-        if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
-            if not _relogin:
-                msg = "Sessão SEI expirou após re-login — possível falha de autenticação."
-                raise SEIError(msg)
-            logger.info("Sessão SEI expirou, re-logando")
-            async with self._form_lock:
-                self._form_action = None
-                self._form_hidden = {}
-                # remove stale link so the retry fetches a fresh signed URL
-                self._trabalhar_links.pop(protocolo_formatado, None)
-            await self.login()
-            return await self.consultar_processo(protocolo_formatado, _relogin=False)
-
-        soup_fs = BeautifulSoup(r1.text, "html.parser")
-        ifr = soup_fs.find("iframe", id="ifrArvore")
-        if ifr is None:
-            msg = "ifrArvore não encontrado no frameset"
-            raise SEIParseError(msg)
-        arvore_src = _tag_str(ifr, "src").replace("&amp;", "&")
-        arvore_url = urljoin(str(r1.url), arvore_src)
-
-        # extrai id_procedimento da URL do trabalhar
-        m_id = re.search(r"id_procedimento=(\d+)", str(r1.url))
+        html_arvore, url_arvore = await self._arvore_do_processo(protocolo_formatado)
+        
+        m_id = re.search(r"id_procedimento=(\d+)", url_arvore)
         id_proc = m_id.group(1) if m_id else None
 
-        # Step 2: procedimento_visualizar (arvore_montar.php)
-        r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
-        _check(r2)
-
-        # detecta sessão expirada (servidor retorna 200 com página de login)
-        # usa BeautifulSoup para evitar falso positivo com txtUsuario em JS strings
-        if "txtUsuario" in r2.text:
-            _r2_soup = BeautifulSoup(r2.text, "html.parser")
-            _login_input = _r2_soup.find("input", attrs={"name": "txtUsuario"})
-            if _login_input is not None:
-                if not _relogin:
-                    msg = "Sessão SEI expirou após re-login (árvore) — possível falha de autenticação."
-                    raise SEIError(msg)
-                logger.info("Sessão SEI expirou ao buscar árvore, re-logando")
-                async with self._form_lock:
-                    self._form_action = None
-                    self._form_hidden = {}
-                    # remove stale link so the retry fetches a fresh signed URL
-                    self._trabalhar_links.pop(protocolo_formatado, None)
-                await self.login()
-                return await self.consultar_processo(protocolo_formatado, _relogin=False)
-
-        nos = parse_arvore_nos(r2.text)
-        arvore_html = r2.text  # preservado para cardRelacionado — não sobrescrever no loop AGUARDE
-
-        # Step 3: Se houver PASTA colapsadas, fetch novamente com abrir_pastas=1
-        # (executado ANTES da resolução AGUARDE para evitar sobrescrever real_nos)
-        has_collapsed = len(nos) > 1 and any(n.get("tipo_no") == "PASTA" for n in nos[1:])
-        if has_collapsed:
-            arvore_url_str = str(arvore_url)
-            if "abrir_pastas=" not in arvore_url_str:
-                sep = "&" if "?" in arvore_url_str else "?"
-                arvore_url_expandida = f"{arvore_url_str}{sep}abrir_pastas=1"
-            else:
-                arvore_url_expandida = re.sub(r"abrir_pastas=0", "abrir_pastas=1", arvore_url_str)
-
-            r3 = await self._http.get(arvore_url_expandida, headers={"Referer": trab_url})
-            if r3.is_success:
-                nos = parse_arvore_nos(r3.text)
-                arvore_html = r3.text
-                logger.debug("Pastas expandidas via abrir_pastas=1")
-
-        # Step 3b: resolve nós AGUARDE via BFS — SEI pagina a árvore quando há
-        # muitos documentos. Ao resolver uma página, novos AGUARDE nela são
-        # enfileirados. `seen_ids` evita raiz duplicada e loops. `arvore_html`
-        # não é sobrescrito aqui para preservar o sidebar de processos relacionados.
-        arvore_url_str = str(arvore_url)
-        arvore_ref_url = str(r2.url)  # Referer correto: a própria árvore, não o trabalhar
-        pending_aguarde = [n for n in nos[1:] if n.get("tipo_no") == "AGUARDE"]
-        if pending_aguarde:
-            seen_ids: set[str] = {n["id"] for n in nos}
-            real_nos: list[dict] = [n for n in nos if n.get("tipo_no") != "AGUARDE"]
-            while pending_aguarde:
-                aguarde = pending_aguarde.pop(0)
-                link = aguarde.get("link", "").replace("&amp;", "&")
-                if link:
-                    page_url = urljoin(arvore_ref_url, link)
-                else:
-                    m_page = re.search(r"\d+$", aguarde.get("id", ""))
-                    if not m_page:
-                        continue
-                    sep = "&" if "?" in arvore_url_str else "?"
-                    page_url = f"{arvore_url_str}{sep}pagina_arvore={m_page.group()}"
-                r_pag = await self._http.get(page_url, headers={"Referer": arvore_ref_url})
-                if not r_pag.is_success:
-                    logger.warning(
-                        "AGUARDE %s: falha HTTP %s ao buscar %s",
-                        aguarde.get("id"),
-                        r_pag.status_code,
-                        page_url,
-                    )
-                    continue
-                page_nos = parse_arvore_nos(r_pag.text)
-                logger.debug("AGUARDE %s resolvido: %d nós", aguarde.get("id"), len(page_nos))
-                for n in page_nos:
-                    nid = n.get("id", "")
-                    if not nid or nid in seen_ids:
-                        continue
-                    seen_ids.add(nid)
-                    if n.get("tipo_no") == "AGUARDE":
-                        pending_aguarde.append(n)  # BFS: enfileira AGUARDE aninhados
-                    else:
-                        real_nos.append(n)
-            nos = real_nos
+        nos = parse_arvore_nos(html_arvore)
 
         result: dict[str, Any] = {
             "id_procedimento": id_proc or "",
             "protocolo": protocolo_formatado,
+            "url_arvore": url_arvore,
         }
         if nos:
             root = nos[0]
@@ -1374,6 +1232,8 @@ class SEIWebClient:
                     "label": n.get("label", ""),
                     "tipo_no": n.get("tipo_no", ""),
                     "link": n.get("link", ""),
+                    "acoes_html": n.get("acoes_html", ""),
+                    "src": n.get("src", ""),
                 }
                 for n in nos[1:]
                 if n.get("tipo_no") != "PASTA"
@@ -1382,7 +1242,7 @@ class SEIWebClient:
             result["total_documentos"] = len(docs)
 
         # processos relacionados (cards na sidebar do arvore_montar)
-        soup_arv = BeautifulSoup(arvore_html, "html.parser")
+        soup_arv = BeautifulSoup(html_arvore, "html.parser")
         rels: list[str] = []
         for div_rel in soup_arv.find_all("div", class_=re.compile(r"cardRelacionado")):
             link_rel = div_rel.find("a")
@@ -1437,10 +1297,6 @@ class SEIWebClient:
             "documentos": docs,
         }
 
-    # ------------------------------------------------------------------
-    # Ações genéricas em processos
-    # ------------------------------------------------------------------
-
     async def _garantir_link_trabalhar(self, protocolo: str) -> str:
         """Garante que _trabalhar_links[protocolo] existe e retorna o href."""
         async with self._form_lock:
@@ -1494,11 +1350,83 @@ class SEIWebClient:
         if ifr is None:
             msg = "ifrArvore não encontrado no frameset"
             raise SEIParseError(msg)
-        arvore_url = urljoin(str(r1.url), _tag_str(ifr, "src").replace("&amp;", "&"))
+        arvore_src = _tag_str(ifr, "src").replace("&amp;", "&")
+        arvore_url = urljoin(str(r1.url), arvore_src)
 
         r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
         _check(r2)
-        resultado = (r2.text, str(r2.url))
+
+        arvore_html = r2.text
+        arvore_url_str = str(r2.url)
+
+        # 1. Parse initial nodes
+        nos = parse_arvore_nos(arvore_html)
+
+        # 2. Expand folders via POST (if any)
+        # Look for the JS Pastas array in arvore_html
+        pasta_matches = re.findall(
+            r"Pastas\[(\d+)\]\s*=\s*\[\];.*?Pastas\[\1\]\['link'\]\s*=\s*['\"](.*?)['\"];.*?Pastas\[\1\]\['protocolos'\]\s*=\s*['\"](.*?)['\"];",
+            arvore_html,
+            re.DOTALL,
+        )
+        expanded_js_chunks = []
+        if pasta_matches:
+            seen_ids = {n["id"] for n in nos}
+            for idx_str, link, protocols in pasta_matches:
+                p_idx = int(idx_str)
+                url_pasta = urljoin(arvore_url_str, link.replace("&amp;", "&").replace(" ", "%20"))
+                data_pasta = {
+                    "hdnArvore": "",
+                    "hdnPastaAtual": f"PASTA{p_idx}",
+                    "hdnProtocolos": protocols,
+                }
+                r_pasta = await self._http.post(
+                    url_pasta, data=data_pasta, headers={"Referer": arvore_url_str}
+                )
+                if r_pasta.is_success:
+                    expanded_js_chunks.append(r_pasta.text)
+                    folder_nos = parse_arvore_nos(r_pasta.text)
+                    for n in folder_nos:
+                        nid = n.get("id", "")
+                        if nid and nid not in seen_ids:
+                            seen_ids.add(nid)
+                            nos.append(n)
+
+        # 3. Resolve AGUARDE nodes via BFS
+        pending_aguarde = [
+            n for n in nos[1:]
+            if n.get("tipo_no") == "AGUARDE" and not str(n.get("pai", "")).startswith("PASTA")
+        ]
+        if pending_aguarde:
+            seen_ids = {n["id"] for n in nos}
+            while pending_aguarde:
+                aguarde = pending_aguarde.pop(0)
+                link = aguarde.get("link", "").replace("&amp;", "&")
+                if link:
+                    page_url = urljoin(arvore_url_str, link)
+                else:
+                    m_page = re.search(r"\d+$", aguarde.get("id", ""))
+                    if not m_page:
+                        continue
+                    sep = "&" if "?" in arvore_url_str else "?"
+                    page_url = f"{arvore_url_str}{sep}pagina_arvore={m_page.group()}"
+                r_pag = await self._http.get(page_url, headers={"Referer": arvore_url_str})
+                if r_pag.is_success:
+                    expanded_js_chunks.append(r_pag.text)
+                    page_nos = parse_arvore_nos(r_pag.text)
+                    for n in page_nos:
+                        nid = n.get("id", "")
+                        if nid and nid not in seen_ids:
+                            seen_ids.add(nid)
+                            if n.get("tipo_no") == "AGUARDE" and not str(n.get("pai", "")).startswith("PASTA"):
+                                pending_aguarde.append(n)
+                            else:
+                                nos.append(n)
+
+        if expanded_js_chunks:
+            arvore_html += "\n/* EXPANDED PASTAS AND PAGES */\n" + "\n".join(expanded_js_chunks)
+
+        resultado = (arvore_html, arvore_url_str)
         async with self._arvore_lock:
             self._arvore_cache[protocolo] = (time.monotonic(), resultado)
         return resultado
@@ -1936,6 +1864,11 @@ class SEIWebClient:
             raw = str(no_alvo["link"]).replace("&amp;", "&")
             return urljoin(sei_base, raw), url_arvore
 
+        # Para documento_visualizar, prefere usar a propriedade src do nó
+        if acao == "documento_visualizar" and no_alvo and no_alvo.get("src"):
+            raw = str(no_alvo["src"]).replace("&amp;", "&")
+            return urljoin(sei_base, raw), url_arvore
+
         # Busca genérica: qualquer URL com acao=X e id_documento=Y
         # (?=&|&amp;|["'\s]) âncora o fim do id para evitar match por prefixo
         # (ex: id=287 não deve casar com id=2874369)
@@ -1945,15 +1878,24 @@ class SEIWebClient:
             rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
             rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+)"
         )
+        pattern2 = (
+            rf"(controlador\.php\?acao={re.escape(acao)}"
+            rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+"
+            rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
+            rf"[^\"'\s]*)"
+        )
+
+        # Tenta buscar primeiro nas ações específicas do próprio nó
+        if no_alvo and no_alvo.get("acoes_html"):
+            m = re.search(pattern, no_alvo["acoes_html"])
+            if not m:
+                m = re.search(pattern2, no_alvo["acoes_html"])
+            if m:
+                return urljoin(sei_base, m.group(1).replace("&amp;", "&")), url_arvore
+
+        # Fallback para busca genérica no HTML inteiro da árvore
         m = re.search(pattern, html_arvore)
         if not m:
-            # Tenta ordem invertida (infra_hash antes de id_documento)
-            pattern2 = (
-                rf"(controlador\.php\?acao={re.escape(acao)}"
-                rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+"
-                rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
-                rf"[^\"'\s]*)"
-            )
             m = re.search(pattern2, html_arvore)
         if not m:
             msg = (
@@ -2359,7 +2301,9 @@ class SEIWebClient:
         await self.ensure_authenticated()
         return await self._gerar_arquivo_processo(protocolo_formatado, "procedimento_gerar_zip")
 
-    async def listar_atividades(self, protocolo_formatado: str) -> dict:
+    async def listar_atividades(
+        self, protocolo_formatado: str, tipo_historico: str = "R"
+    ) -> dict:
         """Lista andamentos/atividades de um processo via web scraper.
 
         Scrape de `procedimento_consultar_historico.php` (~370 ms, vs ~2.5 s REST).
@@ -2375,9 +2319,86 @@ class SEIWebClient:
         await self.ensure_authenticated()
         hist_url, id_proc, referer = await self._navegar_historico(protocolo_formatado)
 
+        # 1. GET inicial
         r3 = await self._http.get(hist_url, headers={"Referer": referer})
         _check(r3)
-        andamentos = self._parse_tabela_historico(r3.text)
+
+        soup = BeautifulSoup(r3.text, "html.parser")
+        form = soup.find("form")
+        if form is None:
+            msg = "Form do histórico não encontrado."
+            raise SEIParseError(msg)
+
+        andamentos = []
+
+        if tipo_historico == "R":
+            # Adiciona andamentos da página 0 (GET)
+            andamentos.extend(self._parse_tabela_historico(r3.text))
+
+            # Verifica paginação
+            pag_select = soup.find("select", attrs={"name": "selInfraPaginacaoSuperior"})
+            if pag_select:
+                options = pag_select.find_all("option")
+                max_page = len(options)
+
+                # Iterar pelas páginas de 1 até max_page - 1
+                for p_idx in range(1, max_page):
+                    dados = _coletar_estado_form(form)
+                    dados["hdnInfraPaginaAtual"] = str(p_idx)
+                    dados["selInfraPaginacaoSuperior"] = str(p_idx)
+                    dados["selInfraPaginacaoInferior"] = str(p_idx)
+                    dados["hdnTipoHistorico"] = tipo_historico
+
+                    action = urljoin(hist_url, _tag_str(form, "action").replace("&amp;", "&"))
+                    r_pag = await self._http.post(
+                        action,
+                        content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+                        headers={"Referer": hist_url, "Content-Type": "application/x-www-form-urlencoded"},
+                    )
+                    _check(r_pag)
+                    andamentos.extend(self._parse_tabela_historico(r_pag.text))
+        else:
+            # Caso não seja "R", precisamos fazer o POST para a página 0 com o tipo solicitado
+            dados = _coletar_estado_form(form)
+            dados["hdnTipoHistorico"] = tipo_historico
+            dados["hdnInfraPaginaAtual"] = "0"
+            if soup.find("select", attrs={"name": "selInfraPaginacaoSuperior"}):
+                dados["selInfraPaginacaoSuperior"] = "0"
+                dados["selInfraPaginacaoInferior"] = "0"
+
+            action = urljoin(hist_url, _tag_str(form, "action").replace("&amp;", "&"))
+            r_pag0 = await self._http.post(
+                action,
+                content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+                headers={"Referer": hist_url, "Content-Type": "application/x-www-form-urlencoded"},
+            )
+            _check(r_pag0)
+
+            andamentos.extend(self._parse_tabela_historico(r_pag0.text))
+
+            # Analisa paginação na resposta da página 0
+            soup_pag0 = BeautifulSoup(r_pag0.text, "html.parser")
+            form_pag0 = soup_pag0.find("form") or form
+            pag_select = soup_pag0.find("select", attrs={"name": "selInfraPaginacaoSuperior"})
+            if pag_select:
+                options = pag_select.find_all("option")
+                max_page = len(options)
+                for p_idx in range(1, max_page):
+                    dados = _coletar_estado_form(form_pag0)
+                    dados["hdnInfraPaginaAtual"] = str(p_idx)
+                    dados["selInfraPaginacaoSuperior"] = str(p_idx)
+                    dados["selInfraPaginacaoInferior"] = str(p_idx)
+                    dados["hdnTipoHistorico"] = tipo_historico
+
+                    action = urljoin(hist_url, _tag_str(form_pag0, "action").replace("&amp;", "&"))
+                    r_pag = await self._http.post(
+                        action,
+                        content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+                        headers={"Referer": hist_url, "Content-Type": "application/x-www-form-urlencoded"},
+                    )
+                    _check(r_pag)
+                    andamentos.extend(self._parse_tabela_historico(r_pag.text))
+
         return {
             "processo": {
                 "protocolo": protocolo_formatado,
@@ -2389,37 +2410,20 @@ class SEIWebClient:
 
     async def _navegar_historico(self, protocolo_formatado: str) -> tuple[str, str, str]:
         """Navega até o histórico do processo; retorna (hist_url, id_proc, referer)."""
-        async with self._form_lock:
-            _in_links = protocolo_formatado in self._trabalhar_links
-        if not _in_links:
-            await self.fetch_inbox(detalhada=False)
-        async with self._form_lock:
-            _in_links = protocolo_formatado in self._trabalhar_links
-        if not _in_links:
-            await self.pesquisar_processo(protocolo_formatado)
-        async with self._form_lock:
-            trab_url = urljoin(str(self._inbox_url), self._trabalhar_links[protocolo_formatado])
-        r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
-        _check(r1)
-        soup_fs = BeautifulSoup(r1.text, "html.parser")
-        ifr = soup_fs.find("iframe", id="ifrArvore")
-        if not ifr:
-            msg = "ifrArvore não encontrado"
-            raise SEIParseError(msg)
-        arvore_url = urljoin(str(r1.url), _tag_str(ifr, "src").replace("&amp;", "&"))
-        m_id = re.search(r"id_procedimento=(\d+)", str(r1.url))
+        html_arvore, url_arvore = await self._arvore_do_processo(protocolo_formatado)
+        
+        m_id = re.search(r"id_procedimento=(\d+)", url_arvore)
         id_proc = m_id.group(1) if m_id else ""
-        r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
-        _check(r2)
+        
         m_hist = re.search(
             r"(controlador\.php\?acao=procedimento_consultar_historico[^\"']*infra_hash=[a-f0-9]+)",
-            r2.text,
+            html_arvore,
         )
         if not m_hist:
             msg = "Link procedimento_consultar_historico não encontrado na árvore"
             raise SEINotFoundError(msg)
-        hist_url = urljoin(str(r2.url), m_hist.group(1).replace("&amp;", "&"))
-        return hist_url, id_proc, str(r2.url)
+        hist_url = urljoin(url_arvore, m_hist.group(1).replace("&amp;", "&"))
+        return hist_url, id_proc, url_arvore
 
     @staticmethod
     def _parse_tabela_historico(html: str) -> list[dict[str, str]]:
@@ -3209,10 +3213,49 @@ class SEIWebClient:
         opcoes: list[dict[str, str]] = []
         for protocolo in _links_snapshot:
             try:
-                form_info = await self.obter_form_acao(protocolo, "marcacao_salvar")
-                opcoes = form_info.get("selects", {}).get("selMarcador", [])
-                break
-            except SEIParseError:
+                try:
+                    form_info = await self.obter_form_acao(protocolo, "andamento_marcador_cadastrar")
+                    opcoes = form_info.get("selects", {}).get("selMarcador", [])
+                except SEINotFoundError:
+                    html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
+                    sei_base = f"{self.sei_root}/sei/"
+                    m = re.search(
+                        r"(controlador\.php\?acao=andamento_marcador_gerenciar[^\"'\s]*infra_hash=[a-f0-9]+)",
+                        html_arvore,
+                    )
+                    if not m:
+                        continue
+                    gerenciar_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
+                    r = await self._http.get(gerenciar_url, headers={"Referer": url_arvore})
+                    _check(r)
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    sel = soup.find("select", {"name": "selMarcador"})
+                    if sel:
+                        for opt in sel.find_all("option"):
+                            v = _tag_str(opt, "value")
+                            t = opt.get_text(strip=True)
+                            if v:
+                                opcoes.append({"value": v, "texto": t})
+                    else:
+                        btn = soup.find("button", id="btnAdicionar")
+                        if btn:
+                            onclick = btn.get("onclick", "")
+                            m_cad = re.search(r"location\.href='([^']+)'", onclick)
+                            if m_cad:
+                                cad_url = urljoin(sei_base, m_cad.group(1).replace("&amp;", "&"))
+                                r_cad = await self._http.get(cad_url, headers={"Referer": gerenciar_url})
+                                _check(r_cad)
+                                soup_cad = BeautifulSoup(r_cad.text, "html.parser")
+                                sel_cad = soup_cad.find("select", {"name": "selMarcador"})
+                                if sel_cad:
+                                    for opt in sel_cad.find_all("option"):
+                                        v = _tag_str(opt, "value")
+                                        t = opt.get_text(strip=True)
+                                        if v:
+                                            opcoes.append({"value": v, "texto": t})
+                if opcoes:
+                    break
+            except (SEIParseError, SEINotFoundError, httpx.HTTPError, OSError):
                 continue
         marcadores: list[dict[str, str]] = []
         for opt in opcoes:
@@ -4597,21 +4640,42 @@ def parse_arvore_nos(html: str) -> list[dict]:
     primeiras 8 posições nomeadas. O primeiro elemento (Nos[0]) é a raiz —
     o próprio processo.
     """
+    acoes_map: dict[str, str] = {}
+    src_map: dict[str, str] = {}
+
+    for m_ac in re.finditer(r"Nos\[(\d+)\]\.acoes\s*=\s*(['\"])(.*?)\2;", html):
+        idx = m_ac.group(1)
+        val = m_ac.group(3)
+        val = val.replace(r"\'", "'").replace(r'\"', '"')
+        acoes_map[idx] = val
+
+    for m_src in re.finditer(r"Nos\[(\d+)\]\.src\s*=\s*(['\"])(.*?)\2;", html):
+        idx = m_src.group(1)
+        val = m_src.group(3)
+        val = val.replace(r"\'", "'").replace(r'\"', '"')
+        src_map[idx] = val
+
     out: list[dict] = []
     for m in re.finditer(
-        r"(?s)Nos\[\d+\]\s*=\s*new infraArvoreNo\(([^;]*?)\);",
+        r"(?s)Nos\[(\d+)\]\s*=\s*new infraArvoreNo\(([^;]*?)\);",
         html,
     ):
-        args_str = m.group(1)
-        # tokenizer simples: separa por vírgula respeitando aspas
+        idx_str = m.group(1)
+        args_str = m.group(2)
+        # tokenizer simples: separa por vírgula respeitando aspas e contra-barras
         args: list[str] = []
         cur = ""
         in_str = False
         quote_char = None
+        is_escaped = False
         for ch in args_str:
             if in_str:
                 cur += ch
-                if ch == quote_char:
+                if is_escaped:
+                    is_escaped = False
+                elif ch == "\\":
+                    is_escaped = True
+                elif ch == quote_char:
                     in_str = False
             elif ch in ('"', "'"):
                 in_str = True
@@ -4646,6 +4710,8 @@ def parse_arvore_nos(html: str) -> list[dict]:
                     "icone": unquote(args[_DOC_LINK_ARGS_MIN])
                     if len(args) > _DOC_LINK_ARGS_MIN
                     else "",
+                    "acoes_html": acoes_map.get(idx_str, ""),
+                    "src": src_map.get(idx_str, ""),
                 }
             )
     return out

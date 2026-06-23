@@ -50,7 +50,7 @@ class ProcessosRest(_RestMixin):
         """Pesquisa processos por texto e filtros estruturados."""
         return await self._rest.pesquisar_processos(filtros)
 
-    async def listar_atividades(self, processo: str) -> dict:
+    async def listar_atividades(self, processo: str, tipo_historico: str = "R") -> dict:
         """Lista o histórico de andamentos de um processo."""
         id_proc = await self._resolver_processo(processo)
         return await self._rest.listar_atividades(id_proc)

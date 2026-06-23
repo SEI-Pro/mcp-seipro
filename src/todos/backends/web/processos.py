@@ -76,9 +76,9 @@ class ProcessosWeb(_WebMixin):
             pagina=filtros.pagina,
         )
 
-    async def listar_atividades(self, processo: str) -> dict:
+    async def listar_atividades(self, processo: str, tipo_historico: str = "R") -> dict:
         """Lista o histórico de andamentos de um processo."""
-        return await self._web.listar_atividades(processo)
+        return await self._web.listar_atividades(processo, tipo_historico=tipo_historico)
 
     async def listar_unidades_processo(self, processo: str) -> list[dict]:
         """Lista as unidades onde o processo está aberto."""

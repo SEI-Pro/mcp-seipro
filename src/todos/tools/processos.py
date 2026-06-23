@@ -134,6 +134,7 @@ def _shape_atividades(
     processo_ref: str = "",
     ordem: str = "desc",
     pagina: int = 0,
+    tipo_historico: str = "R",
 ) -> ListaAtividades:
     """Retorna andamentos em formato shaped a partir do payload bruto de listar_atividades."""
     raw: list[dict] = list(result.get("andamentos", []))
@@ -154,7 +155,7 @@ def _shape_atividades(
         actions = [
             NextAction(
                 tool="sei_listar_atividades",
-                args={"processo": ref, "cursor": next_cursor, "ordem": ordem},
+                args={"processo": ref, "cursor": next_cursor, "ordem": ordem, "tipo_historico": tipo_historico},
                 reason=(
                     f"Exibindo andamentos {shown_start}-{shown_end} de {total}; "
                     "passe cursor para a próxima página."
@@ -462,6 +463,7 @@ async def sei_listar_atividades(
     ordem: Literal["desc", "asc"] = "desc",
     cursor: str = "",
     include_raw: bool = False,
+    tipo_historico: Literal["R", "F", "P", "G"] = "R",
 ) -> ListaAtividades | str:
     """Lista o histórico de atividades/andamentos de um processo.
 
@@ -477,9 +479,11 @@ async def sei_listar_atividades(
       da resposta anterior para obter a próxima página (50 andamentos/página).
     - include_raw: false (padrão) retorna shaped com cursor;
       true retorna o payload bruto completo (sem paginação).
+    - tipo_historico: "R" (resumido — padrão), "F" (completo), "P" (atribuições),
+      ou "G" (gerencial).
     """
     backend = await _backend(ctx)
-    result = await backend.listar_atividades(processo)
+    result = await backend.listar_atividades(processo, tipo_historico=tipo_historico)
     if include_raw:
         return _json(result)
     try:
@@ -487,7 +491,7 @@ async def sei_listar_atividades(
     except (ValueError, TypeError) as exc:
         msg = f"cursor inválido: {exc}"
         raise SEIValidationError(msg) from exc
-    return _shape_atividades(result, processo_ref=processo, ordem=ordem, pagina=pagina)
+    return _shape_atividades(result, processo_ref=processo, ordem=ordem, pagina=pagina, tipo_historico=tipo_historico)
 
 
 @mcp.tool(annotations=_READ)
