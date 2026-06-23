@@ -11,9 +11,13 @@ variável de ambiente `SEI_PERMITIR_RESTRITOS=true`.
 
 from __future__ import annotations
 
+import html as _html
+import logging
 import os
 import unicodedata as _unicodedata
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 PUBLICO = "0"
 RESTRITO = "1"
@@ -228,6 +232,12 @@ def avaliar_acesso(
         return "liberar", None
 
     if confirmou or env_permite_restritos():
+        if env_permite_restritos() and not confirmou:
+            logger.warning(
+                "SEI_PERMITIR_RESTRITOS: acesso irrestrito liberado para alvo=%r nivel=%s",
+                alvo,
+                nivel,
+            )
         return "liberar", construir_disclaimer_acompanhante(nivel, hipotese_legal, alvo)
 
     return "bloquear", construir_aviso_bloqueio(nivel, hipotese_legal, alvo)
@@ -265,9 +275,9 @@ def prefixar_texto(disclaimer: dict, conteudo: str) -> str:
 
 def envelopar_html(disclaimer: dict, conteudo: str) -> str:
     """Insere <aside> com o disclaimer antes do HTML."""
-    riscos_html = "".join(f"<li>{r}</li>" for r in disclaimer["riscos"])
+    riscos_html = "".join(f"<li>{_html.escape(r)}</li>" for r in disclaimer["riscos"])
     hl = disclaimer.get("hipotese_legal")
-    hl_html = f"<p><strong>Hipótese legal:</strong> {hl}</p>" if hl else ""
+    hl_html = f"<p><strong>Hipótese legal:</strong> {_html.escape(hl)}</p>" if hl else ""
     aside = (
         '<aside style="border:2px solid #c00;padding:12px;margin-bottom:12px;'
         'background:#fff8f8;font-family:sans-serif">'

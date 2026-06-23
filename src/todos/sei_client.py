@@ -289,7 +289,10 @@ class SEIClient:
             raise SEIAuthError(msg)
         payload = data["data"]
         if "token" not in payload:
-            logger.error("Payload de autenticação sem campo 'token': %r", payload)
+            logger.error(
+                "Payload de autenticação sem campo 'token': chaves=%r",
+                list(payload.keys()),
+            )
             msg = "Resposta de autenticação inesperada do SEI (sem campo 'token')"
             raise SEIAuthError(msg)
         self._token = payload["token"]

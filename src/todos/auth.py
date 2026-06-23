@@ -432,7 +432,7 @@ _LOGIN_HTML = """<!DOCTYPE html>
 async def login_page(request: Request) -> HTMLResponse:
     """GET /login — renderiza formulário de credenciais SEI."""
     session = request.query_params.get("session", "")
-    return HTMLResponse(_LOGIN_HTML.replace("{session}", session))
+    return HTMLResponse(_LOGIN_HTML.replace("{session}", _html_escape(session)))
 
 
 async def login_submit(request: Request) -> HTMLResponse:
@@ -488,7 +488,7 @@ async def login_submit(request: Request) -> HTMLResponse:
     )
 
     usuario = sei_creds["sei_usuario"]
-    page = _SUCCESS_HTML.replace("{redirect_uri}", str(redirect_uri)).replace(
+    page = _SUCCESS_HTML.replace("{redirect_uri}", _html_escape(str(redirect_uri))).replace(
         "{usuario}", _html_escape(usuario)
     )
     return HTMLResponse(page)
