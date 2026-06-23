@@ -124,8 +124,10 @@ def _decode_response(content: bytes, content_type: str) -> str:
         return content.decode("iso-8859-1", "replace")
 
 
-def _tag_str(tag: Tag, attr: str, default: str = "") -> str:
+def _tag_str(tag: Tag | None, attr: str, default: str = "") -> str:
     """Return a BS4 tag attribute as plain str (Tag.get returns str|list|None)."""
+    if tag is None:
+        return default
     v = tag.get(attr, default)
     if isinstance(v, str):
         return v
@@ -2000,11 +2002,11 @@ class SEIWebClient:
         soup = BeautifulSoup(body, "html.parser")
         textareas = soup.select("div#divEditores textarea")
         versao_inp = soup.find("input", {"name": lambda n: bool(n and "versao" in n.lower())})
-        versao = _tag_str(versao_inp, "value") if versao_inp else ""
+        versao = _tag_str(versao_inp, "value")
         secoes = [
             {
-                "id": ta.get("name", ""),
-                "idSecaoModelo": ta.get("name", ""),
+                "id": _tag_str(ta, "name"),
+                "idSecaoModelo": _tag_str(ta, "name"),
                 "conteudo": ta.decode_contents(),
                 "somenteLeitura": False,
             }
@@ -2053,7 +2055,7 @@ class SEIWebClient:
         # Substituir conteúdos das textareas; seções não alteradas são reenviadas intactas
         alteracoes = {s["idSecaoModelo"]: s["conteudo"] for s in secoes}
         for ta in soup.select("div#divEditores textarea"):
-            nome = str(ta.get("name", ""))
+            nome = _tag_str(ta, "name")
             if nome:
                 post_data.append((nome, alteracoes.get(nome, ta.decode_contents())))
 
