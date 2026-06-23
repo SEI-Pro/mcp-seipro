@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write  # create GitHub Release + upload assets
-  id-token: write  # OIDC token for PyPI trusted publishing
 
 jobs:
   build-mcpb:
@@ -64,27 +63,10 @@ jobs:
             **Claude Desktop (.mcpb — duplo-clique para instalar):**
             Baixe `todos.mcpb` abaixo e abra com duplo-clique. O Claude Desktop instala automaticamente e pede suas credenciais.
 
-            **PyPI:**
-            ```bash
-            pip install todos-sei==${{ needs.build-mcpb.outputs.version }}
-            ```
+            **Wheel (pip):**
+            Baixe o `.whl` anexado abaixo e instale com `pip install todos_sei-${{ needs.build-mcpb.outputs.version }}-py3-none-any.whl`.
           files: |
             dist/todos.mcpb
             dist/*.whl
             dist/*.tar.gz
           fail_on_unmatched_files: false
-
-  pypi-publish:
-    name: Publish to PyPI
-    needs: [build-wheel]
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/todos-sei/
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: wheel
-          path: dist/
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
