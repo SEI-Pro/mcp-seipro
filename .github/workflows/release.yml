@@ -66,7 +66,7 @@ jobs:
 
             **PyPI:**
             ```bash
-            pip install mcp-sei==${{ needs.build-mcpb.outputs.version }}
+            pip install todos-sei==${{ needs.build-mcpb.outputs.version }}
             ```
           files: |
             dist/todos.mcpb
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/mcp-sei/
+      url: https://pypi.org/project/todos-sei/
     steps:
       - uses: actions/download-artifact@v4
         with:
