@@ -155,7 +155,12 @@ def _shape_atividades(
         actions = [
             NextAction(
                 tool="sei_listar_atividades",
-                args={"processo": ref, "cursor": next_cursor, "ordem": ordem, "tipo_historico": tipo_historico},
+                args={
+                    "processo": ref,
+                    "cursor": next_cursor,
+                    "ordem": ordem,
+                    "tipo_historico": tipo_historico,
+                },
                 reason=(
                     f"Exibindo andamentos {shown_start}-{shown_end} de {total}; "
                     "passe cursor para a próxima página."
@@ -491,7 +496,9 @@ async def sei_listar_atividades(
     except (ValueError, TypeError) as exc:
         msg = f"cursor inválido: {exc}"
         raise SEIValidationError(msg) from exc
-    return _shape_atividades(result, processo_ref=processo, ordem=ordem, pagina=pagina, tipo_historico=tipo_historico)
+    return _shape_atividades(
+        result, processo_ref=processo, ordem=ordem, pagina=pagina, tipo_historico=tipo_historico
+    )
 
 
 @mcp.tool(annotations=_READ)

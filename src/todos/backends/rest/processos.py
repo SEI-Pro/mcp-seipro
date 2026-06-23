@@ -52,6 +52,13 @@ class ProcessosRest(_RestMixin):
 
     async def listar_atividades(self, processo: str, tipo_historico: str = "R") -> dict:
         """Lista o histórico de andamentos de um processo."""
+        if tipo_historico != "R":
+            msg = (
+                "Backend REST suporta apenas tipo_historico='R' (resumido); "
+                f"recebido {tipo_historico!r}. Use o backend web para histórico "
+                "completo (F), de atribuições (P) ou gerencial (G)."
+            )
+            raise SEIValidationError(msg)
         id_proc = await self._resolver_processo(processo)
         return await self._rest.listar_atividades(id_proc)
 

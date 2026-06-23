@@ -26,7 +26,7 @@ import time
 import warnings
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 from urllib.parse import quote as _quote
 
@@ -1210,7 +1210,7 @@ class SEIWebClient:
         await self.ensure_authenticated()
 
         html_arvore, url_arvore = await self._arvore_do_processo(protocolo_formatado)
-        
+
         m_id = re.search(r"id_procedimento=(\d+)", url_arvore)
         id_proc = m_id.group(1) if m_id else None
 
@@ -1356,11 +1356,26 @@ class SEIWebClient:
         r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
         _check(r2)
 
+        # Detecta sessão expirada na árvore (servidor retorna 200 com página de login)
+        if "txtUsuario" in r2.text:
+            _r2_soup = BeautifulSoup(r2.text, "html.parser")
+            if _r2_soup.find("input", attrs={"name": "txtUsuario"}) is not None:
+                async with self._form_lock:
+                    self._form_action = None
+                    self._form_hidden = {}
+                    self._trabalhar_links.pop(protocolo, None)
+                await self.login()
+                return await self._arvore_do_processo(protocolo)
+
         arvore_html = r2.text
         arvore_url_str = str(r2.url)
 
         # 1. Parse initial nodes
         nos = parse_arvore_nos(arvore_html)
+        # Próximo índice livre para Nos[N] em chunks expandidos; previne colisão
+        # de acoes_map/src_map quando o HTML cacheado é re-parseado (cada chunk
+        # tem seu próprio Nos[0..K] e indices duplicados sobrescreveriam o mapa).
+        next_no_offset = _max_no_index(arvore_html) + 1
 
         # 2. Expand folders via POST (if any)
         # Look for the JS Pastas array in arvore_html
@@ -1384,8 +1399,9 @@ class SEIWebClient:
                     url_pasta, data=data_pasta, headers={"Referer": arvore_url_str}
                 )
                 if r_pasta.is_success:
-                    expanded_js_chunks.append(r_pasta.text)
-                    folder_nos = parse_arvore_nos(r_pasta.text)
+                    chunk_renum, next_no_offset = _renumerar_nos_chunk(r_pasta.text, next_no_offset)
+                    expanded_js_chunks.append(chunk_renum)
+                    folder_nos = parse_arvore_nos(chunk_renum)
                     for n in folder_nos:
                         nid = n.get("id", "")
                         if nid and nid not in seen_ids:
@@ -1394,7 +1410,8 @@ class SEIWebClient:
 
         # 3. Resolve AGUARDE nodes via BFS
         pending_aguarde = [
-            n for n in nos[1:]
+            n
+            for n in nos[1:]
             if n.get("tipo_no") == "AGUARDE" and not str(n.get("pai", "")).startswith("PASTA")
         ]
         if pending_aguarde:
@@ -1412,13 +1429,16 @@ class SEIWebClient:
                     page_url = f"{arvore_url_str}{sep}pagina_arvore={m_page.group()}"
                 r_pag = await self._http.get(page_url, headers={"Referer": arvore_url_str})
                 if r_pag.is_success:
-                    expanded_js_chunks.append(r_pag.text)
-                    page_nos = parse_arvore_nos(r_pag.text)
+                    chunk_renum, next_no_offset = _renumerar_nos_chunk(r_pag.text, next_no_offset)
+                    expanded_js_chunks.append(chunk_renum)
+                    page_nos = parse_arvore_nos(chunk_renum)
                     for n in page_nos:
                         nid = n.get("id", "")
                         if nid and nid not in seen_ids:
                             seen_ids.add(nid)
-                            if n.get("tipo_no") == "AGUARDE" and not str(n.get("pai", "")).startswith("PASTA"):
+                            if n.get("tipo_no") == "AGUARDE" and not str(
+                                n.get("pai", "")
+                            ).startswith("PASTA"):
                                 pending_aguarde.append(n)
                             else:
                                 nos.append(n)
@@ -2301,9 +2321,7 @@ class SEIWebClient:
         await self.ensure_authenticated()
         return await self._gerar_arquivo_processo(protocolo_formatado, "procedimento_gerar_zip")
 
-    async def listar_atividades(
-        self, protocolo_formatado: str, tipo_historico: str = "R"
-    ) -> dict:
+    async def listar_atividades(self, protocolo_formatado: str, tipo_historico: str = "R") -> dict:
         """Lista andamentos/atividades de um processo via web scraper.
 
         Scrape de `procedimento_consultar_historico.php` (~370 ms, vs ~2.5 s REST).
@@ -2352,8 +2370,13 @@ class SEIWebClient:
                     action = urljoin(hist_url, _tag_str(form, "action").replace("&amp;", "&"))
                     r_pag = await self._http.post(
                         action,
-                        content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
-                        headers={"Referer": hist_url, "Content-Type": "application/x-www-form-urlencoded"},
+                        content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode(
+                            "ascii"
+                        ),
+                        headers={
+                            "Referer": hist_url,
+                            "Content-Type": "application/x-www-form-urlencoded",
+                        },
                     )
                     _check(r_pag)
                     andamentos.extend(self._parse_tabela_historico(r_pag.text))
@@ -2393,8 +2416,13 @@ class SEIWebClient:
                     action = urljoin(hist_url, _tag_str(form_pag0, "action").replace("&amp;", "&"))
                     r_pag = await self._http.post(
                         action,
-                        content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
-                        headers={"Referer": hist_url, "Content-Type": "application/x-www-form-urlencoded"},
+                        content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode(
+                            "ascii"
+                        ),
+                        headers={
+                            "Referer": hist_url,
+                            "Content-Type": "application/x-www-form-urlencoded",
+                        },
                     )
                     _check(r_pag)
                     andamentos.extend(self._parse_tabela_historico(r_pag.text))
@@ -2411,10 +2439,10 @@ class SEIWebClient:
     async def _navegar_historico(self, protocolo_formatado: str) -> tuple[str, str, str]:
         """Navega até o histórico do processo; retorna (hist_url, id_proc, referer)."""
         html_arvore, url_arvore = await self._arvore_do_processo(protocolo_formatado)
-        
+
         m_id = re.search(r"id_procedimento=(\d+)", url_arvore)
         id_proc = m_id.group(1) if m_id else ""
-        
+
         m_hist = re.search(
             r"(controlador\.php\?acao=procedimento_consultar_historico[^\"']*infra_hash=[a-f0-9]+)",
             html_arvore,
@@ -3214,7 +3242,9 @@ class SEIWebClient:
         for protocolo in _links_snapshot:
             try:
                 try:
-                    form_info = await self.obter_form_acao(protocolo, "andamento_marcador_cadastrar")
+                    form_info = await self.obter_form_acao(
+                        protocolo, "andamento_marcador_cadastrar"
+                    )
                     opcoes = form_info.get("selects", {}).get("selMarcador", [])
                 except SEINotFoundError:
                     html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
@@ -3243,7 +3273,9 @@ class SEIWebClient:
                             m_cad = re.search(r"location\.href='([^']+)'", onclick)
                             if m_cad:
                                 cad_url = urljoin(sei_base, m_cad.group(1).replace("&amp;", "&"))
-                                r_cad = await self._http.get(cad_url, headers={"Referer": gerenciar_url})
+                                r_cad = await self._http.get(
+                                    cad_url, headers={"Referer": gerenciar_url}
+                                )
                                 _check(r_cad)
                                 soup_cad = BeautifulSoup(r_cad.text, "html.parser")
                                 sel_cad = soup_cad.find("select", {"name": "selMarcador"})
@@ -4632,6 +4664,30 @@ class SEIWebClient:
 # ---------------------------------------------------------------------------
 
 
+def _max_no_index(html: str) -> int:
+    """Retorna o maior índice N em ``Nos[N]`` no HTML; -1 se não houver."""
+    indices = [int(m.group(1)) for m in re.finditer(r"Nos\[(\d+)\]", html)]
+    return max(indices) if indices else -1
+
+
+def _renumerar_nos_chunk(chunk_html: str, offset: int) -> tuple[str, int]:
+    """Soma ``offset`` a todos os índices ``Nos[N]`` do chunk.
+
+    Evita que chunks expandidos (pasta, paginação) colidam com o array Nos[]
+    do HTML principal quando concatenados. Retorna o HTML reescrito e o
+    próximo offset livre.
+    """
+    max_idx = _max_no_index(chunk_html)
+    if max_idx < 0:
+        return chunk_html, offset
+    new_html = re.sub(
+        r"Nos\[(\d+)\]",
+        lambda m: f"Nos[{int(m.group(1)) + offset}]",
+        chunk_html,
+    )
+    return new_html, offset + max_idx + 1
+
+
 def parse_arvore_nos(html: str) -> list[dict]:
     """Extrai o array `Nos[]` do JS de arvore_montar.php.
 
@@ -4646,13 +4702,13 @@ def parse_arvore_nos(html: str) -> list[dict]:
     for m_ac in re.finditer(r"Nos\[(\d+)\]\.acoes\s*=\s*(['\"])(.*?)\2;", html):
         idx = m_ac.group(1)
         val = m_ac.group(3)
-        val = val.replace(r"\'", "'").replace(r'\"', '"')
+        val = val.replace(r"\'", "'").replace(r"\"", '"')
         acoes_map[idx] = val
 
     for m_src in re.finditer(r"Nos\[(\d+)\]\.src\s*=\s*(['\"])(.*?)\2;", html):
         idx = m_src.group(1)
         val = m_src.group(3)
-        val = val.replace(r"\'", "'").replace(r'\"', '"')
+        val = val.replace(r"\'", "'").replace(r"\"", '"')
         src_map[idx] = val
 
     out: list[dict] = []
