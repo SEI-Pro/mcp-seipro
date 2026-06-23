@@ -12,9 +12,9 @@ Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. F
 
 ## Surfaces de tool
 
-### MCP server (`mcp-seipro` / `todos`)
+### MCP server (`todos`)
 
-Start: `uv run mcp-seipro` (stdio) ou `PORT=8000 uv run mcp-seipro` (HTTP).
+Start: `uv run todos` (stdio) ou `PORT=8000 uv run todos` (HTTP).
 
 Tools principais — lista parcial das 126:
 
@@ -51,7 +51,7 @@ O pink é o MCP do sistema de gestão processual. Para usar ambos no mesmo host 
 ```json
 {
   "mcpServers": {
-    "seipro": { "command": "uv", "args": ["run", "--directory", "/caminho/para/todos", "mcp-seipro"], "env": { "SEI_USUARIO": "...", "SEI_SENHA": "..." } },
+    "seipro": { "command": "uv", "args": ["run", "--directory", "/caminho/para/todos", "todos"], "env": { "SEI_USUARIO": "...", "SEI_SENHA": "..." } },
     "pink":   { "command": "uv", "args": ["run", "--directory", "/caminho/para/pink",  "pink-mcp"],  "env": { "METABASE_USUARIO": "...", "METABASE_SENHA": "..." } }
   }
 }

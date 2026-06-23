@@ -188,7 +188,7 @@ do usuário sem depender de prompt estático.
 
 ### 2.5 (Média) Checagem de error-boundary no CI
 
-O `mcp-sei` já tem `SEIError` e `ToolError` (RFC 0003/0004). Falta o guarda
+O `todos` já tem `SEIError` e `ToolError` (RFC 0003/0004). Falta o guarda
 automatizado que garanta que a tradução de erros acontece só na fronteira — a
 convenção hoje depende de disciplina manual.
 
@@ -197,7 +197,7 @@ erro de transporte (ou vice-versa) fora da fronteira esperada.
 
 ### 2.6 (Baixa, opcional) Superfície CLI a partir da mesma definição
 
-O `mcp-sei` é essencialmente MCP-only. Uma CLI fina derivada das mesmas funções
+O `todos` é essencialmente MCP-only. Uma CLI fina derivada das mesmas funções
 ajudaria smoke-tests e operação manual sem duplicar lógica.
 
 **Proposta:** avaliar um adaptador CLI opcional sobre as funções de tool

@@ -1018,64 +1018,6 @@ cli = [
 ]
 
 [[package]]
-name = "mcp-sei"
-source = { editable = "." }
-dependencies = [
-    { name = "beautifulsoup4" },
-    { name = "fastmcp" },
-    { name = "httpx" },
-    { name = "keyring" },
-    { name = "markdownify" },
-    { name = "mcp", extra = ["cli"] },
-    { name = "pdf2image" },
-    { name = "pdfplumber" },
-    { name = "pytesseract" },
-    { name = "rich" },
-    { name = "typer" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "bandit" },
-    { name = "pip-audit" },
-    { name = "pytest" },
-    { name = "ruff" },
-    { name = "ty" },
-    { name = "vulture" },
-]
-eval = [
-    { name = "anthropic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "beautifulsoup4", specifier = ">=4" },
-    { name = "fastmcp", specifier = "==3.4.2" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "keyring", specifier = ">=25.0.0" },
-    { name = "markdownify", specifier = ">=0.14" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.12" },
-    { name = "pdf2image", specifier = ">=1.16" },
-    { name = "pdfplumber", specifier = ">=0.10" },
-    { name = "pytesseract", specifier = ">=0.3" },
-    { name = "rich", specifier = ">=13.0" },
-    { name = "typer", specifier = ">=0.12" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "bandit", specifier = ">=1.8" },
-    { name = "pip-audit", specifier = ">=2.8" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "ruff", specifier = ">=0.9" },
-    { name = "ty", specifier = ">=0.0.1a14" },
-    { name = "vulture", specifier = ">=2.14" },
-]
-eval = [{ name = "anthropic", specifier = ">=0.30" }]
-
-[[package]]
 name = "mdurl"
 version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2100,6 +2042,64 @@ sdist = { url = "https://files.pythonhosted.org/packages/e9/88/35e4d27d9177d7df7
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f5/ac/19f9941c74add59d17694930ec8105d5eddeee4ce56dd8632b765ca16d6c/stevedore-5.8.0-py3-none-any.whl", hash = "sha256:88eede9e66ca80e34085b9174e2327da2c61ac91f24f70e41c3ad76e4bb4872b", size = 54553, upload-time = "2026-05-18T09:15:25.82Z" },
 ]
+
+[[package]]
+name = "todos-sei"
+source = { editable = "." }
+dependencies = [
+    { name = "beautifulsoup4" },
+    { name = "fastmcp" },
+    { name = "httpx" },
+    { name = "keyring" },
+    { name = "markdownify" },
+    { name = "mcp", extra = ["cli"] },
+    { name = "pdf2image" },
+    { name = "pdfplumber" },
+    { name = "pytesseract" },
+    { name = "rich" },
+    { name = "typer" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "bandit" },
+    { name = "pip-audit" },
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "ty" },
+    { name = "vulture" },
+]
+eval = [
+    { name = "anthropic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4" },
+    { name = "fastmcp", specifier = "==3.4.2" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "keyring", specifier = ">=25.0.0" },
+    { name = "markdownify", specifier = ">=0.14" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.12" },
+    { name = "pdf2image", specifier = ">=1.16" },
+    { name = "pdfplumber", specifier = ">=0.10" },
+    { name = "pytesseract", specifier = ">=0.3" },
+    { name = "rich", specifier = ">=13.0" },
+    { name = "typer", specifier = ">=0.12" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.8" },
+    { name = "pip-audit", specifier = ">=2.8" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = ">=0.9" },
+    { name = "ty", specifier = ">=0.0.1a14" },
+    { name = "vulture", specifier = ">=2.14" },
+]
+eval = [{ name = "anthropic", specifier = ">=0.30" }]
 
 [[package]]
 name = "tomli"

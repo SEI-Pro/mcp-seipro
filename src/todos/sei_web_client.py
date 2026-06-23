@@ -3269,7 +3269,7 @@ class SEIWebClient:
                     else:
                         btn = soup.find("button", id="btnAdicionar")
                         if btn:
-                            onclick = btn.get("onclick", "")
+                            onclick = _tag_str(btn, "onclick")
                             m_cad = re.search(r"location\.href='([^']+)'", onclick)
                             if m_cad:
                                 cad_url = urljoin(sei_base, m_cad.group(1).replace("&amp;", "&"))

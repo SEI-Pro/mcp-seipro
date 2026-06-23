@@ -12,7 +12,9 @@ from bs4 import BeautifulSoup, Tag
 from todos.exceptions import SEIValidationError
 from todos.sei_web_client import (
     SEIWebClient,
+    _max_no_index,
     _parse_doc_label,
+    _renumerar_nos_chunk,
     parse_arvore_nos,
     parse_inbox,
 )
@@ -360,3 +362,181 @@ class TestInferirPadraoProtocolo:
     def test_key_format(self) -> None:
         key = _keyring_pattern_key("sei.orgao.gov.br")
         assert key == "SEI_PROTOCOLO_PATTERN@sei.orgao.gov.br"
+
+
+# ---------------------------------------------------------------------------
+# _max_no_index  (PR #91 — colisão de índices de pasta/paginação)
+# ---------------------------------------------------------------------------
+
+
+class TestMaxNoIndex:
+    def test_no_nos_returns_minus_one(self) -> None:
+        assert _max_no_index("var x = 1;") == -1
+
+    def test_single_index(self) -> None:
+        assert _max_no_index("Nos[3] = new infraArvoreNo();") == 3
+
+    def test_multiple_indices_returns_max(self) -> None:
+        js = "Nos[0] = x; Nos[5] = y; Nos[2] = z;"
+        assert _max_no_index(js) == 5
+
+    def test_empty_string(self) -> None:
+        assert _max_no_index("") == -1
+
+
+# ---------------------------------------------------------------------------
+# _renumerar_nos_chunk  (PR #91 — reescrita de índices para evitar colisão)
+# ---------------------------------------------------------------------------
+
+
+class TestRenumerarNosChunk:
+    def test_no_nos_unchanged(self) -> None:
+        chunk = "var x = 1;"
+        result, next_off = _renumerar_nos_chunk(chunk, 10)
+        assert result == chunk
+        assert next_off == 10
+
+    def test_offset_applied(self) -> None:
+        chunk = "Nos[0] = a; Nos[1] = b;"
+        result, next_off = _renumerar_nos_chunk(chunk, 5)
+        assert "Nos[5]" in result
+        assert "Nos[6]" in result
+        assert "Nos[0]" not in result
+        assert next_off == 7  # 5 + max_idx(1) + 1
+
+    def test_next_offset_correct(self) -> None:
+        chunk = "Nos[0] = a; Nos[2] = b;"
+        _, next_off = _renumerar_nos_chunk(chunk, 0)
+        assert next_off == 3  # 0 + max_idx(2) + 1
+
+    def test_chaining_two_chunks_no_overlap(self) -> None:
+        chunk_a = "Nos[0] = a; Nos[1] = b;"
+        chunk_b = "Nos[0] = c; Nos[1] = d;"
+        a_renum, off = _renumerar_nos_chunk(chunk_a, 0)
+        b_renum, _ = _renumerar_nos_chunk(chunk_b, off)
+        combined = a_renum + b_renum
+        indices = [int(m.group(1)) for m in __import__("re").finditer(r"Nos\[(\d+)\]", combined)]
+        assert len(indices) == len(set(indices)), "Índices duplicados após renumeração encadeada"
+
+
+# ---------------------------------------------------------------------------
+# parse_arvore_nos — regressão colisão de acoes_map/src_map (PR #91)
+# ---------------------------------------------------------------------------
+
+
+class TestParseArvoreNosCollisionRegression:
+    """Garante que acoes e src do Nos[0] de um chunk expandido não
+    sobrescrevam os do Nos[0] do HTML original após renumeração."""
+
+    @staticmethod
+    def _make_js(idx: int, node_id: str, acoes_val: str, src_val: str) -> str:
+        """Chunk de JS com Nos[idx] tendo id=node_id, acoes e src específicos."""
+        return (
+            f"Nos[{idx}] = new infraArvoreNo('doc', '{node_id}', 'proc', "
+            f"'link{idx}', '_self', 'Label{idx}', '', '');\n"
+            f"Nos[{idx}].acoes = '{acoes_val}';\n"
+            f"Nos[{idx}].src = '{src_val}';\n"
+        )
+
+    def test_acoes_not_overwritten_after_renumber(self) -> None:
+        # Chunk original: Nos[0] com id='docA'
+        chunk_orig = self._make_js(0, "docA", "ACOES_ORIGINAL", "SRC_ORIGINAL")
+        # Chunk expandido: também começa em Nos[0] com id='docB'
+        chunk_expanded = self._make_js(0, "docB", "ACOES_EXPANDED", "SRC_EXPANDED")
+        # Renumera o chunk expandido para Nos[1]
+        chunk_renum, _ = _renumerar_nos_chunk(chunk_expanded, 1)
+        combined = chunk_orig + chunk_renum
+        nos = parse_arvore_nos(combined)
+        # Deve haver 2 nós distintos
+        assert len(nos) == 2
+        # nó original (índice 0) mantém acoes_html/src originais
+        no_orig = next(n for n in nos if n["id"] == "docA")
+        assert no_orig.get("acoes_html") == "ACOES_ORIGINAL"
+        assert no_orig.get("src") == "SRC_ORIGINAL"
+        # nó expandido (renumerado para índice 1) mantém suas próprias acoes_html/src
+        no_exp = next(n for n in nos if n["id"] == "docB")
+        assert no_exp.get("acoes_html") == "ACOES_EXPANDED"
+        assert no_exp.get("src") == "SRC_EXPANDED"
+
+    def test_no_collision_without_renumber_would_fail(self) -> None:
+        """Demonstra que sem renumeração os acoes_map se sobrescrevem.
+
+        Dois chunks com Nos[0]: acoes_map["0"] recebe o último valor encontrado
+        (EXPANDED), portanto docA perde sua acoes_html — essa é a colisão que
+        PR #91 corrige com _renumerar_nos_chunk.
+        """
+        chunk_orig = self._make_js(0, "docA", "ACOES_ORIGINAL", "SRC_ORIGINAL")
+        chunk_expanded = self._make_js(0, "docB", "ACOES_EXPANDED", "SRC_EXPANDED")
+        # Concatena SEM renumerar — acoes_map["0"] é sobrescrito por EXPANDED
+        combined = chunk_orig + chunk_expanded
+        nos = parse_arvore_nos(combined)
+        assert len(nos) == 2
+        # Ambos os nós recebem acoes_html do acoes_map["0"] (sobrescrito)
+        no_orig = next(n for n in nos if n["id"] == "docA")
+        assert no_orig.get("acoes_html") == "ACOES_EXPANDED"  # ORIGINAL foi perdido
+
+
+# ---------------------------------------------------------------------------
+# SEIWebClient._parse_tabela_historico  (PR #91 — paginação do histórico)
+# ---------------------------------------------------------------------------
+
+
+def _make_historico_html(rows: list[tuple[str, str, str, str]]) -> str:
+    """Gera HTML mínimo de tblHistorico com as linhas fornecidas."""
+    trs = "".join(
+        f"<tr><td>{dh}</td><td>{un}</td><td>{us}</td><td>{desc}</td></tr>"
+        for dh, un, us, desc in rows
+    )
+    return f"""
+    <html><body>
+    <table id="tblHistorico">
+      <thead><tr><th>Data/Hora</th><th>Unidade</th><th>Usuário</th><th>Descrição</th></tr></thead>
+      <tbody>{trs}</tbody>
+    </table>
+    </body></html>
+    """
+
+
+class TestParseTabeHistorico:
+    def test_empty_table(self) -> None:
+        html = _make_historico_html([])
+        assert SEIWebClient._parse_tabela_historico(html) == []
+
+    def test_no_table_returns_empty(self) -> None:
+        assert SEIWebClient._parse_tabela_historico("<html><body></body></html>") == []
+
+    def test_single_row(self) -> None:
+        html = _make_historico_html([("01/01/2024 10:00", "GPF", "joao.silva", "Recebido")])
+        rows = SEIWebClient._parse_tabela_historico(html)
+        assert len(rows) == 1
+        assert rows[0]["data_hora"] == "01/01/2024 10:00"
+        assert rows[0]["unidade"] == "GPF"
+        assert rows[0]["usuario"] == "joao.silva"
+        assert rows[0]["descricao"] == "Recebido"
+
+    def test_multiple_rows(self) -> None:
+        data = [
+            ("01/01/2024 08:00", "A", "u1", "Ação 1"),
+            ("01/01/2024 09:00", "B", "u2", "Ação 2"),
+            ("01/01/2024 10:00", "C", "u3", "Ação 3"),
+        ]
+        html = _make_historico_html(data)
+        rows = SEIWebClient._parse_tabela_historico(html)
+        assert len(rows) == 3
+        assert rows[2]["descricao"] == "Ação 3"
+
+    def test_row_with_fewer_than_4_cols_skipped(self) -> None:
+        html = """
+        <html><body>
+        <table id="tblHistorico">
+          <thead><tr><th>H</th></tr></thead>
+          <tbody>
+            <tr><td>só uma coluna</td></tr>
+            <tr><td>01/01/2024</td><td>U</td><td>u</td><td>Válida</td></tr>
+          </tbody>
+        </table>
+        </body></html>
+        """
+        rows = SEIWebClient._parse_tabela_historico(html)
+        assert len(rows) == 1
+        assert rows[0]["descricao"] == "Válida"
