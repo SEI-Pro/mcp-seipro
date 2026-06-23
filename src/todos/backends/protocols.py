@@ -132,7 +132,7 @@ class ProcessosLeituraProtocol(Protocol):
         """Pesquisa processos por texto e filtros estruturados."""
         ...
 
-    async def listar_atividades(self, processo: str) -> dict:
+    async def listar_atividades(self, processo: str, tipo_historico: str = "R") -> dict:
         """Lista o histórico de andamentos de um processo."""
         ...
 
