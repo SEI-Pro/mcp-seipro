@@ -281,9 +281,9 @@ def envelopar_html(disclaimer: dict, conteudo: str) -> str:
     aside = (
         '<aside style="border:2px solid #c00;padding:12px;margin-bottom:12px;'
         'background:#fff8f8;font-family:sans-serif">'
-        f"<p><strong>{disclaimer['mensagem']}</strong></p>"
-        f"<p>Nível: {disclaimer['rotulo_nivel']} "
-        f"(nivelAcesso={disclaimer['nivel_acesso']})</p>"
+        f"<p><strong>{_html.escape(str(disclaimer['mensagem']))}</strong></p>"
+        f"<p>Nível: {_html.escape(str(disclaimer['rotulo_nivel']))} "
+        f"(nivelAcesso={_html.escape(str(disclaimer['nivel_acesso']))})</p>"
         f"{hl_html}"
         f"<p><strong>Riscos:</strong></p><ul>{riscos_html}</ul>"
         "</aside>"

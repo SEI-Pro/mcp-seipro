@@ -69,6 +69,7 @@ _BEARER_SCHEME = "Bearer"  # RFC 6750 §6.1.1 token type string
 _ESQUEMAS_PERMITIDOS_SEI = {"https"}
 _REDES_BLOQUEADAS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
     ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT (RFC 6598) — Railway/Fly.io internals
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("127.0.0.0/8"),
@@ -107,18 +108,25 @@ def _validar_url_sei(url: str, campo: str) -> None:
 # ---------------------------------------------------------------------------
 
 _REVOCATION_NS = {"module": "auth_revoked"}
+_AUTH_CODE_NS = {"module": "auth"}
 
 
 async def _revogar_token(sig: str) -> None:
-    """Store a token signature in the revocation list (TTL = TOKEN_TTL)."""
+    """Store a token signature in the revocation list (self-expiring at TOKEN_TTL)."""
     cache = get_catalog_cache()
-    await cache.set(_REVOCATION_NS, sig[:64], {"at": time.time()})
+    # CatalogCache.set() has no per-entry TTL; we embed the expiry in the value
+    # and check it in _esta_revogado() to enforce the full TOKEN_TTL window even
+    # when CATALOG_CACHE_TTL (default 24 h) is shorter than TOKEN_TTL (30 d).
+    await cache.set(_REVOCATION_NS, sig[:64], {"at": time.time(), "exp": time.time() + TOKEN_TTL})
 
 
 async def _esta_revogado(sig: str) -> bool:
-    """Retorna True se a assinatura do token estiver na lista de revogação."""
+    """Return True if the token signature is in the revocation list and not yet expired."""
     cache = get_catalog_cache()
-    return await cache.get(_REVOCATION_NS, sig[:64]) is not None
+    entry = await cache.get(_REVOCATION_NS, sig[:64])
+    if entry is None:
+        return False
+    return time.time() <= entry.get("exp", 0)
 
 
 def _sig_from_token(token: str) -> str:
@@ -152,7 +160,7 @@ async def _store_auth_code(code: str, data: dict) -> None:
     entry = {**data, "_expires": time.time() + _AUTH_CODE_TTL}
     _auth_codes[code] = entry
     cache = get_catalog_cache()
-    await cache.set({"module": "auth"}, f"code:{code}", entry)
+    await cache.set(_AUTH_CODE_NS, f"code:{code}", entry)
 
 
 async def _load_auth_code(code: str) -> dict | None:
@@ -165,7 +173,7 @@ async def _load_auth_code(code: str) -> dict | None:
     if entry is None:
         # Miss — tenta disco (sobrevivência após restart)
         cache = get_catalog_cache()
-        entry = cast("dict | None", await cache.get({"module": "auth"}, f"code:{code}"))
+        entry = cast("dict | None", await cache.get(_AUTH_CODE_NS, f"code:{code}"))
     if entry is None:
         return None
     if time.time() > entry.get("_expires", 0):
@@ -180,7 +188,7 @@ async def _delete_auth_code(code: str) -> None:
     """Remove um auth code da memória e do SQLite (uso único)."""
     _auth_codes.pop(code, None)
     cache = get_catalog_cache()
-    await cache.delete({"module": "auth"}, f"code:{code}")
+    await cache.delete(_AUTH_CODE_NS, f"code:{code}")
 
 
 def _sign(payload: dict) -> str:
