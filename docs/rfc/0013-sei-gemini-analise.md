@@ -100,21 +100,38 @@ Configurar no ambiente do servidor ou via `pink setup` (RFC 0032 do pink).
 
 ```python
 _PROMPT_BASE = """
-Você é um assistente jurídico. Analise o processo SEI anexado e retorne
-um objeto JSON com exatamente estes campos:
+Você é um assistente jurídico. Analise o processo SEI/PJe consolidado em PDF.
 
-{
-  "resumo": "3-4 linhas: partes, pedido, natureza do processo",
-  "situacao_atual": "último ato e estado atual",
-  "acao_necessaria": "o que o IPERON/PGE-IPERON deve fazer agora",
-  "prazo": "YYYY-MM-DD se identificado, null caso contrário",
-  "comentario_triagem": "parágrafo formal pronto para postar no sistema"
-}
+IMPORTANTE — IDs dos documentos:
+Cada documento no PDF possui rodapé com identificadores únicos:
+- SEI: texto "SEI nº XXXXXXXX" (8 dígitos) — esse número é o id_documento
+  para uso em sei_ler_documento caso seja necessário aprofundamento.
+- PJe: ID de referência do tribunal no rodapé da página.
+Para cada documento, anote tipo, SEI nº/ID PJe, página inicial e data.
 
-Seja direto. Foco em ação. Não use markdown fora do JSON.
+Retorne JSON com exatamente estes campos:
+
+{{
+  "documentos": [
+    {{"pagina": 1, "tipo": "Ofício", "sei_id": "73270751", "pje_id": null,
+      "data": "2026-06-12", "signatario": "Nome Sobrenome"}}
+  ],
+  "resumo": "3-4 linhas: partes, pedido, natureza",
+  "situacao_atual": "último ato; citar SEI nº do documento mais recente",
+  "acao_necessaria": "o que IPERON/PGE-IPERON deve fazer agora",
+  "prazo": "YYYY-MM-DD ou null",
+  "documento_prazo": "SEI nº que estabelece o prazo, ou null",
+  "comentario_triagem": "parágrafo formal; citar SEI nº relevantes entre parênteses"
+}}
+
+Não use markdown fora do JSON. Foco em ação, não em teoria jurídica.
 {extra}
 """
 ```
+
+O campo `documentos` é a lista indexada de todos os documentos encontrados no PDF,
+em ordem de aparição. Permite ao agente fazer `sei_ler_documento(id_documento=d["sei_id"])`
+para aprofundamento seletivo sem precisar varrer a árvore do processo.
 
 ### 4.5 Key rotation e model fallback
 
