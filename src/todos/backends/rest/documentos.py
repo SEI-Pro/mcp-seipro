@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from todos.backends.models import CredenciaisAssinatura, FiltrosPesquisaProcessos
+from todos.backends.models import FiltrosPesquisaProcessos
 from todos.backends.rest._session import _RestMixin
 from todos.exceptions import SEIError, SEIValidationError
 
@@ -201,9 +201,8 @@ class DocumentosRest(_RestMixin):
                 "Verifique se o login está correto e se o usuário pertence à unidade ativa."
             )
             raise SEIValidationError(msg)
-        cred = CredenciaisAssinatura(
+        cred = self._rest.build_credenciais_assinatura(
             login=login,
-            senha=self._rest.senha,
             cargo=cargo,
             orgao=orgao,
             id_usuario=id_usuario,

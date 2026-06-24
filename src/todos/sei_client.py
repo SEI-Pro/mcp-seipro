@@ -146,10 +146,21 @@ class SEIClient:
         """Login do usuário configurado."""
         return self._usuario
 
-    @property
-    def senha(self) -> str:
-        """Senha do usuário (necessária para assinar documentos)."""
-        return self._senha
+    def build_credenciais_assinatura(
+        self,
+        login: str,
+        cargo: str,
+        id_usuario: str,
+        orgao: str = "",
+    ) -> "CredenciaisAssinatura":
+        """Build CredenciaisAssinatura without exposing _senha as a public property."""
+        return CredenciaisAssinatura(
+            login=login,
+            senha=self._senha,
+            cargo=cargo,
+            orgao=orgao,
+            id_usuario=id_usuario,
+        )
 
     @property
     def unidade_ativa(self) -> str | None:
@@ -289,7 +300,10 @@ class SEIClient:
             raise SEIAuthError(msg)
         payload = data["data"]
         if "token" not in payload:
-            logger.error("Payload de autenticação sem campo 'token': %r", payload)
+            logger.error(
+                "Payload de autenticação sem campo 'token': chaves=%r",
+                list(payload.keys()),
+            )
             msg = "Resposta de autenticação inesperada do SEI (sem campo 'token')"
             raise SEIAuthError(msg)
         self._token = payload["token"]

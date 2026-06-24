@@ -19,6 +19,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -26,6 +27,7 @@ import secrets
 import time
 from html import escape as _html_escape
 from typing import cast
+from urllib.parse import urlparse
 
 from fastmcp.server.auth import AccessToken, OAuthProvider
 from mcp.server.auth.provider import (
@@ -60,6 +62,79 @@ TOKEN_TTL = 86400 * 30  # 30 dias
 _JWT_PARTS = 2  # JWT tokens have exactly 2 parts: payload.signature
 _BEARER_SCHEME = "Bearer"  # RFC 6750 §6.1.1 token type string
 
+# ---------------------------------------------------------------------------
+# SSRF guard — bloqueio de destinos internos no formulário OAuth
+# ---------------------------------------------------------------------------
+
+_ESQUEMAS_PERMITIDOS_SEI = {"https"}
+_REDES_BLOQUEADAS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT (RFC 6598) — Railway/Fly.io internals
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local / AWS IMDS
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _validar_url_sei(url: str, campo: str) -> None:
+    """Raise ValueError if the URL is not HTTPS or targets an internal network.
+
+    IP literal checks protect against direct SSRF; DNS hostnames are not
+    resolved here to avoid DNS rebinding outside the request path.
+    """
+    if not url:
+        return
+    parsed = urlparse(url)
+    if parsed.scheme not in _ESQUEMAS_PERMITIDOS_SEI:
+        msg = f"{campo}: esquema '{parsed.scheme}' não permitido — use HTTPS."
+        raise ValueError(msg)
+    host = parsed.hostname or ""
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return  # hostname DNS — não validamos aqui
+    for net in _REDES_BLOQUEADAS:
+        if addr in net:
+            msg = f"{campo}: endereço IP bloqueado ({host})."
+            raise ValueError(msg)
+
+
+# ---------------------------------------------------------------------------
+# Token revocation (RFC 0014 §9)
+# ---------------------------------------------------------------------------
+
+_REVOCATION_NS = {"module": "auth_revoked"}
+_AUTH_CODE_NS = {"module": "auth"}
+
+
+async def _revogar_token(sig: str) -> None:
+    """Store a token signature in the revocation list (self-expiring at TOKEN_TTL)."""
+    cache = get_catalog_cache()
+    # CatalogCache.set() has no per-entry TTL; we embed the expiry in the value
+    # and check it in _esta_revogado() to enforce the full TOKEN_TTL window even
+    # when CATALOG_CACHE_TTL (default 24 h) is shorter than TOKEN_TTL (30 d).
+    await cache.set(_REVOCATION_NS, sig[:64], {"at": time.time(), "exp": time.time() + TOKEN_TTL})
+
+
+async def _esta_revogado(sig: str) -> bool:
+    """Return True if the token signature is in the revocation list and not yet expired."""
+    cache = get_catalog_cache()
+    entry = await cache.get(_REVOCATION_NS, sig[:64])
+    if not isinstance(entry, dict):
+        return False
+    exp = entry.get("exp", 0)
+    return time.time() <= float(exp if isinstance(exp, (int, float)) else 0)
+
+
+def _sig_from_token(token: str) -> str:
+    """Extrai a assinatura (última parte após '.') de um token."""
+    parts = token.split(".")
+    return parts[-1] if len(parts) == _JWT_PARTS else ""
+
 
 def validate_jwt_secret() -> None:
     """Raise RuntimeError if JWT_SECRET is absent or shorter than the minimum.
@@ -86,7 +161,7 @@ async def _store_auth_code(code: str, data: dict) -> None:
     entry = {**data, "_expires": time.time() + _AUTH_CODE_TTL}
     _auth_codes[code] = entry
     cache = get_catalog_cache()
-    await cache.set({"module": "auth"}, f"code:{code}", entry)
+    await cache.set(_AUTH_CODE_NS, f"code:{code}", entry)
 
 
 async def _load_auth_code(code: str) -> dict | None:
@@ -99,7 +174,7 @@ async def _load_auth_code(code: str) -> dict | None:
     if entry is None:
         # Miss — tenta disco (sobrevivência após restart)
         cache = get_catalog_cache()
-        entry = cast("dict | None", await cache.get({"module": "auth"}, f"code:{code}"))
+        entry = cast("dict | None", await cache.get(_AUTH_CODE_NS, f"code:{code}"))
     if entry is None:
         return None
     if time.time() > entry.get("_expires", 0):
@@ -114,7 +189,7 @@ async def _delete_auth_code(code: str) -> None:
     """Remove um auth code da memória e do SQLite (uso único)."""
     _auth_codes.pop(code, None)
     cache = get_catalog_cache()
-    await cache.delete({"module": "auth"}, f"code:{code}")
+    await cache.delete(_AUTH_CODE_NS, f"code:{code}")
 
 
 def _sign(payload: dict) -> str:
@@ -188,6 +263,11 @@ class SEIProOAuthProvider(OAuthProvider):
         """Persist a dynamically-registered OAuth client in memory."""
         if client_info.client_id:
             _clients[client_info.client_id] = client_info
+            logger.info(
+                "OAuth client registrado: client_id=%s redirect_uris=%s",
+                client_info.client_id,
+                [str(u) for u in (client_info.redirect_uris or [])],
+            )
 
     # -- Authorization --
 
@@ -285,24 +365,6 @@ class SEIProOAuthProvider(OAuthProvider):
 
     # -- Refresh --
 
-    async def load_refresh_token(
-        self,
-        client: OAuthClientInformationFull,
-        refresh_token: str,
-    ) -> RefreshToken | None:
-        """Verify and decode a refresh token; returns None if invalid or expired."""
-        payload = _verify(refresh_token)
-        if not payload or payload.get("type") != "refresh":
-            return None
-        if payload.get("client_id") != client.client_id:
-            return None
-        return RefreshToken(
-            token=refresh_token,
-            client_id=payload["client_id"],
-            scopes=payload.get("scopes", []),
-            expires_at=int(payload.get("exp", 0)),
-        )
-
     async def exchange_refresh_token(
         self,
         client: OAuthClientInformationFull,
@@ -351,9 +413,12 @@ class SEIProOAuthProvider(OAuthProvider):
     # -- Token verification --
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        """Verify and decode an access token; returns None if invalid or expired."""
+        """Verify and decode an access token; returns None if invalid, expired or revoked."""
         payload = _verify(token)
         if not payload or payload.get("type") != "access":
+            return None
+        if await _esta_revogado(_sig_from_token(token)):
+            logger.info("Token de acesso revogado rejeitado.")
             return None
         return AccessToken(
             token=token,
@@ -362,10 +427,35 @@ class SEIProOAuthProvider(OAuthProvider):
             expires_at=int(payload.get("exp", 0)),
         )
 
-    # -- Revocation (no-op, tokens são stateless) --
+    async def load_refresh_token(
+        self,
+        client: OAuthClientInformationFull,
+        refresh_token: str,
+    ) -> RefreshToken | None:
+        """Verify and decode a refresh token; returns None if invalid, expired or revoked."""
+        payload = _verify(refresh_token)
+        if not payload or payload.get("type") != "refresh":
+            return None
+        if payload.get("client_id") != client.client_id:
+            return None
+        if await _esta_revogado(_sig_from_token(refresh_token)):
+            logger.info("Refresh token revogado rejeitado.")
+            return None
+        return RefreshToken(
+            token=refresh_token,
+            client_id=payload["client_id"],
+            scopes=payload.get("scopes", []),
+            expires_at=int(payload.get("exp", 0)),
+        )
+
+    # -- Revocation --
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
-        """No-op: tokens are stateless and expire naturally."""
+        """Store the token signature in the revocation list so it is rejected on next use."""
+        sig = _sig_from_token(token.token)
+        if sig:
+            await _revogar_token(sig)
+            logger.info("Token revogado (sig=%s…)", sig[:12])
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +522,7 @@ _LOGIN_HTML = """<!DOCTYPE html>
 async def login_page(request: Request) -> HTMLResponse:
     """GET /login — renderiza formulário de credenciais SEI."""
     session = request.query_params.get("session", "")
-    return HTMLResponse(_LOGIN_HTML.replace("{session}", session))
+    return HTMLResponse(_LOGIN_HTML.replace("{session}", _html_escape(session)))
 
 
 async def login_submit(request: Request) -> HTMLResponse:
@@ -453,6 +543,13 @@ async def login_submit(request: Request) -> HTMLResponse:
             "<h1>Informe a URL da API do SEI ou a URL base do SEI (web).</h1>",
             status_code=400,
         )
+
+    # Validação SSRF — bloqueia IPs internos e esquemas não-HTTPS
+    try:
+        _validar_url_sei(sei_url, "URL da API do SEI")
+        _validar_url_sei(sei_web_url, "URL base do SEI")
+    except ValueError as exc:
+        return HTMLResponse(f"<h1>URL inválida: {_html_escape(str(exc))}</h1>", status_code=400)
 
     # Validação ok — consome a sessão pendente (uso único)
     await _delete_auth_code(f"pending:{session_id}")
@@ -488,7 +585,7 @@ async def login_submit(request: Request) -> HTMLResponse:
     )
 
     usuario = sei_creds["sei_usuario"]
-    page = _SUCCESS_HTML.replace("{redirect_uri}", str(redirect_uri)).replace(
+    page = _SUCCESS_HTML.replace("{redirect_uri}", _html_escape(str(redirect_uri))).replace(
         "{usuario}", _html_escape(usuario)
     )
     return HTMLResponse(page)

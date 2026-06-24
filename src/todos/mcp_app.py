@@ -65,6 +65,11 @@ configure_logging(
 @asynccontextmanager
 async def lifespan(_server: FastMCP) -> AsyncGenerator[dict[str, object], None]:
     """Set up and tear down SEI client sessions for the MCP server lifespan."""
+    if os.environ.get("SEI_VERIFY_SSL", "true").strip().lower() in ("false", "0", "no"):
+        logger.warning(
+            "SEI_VERIFY_SSL=false: verificação TLS desabilitada. "
+            "Não use em produção com dados sensíveis."
+        )
     try:
         if _http_mode:
             clients: dict[str, SEIClient] = {}
