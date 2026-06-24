@@ -6,7 +6,6 @@ import logging
 
 import httpx
 
-from todos.backends.models import CredenciaisAssinatura
 from todos.backends.rest._session import _RestMixin
 from todos.backends.rest.catalogos import _validar_pagina
 from todos.exceptions import SEIError, SEIValidationError
@@ -183,9 +182,8 @@ class BlocosRest(_RestMixin):
     async def assinar_bloco(self, id_bloco: str, cargo: str = "") -> dict:
         """Assina todos os documentos de um bloco de assinatura."""
         id_usuario = await self._resolver_id_usuario()
-        cred = CredenciaisAssinatura(
+        cred = self._rest.build_credenciais_assinatura(
             login=self._rest.usuario,
-            senha=self._rest.senha,
             cargo=cargo,
             id_usuario=id_usuario,
         )
@@ -194,9 +192,8 @@ class BlocosRest(_RestMixin):
     async def assinar_documentos_bloco(self, documentos: str, cargo: str = "") -> dict:
         """Assina documentos específicos de um bloco de assinatura."""
         id_usuario = await self._resolver_id_usuario()
-        cred = CredenciaisAssinatura(
+        cred = self._rest.build_credenciais_assinatura(
             login=self._rest.usuario,
-            senha=self._rest.senha,
             cargo=cargo,
             id_usuario=id_usuario,
         )

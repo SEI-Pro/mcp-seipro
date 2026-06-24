@@ -18,6 +18,9 @@ ser objetos reais (não strings adiadas).
 
 import base64
 import html as html_module
+import logging
+import os
+from pathlib import Path
 from typing import Annotated, Literal
 
 import httpx
@@ -61,8 +64,54 @@ from todos.sei_styles import (
     html_referencia_sei,
 )
 
+logger = logging.getLogger(__name__)
+
 # Nível de acesso: 0=público, 1=restrito, 2=sigiloso
 _NIVEL_ACESSO = r"^[012]$"
+
+# Extensões permitidas para upload de arquivos locais (modo stdio)
+_EXTENSOES_UPLOAD_PERMITIDAS = frozenset(
+    {
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".odt",
+        ".ods",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".tif",
+        ".tiff",
+        ".zip",
+        ".p7s",
+    }
+)
+
+
+def _validar_arquivo_path(path: str) -> Path:
+    """Valida extensão e diretório base de arquivo_path em modo stdio.
+
+    Levanta SEIValidationError se a extensão não for permitida ou se
+    SEI_UPLOAD_DIR estiver configurado e o arquivo estiver fora dele.
+    """
+    p = Path(path).expanduser().resolve()
+    if p.suffix.lower() not in _EXTENSOES_UPLOAD_PERMITIDAS:
+        msg = (
+            f"Extensão '{p.suffix}' não permitida. "
+            f"Permitidas: {sorted(_EXTENSOES_UPLOAD_PERMITIDAS)}"
+        )
+        raise SEIValidationError(msg)
+    upload_dir = os.environ.get("SEI_UPLOAD_DIR", "").strip()
+    if upload_dir:
+        base = Path(upload_dir).expanduser().resolve()
+        try:
+            p.relative_to(base)
+        except ValueError as exc:
+            msg = f"arquivo_path deve estar dentro de SEI_UPLOAD_DIR ({base})."
+            raise SEIValidationError(msg) from exc
+    return p
 
 
 def _aplicar_disclaimer(conteudo: str, disclaimer: dict | None, formato: str) -> str:
@@ -549,6 +598,10 @@ async def sei_criar_documento_externo(
     - descricao: descrição do documento
     - nivel_acesso: 0=público (padrão), 1=restrito, 2=sigiloso
     """
+    if _http_mode:
+        msg = "Em modo remoto use sei_incluir_documento_externo_web com arquivo_base64."
+        raise SEIValidationError(msg)
+    _validar_arquivo_path(arquivo_path)
     dados = NovoDocumentoExterno(
         id_serie=id_serie,
         arquivo_path=arquivo_path,
@@ -655,6 +708,11 @@ async def sei_alterar_documento_externo(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
+    if arquivo_path:
+        if _http_mode:
+            msg = "Em modo remoto arquivo_path não é permitido."
+            raise SEIValidationError(msg)
+        _validar_arquivo_path(arquivo_path)
     result = await (await _backend(ctx)).alterar_documento_externo(
         id_documento=id_documento,
         descricao=descricao,
@@ -760,6 +818,7 @@ async def sei_incluir_documento_externo(
                     "(caminhos do servidor não são permitidos)."
                 )
                 raise SEIValidationError(msg)
+            _validar_arquivo_path(arquivo_path)
         elif id_serie:
             msg = "Informe arquivo_path (local) ou arquivo_base64 (remoto)."
             raise SEIValidationError(msg)
