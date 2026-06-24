@@ -124,9 +124,10 @@ async def _esta_revogado(sig: str) -> bool:
     """Return True if the token signature is in the revocation list and not yet expired."""
     cache = get_catalog_cache()
     entry = await cache.get(_REVOCATION_NS, sig[:64])
-    if entry is None:
+    if not isinstance(entry, dict):
         return False
-    return time.time() <= entry.get("exp", 0)
+    exp = entry.get("exp", 0)
+    return time.time() <= float(exp if isinstance(exp, (int, float)) else 0)
 
 
 def _sig_from_token(token: str) -> str:
