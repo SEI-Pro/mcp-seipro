@@ -53,6 +53,8 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 
 **Critério de `None`/`RC-UNION-STATUS`** (RFC 0015 D3): `-> X | None` **só** é finding quando o `None` colapsa erro com ausência. Quando o `None` é ausência legítima que o caller trata sem `try/except` (cache-miss, lookup opcional, "não encontrado no parse"), **não** é finding.
 
+> **Tipo de retorno canônico da refatoração:** os sketches abaixo mostram `@dataclass` por brevidade, mas o tipo de destino segue a **RFC 0015 D2** — **Pydantic `BaseModel` frozen por default**, dataclass só para objetos que carregam tipos não-Pydantic (`bs4.Tag`).
+
 ---
 
 ## Resumo executivo
@@ -64,9 +66,9 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 | Severidade | Findings |
 |---|---|
 | critical | 0 |
-| high | 15 |
+| high | 14 |
 | medium | 6 |
-| low | 7 |
+| low | 8 |
 | info | 2 |
 | **Total** | **30** |
 
@@ -351,7 +353,6 @@ async def _buscar_documento_via_solr(client: SEIClient, referencia: str) -> tupl
 | ID | Função / linha | Tipo | Severidade |
 |---|---|---|---|
 | F-005 | `parse_inbox:4875` | `RC-TUPLE` | high |
-| F-006 | `_extrair_erro_sei` | `RC-UNION-STATUS` | low |
 | F-007 | `_ler_senha_keyring` | `RC-UNION-STATUS` | low |
 | F-008 | `_link_acao_visualizacao` | `RC-UNION-STATUS` | medium |
 | F-009 | write methods (×21, 20 métodos) | `RC-DICT-STATUS` | medium |
@@ -386,23 +387,6 @@ class InboxParsed:
 raise SEIParseError("Formato de inbox desconhecido — tabela não reconhecida")
 ```
 **Esforço:** medium
-
----
-
-#### F-006 — `_extrair_erro_sei`
-
-**Tipo:** RC-UNION-STATUS
-**Severidade:** low
-**Padrão atual:**
-```python
-def _extrair_erro_sei(html: str) -> str | None:
-    ...
-    return None  # sem erro
-```
-**Problema:** `None` significa "nenhum erro encontrado" (ausência legítima). Menos crítico, mas pode ser confundido com "parse falhou" por um leitor desatento.
-
-**Refatoração sugerida:** Manter `None` como "não encontrado" mas documentar explicitamente; ou retornar `""` (string vazia) para distinguir de falha de parse.
-**Esforço:** low
 
 ---
 
@@ -591,6 +575,7 @@ Mesmo padrão de F-009: o wrapper async `ttl` captura `sqlite3.Error`, loga warn
 | F-017 | `_setup_credentials` | `RC-TUPLE` | high |
 | F-018 | `_build_mcp_env` | `RC-TUPLE` | high |
 | F-026 | `_mcp_add_via_cli`, `_mcp_add_via_json`, `_update_codex_via_cli` (×3) | `RC-BOOL-ERROR` | low |
+| F-029 | `_read_existing_todos_env` | `RC-UNION-STATUS` | low |
 
 Este arquivo concentra **13 instâncias** de funções que retornam tuplas nuas com 2–4 elementos posicionais sem nome, mais **3** helpers que retornam `bool` de sucesso/falha. A raiz é que `setup_wizard.py` foi desenvolvido como script imperativo e nunca migrado para types estruturados.
 
@@ -801,6 +786,28 @@ class MCPRegisterResult:
 
 ---
 
+#### F-029 — `_read_existing_todos_env`
+
+**Tipo:** RC-UNION-STATUS / None-as-error
+**Severidade:** low
+**Padrão atual:**
+```python
+def _read_existing_todos_env() -> dict[str, str] | None:
+    if not config_path.exists():
+        return None                       # ausência legítima: nunca configurado
+    try:
+        data = json.loads(config_path.read_text(...))
+    except (OSError, json.JSONDecodeError) as exc:
+        _logger_setup.warning("Não foi possível ler ~/.claude.json: %s", exc)
+        return None                       # ← falha de leitura/parse, MESMO None
+    ...
+```
+**Problema:** `None` cobre dois casos: "config não existe" (ausência legítima) e "config existe mas corrompido/ilegível" (erro). `run_set_password` trata ambos como "nunca configurado" — um `~/.claude.json` corrompido vira "setup fresco" silenciosamente (mesmo logando warning).
+**Refatoração sugerida:** manter `None` só para "não configurado"; `raise` (ou retornar resultado tipado) quando o arquivo existe mas falha o parse, para o caller decidir conscientemente.
+**Esforço:** low
+
+---
+
 ## `src/todos/tools/configuracao.py`
 
 > **Estado:** violations-found
@@ -809,19 +816,20 @@ class MCPRegisterResult:
 
 | ID | Função / linha | Tipo | Severidade |
 |---|---|---|---|
-| F-019 | `_inferir_padrao_protocolo` | `RC-TUPLE` | high |
+| F-019 | `_inferir_padrao_protocolo` | `RC-TUPLE` | low |
 
 #### F-019 — `_inferir_padrao_protocolo`
 
 **Tipo:** RC-TUPLE
-**Severidade:** high
+**Severidade:** low
 **Padrão atual:**
 ```python
 def _inferir_padrao_protocolo(amostras: list[str]) -> tuple[str, int, int]:
     ...
     return padrao, min_len, max_len
 ```
-**Problema:** Tupla posicional de 3 elementos. A única documentação de quem é quem está no nome da função e na docstring — qualquer reordenação silenciosa quebra os callers.
+**Problema:** Tupla posicional de 3 elementos `(padrao, min_len, max_len)`. A única documentação de quem é quem está no nome da função e na docstring — qualquer reordenação silenciosa quebra os callers.
+**Severidade (critério §Regra auditada):** **low** — dados puros, **nenhum** elemento é sentinel de status (amostras inválidas levantam `SEIValidationError`), e não é path de credencial/segurança.
 
 **Refatoração sugerida:**
 ```python
@@ -1183,14 +1191,14 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 
 ## Índice de severidade
 
+Contagem por finding (linha de tabela), não por instância — ver convenção no Resumo executivo.
+
 | Severidade | Findings | Arquivos afetados |
 |---|---|---|
-**Contagem por finding (linha de tabela), não por instância** — ver convenção no Resumo executivo.
-
 | critical | 0 | — |
-| high | 15 | auth.py (4), sei_web_client.py (1), setup_wizard.py (7), tools/configuracao.py (1), backends/rest/documentos.py (1), backends/web/documentos.py (1) |
+| high | 14 | auth.py (4), sei_web_client.py (1), setup_wizard.py (7), backends/rest/documentos.py (1), backends/web/documentos.py (1) |
 | medium | 6 | mcp_app.py (2), sei_web_client.py (2), backends/composite.py (1), backends/web/documentos.py (1) |
-| low | 7 | sei_web_client.py (3), catalog_cache.py (2), setup_wizard.py (1), access_control.py (1) |
+| low | 8 | sei_web_client.py (2), catalog_cache.py (2), setup_wizard.py (2), access_control.py (1), tools/configuracao.py (1) |
 | info | 2 | backends/rest/documentos.py (1), backends/web/documentos.py (1) |
 | **Total** | **30** | **11 arquivos** |
 
@@ -1206,4 +1214,4 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 | 6 | `auth.py` | F-001–F-004 | medium — verificar constraint de interface FastMCP primeiro |
 | 7 | `mcp_app.py` | F-001–F-002 | low — propagar exceção em vez de swallow→None |
 | 8 | `catalog_cache.py` | F-009, F-011 | low — separar erro de cache-miss |
-| 9 | `sei_web_client.py` | F-006, F-007 | low |
+| 9 | `sei_web_client.py` | F-007, F-028 | low |

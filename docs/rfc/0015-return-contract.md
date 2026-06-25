@@ -45,7 +45,7 @@ Os métodos de escrita em `sei_web_client.py` (audit F-009, 21 returns em 20 mé
 |---|---|---|
 | **Backend** (`backends/`, `sei_*_client`) | objeto de domínio Pydantic | `raise SEIError` tipado |
 | **Tool** (`tools/`, `server.py`) | o `BaseModel` direto (FastMCP serializa) | deixa `SEIError` propagar |
-| **Helper interno** (`setup_wizard`, `_resolver_*`) | value object nomeado (frozen dataclass) | `raise` |
+| **Helper interno** (`setup_wizard`, `_resolver_*`) | value object nomeado (Pydantic frozen; ver D2) | `raise` |
 
 O ponto central: **nenhuma camada de baixo conhece o envelope da camada de cima.** O backend não constrói `{"ok": ...}`; a tool não constrói dict manual — retorna o modelo e o FastMCP faz o wire.
 
@@ -59,9 +59,17 @@ Anomalias propagam como `SEIError` (subclasse de `ToolError`), como no RFC 0004.
 
 ### D2. Regra de escolha de tipo (mecânica)
 
-- **Cruza fronteira** (parsing de dado não-confiável do SEI **ou** serialização para o host MCP) → **Pydantic `BaseModel`**. Ganha validação (se o SEI mudar o HTML, falha alto) + `model_dump`/`outputSchema` de graça.
-- **Nasce e morre dentro de um módulo** → **`@dataclass(frozen=True, slots=True)`**. Sem custo de validação, imutável, força acesso por atributo.
-- **Nunca `NamedTuple`** — continua desempacotável por posição, reabre o anti-pattern do audit.
+**Default: Pydantic `BaseModel` (frozen).** O codebase já depende de Pydantic (FastMCP exige) e o RFC 0008 já padronizou modelos Pydantic como tipo de retorno. Usar Pydantic em todo lugar:
+- **Um idioma só** de dado estruturado — sem a pergunta "isto cruza fronteira?" a cada função (julgamento que apodrece no contato).
+- **Custo desprezível** — pydantic-core é Rust; validar um modelo simples é da ordem de µs. Relevante só em hot path comprovado.
+- **Imutabilidade** via `model_config = ConfigDict(frozen=True)` (equivale ao `frozen=True` do dataclass).
+- **Promovível** — um modelo interno vira tipo de boundary sem reescrita.
+
+**Exceção (carve-out mecânico):** use `@dataclass(frozen=True, slots=True)` **só** quando o objeto carrega um tipo que o Pydantic não valida nativamente (ex.: `bs4.Tag`, `BeautifulSoup`) e `arbitrary_types_allowed=True` for indesejável. Critério crisp ("carrega tipo não-Pydantic?"), não fuzzy ("é boundary?").
+
+**Nunca `NamedTuple`** — continua desempacotável por posição, reabre o anti-pattern do audit.
+
+> Revisão pós-discussão: a versão anterior desta D2 usava "cruza fronteira?" como discriminador (Pydantic na borda / dataclass interno). Trocada por "Pydantic default + carve-out pra tipos não-Pydantic" — o discriminador antigo era fuzzy e exigia julgamento por função.
 
 ### D3. `None` continua valor legítimo de ausência
 
@@ -108,9 +116,9 @@ async def sei_alterar_processo(...) -> ProcessoAlterado:
 ```
 
 ```python
-# setup_wizard.py — multi-valor interno vira frozen dataclass (F-012–F-018)
-@dataclass(frozen=True, slots=True)
-class CredentialsResult:
+# setup_wizard.py — multi-valor interno vira modelo Pydantic frozen (F-012–F-018)
+class CredentialsResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
     usuario: str
     senha_config: str   # "" = usar keyring
     senha_validacao: str
@@ -120,7 +128,7 @@ class CredentialsResult:
 
 ## Plano de migração (incremental, cada passo um PR, testes verdes)
 
-1. **`setup_wizard.py` + `tools/configuracao.py`** — frozen dataclasses puramente internas. Zero impacto de wire, zero churn de teste de saída. Resolve os findings RC-TUPLE/RC-BOOL-ERROR internos (F-012–F-019, F-026).
+1. **`setup_wizard.py` + `tools/configuracao.py`** — modelos Pydantic frozen puramente internos. Zero impacto de wire, zero churn de teste de saída. Resolve os findings RC-TUPLE/RC-BOOL-ERROR internos (F-012–F-019, F-026).
 2. **`backends/{rest,web}/documentos.py`** — `buscar_documento` para de emitir `{"encontrado": False}`; `raise SEINotFoundError`. Toca só os callers de `buscar_documento` (F-021, F-023, F-024).
 3. **`sei_web_client.py` F-009** — remove `ok`/`status` dos status-dicts de escrita (21 returns, 20 métodos); `_shape_resposta_escrita` já absorve os campos por alias, então as tools não mudam.
 4. **`mcp_app.py` / `composite.py` / `catalog_cache.py`** — propagar-não-engolir (RFC 0004 §6) em F-001/F-002; o `IntEnum` do `_prioridade_erro` (F-020); manter `None` legítimo no cache (D3).
@@ -132,7 +140,7 @@ class CredentialsResult:
 ## Alternativas consideradas e rejeitadas
 
 - **`Result[T, SEIError]` no seam do composite.** Daria exhaustividade checável pelo type checker onde o código já faz `match` por tipo de erro. Rejeitado em D1: cerimônia não-idiomática contra o grain do FastMCP, para um único maintainer. Mitigação: docstring dos subtipos.
-- **Pydantic em tudo, inclusive interno.** Uma regra a menos no code review, mas paga validação onde não há fronteira (`_build_mcp_env` não valida nada). Rejeitado em D2: frozen dataclass é mais honesto sobre custo e força imutabilidade.
+- **Frozen dataclass interno (Pydantic só na borda).** Era a D2 original. Rejeitado: cria dois idiomas de dado estruturado e reintroduz o julgamento "é boundary?" por função. O custo de validação do Pydantic é desprezível para esses objetos. **Adotado: Pydantic default** (D2 revisada), com carve-out só pra tipos não-Pydantic (`bs4.Tag`).
 - **Helper `_ok()` + `TypedDict` de envelope.** Rejeitado em D4: regride o RFC 0008 (sem `outputSchema`).
 
 ---
