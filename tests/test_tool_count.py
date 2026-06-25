@@ -15,7 +15,7 @@ from pathlib import Path
 # orquestração em server.py sejam registrados no mcp compartilhado.
 from todos.server import mcp
 
-_TOOL_COUNT = 126
+_TOOL_COUNT = 127
 _DOC_FILES = (
     "README.md",
     "CLAUDE.md",

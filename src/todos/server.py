@@ -38,6 +38,7 @@ from todos.sei_web_client import SEI_WEB_PAGE_SIZE
 from todos.setup_wizard import run_set_password, run_setup_wizard
 from todos.tools import (
     acompanhamento,
+    analise,
     assinatura,
     blocos_assinatura,
     blocos_internos,
@@ -56,6 +57,7 @@ from todos.tools import (
 # resolução sigla→id) ainda não absorvidas pelo contrato do backend.
 _TOOL_MODULES = (
     acompanhamento,
+    analise,
     assinatura,
     blocos_assinatura,
     blocos_internos,
@@ -745,7 +747,7 @@ def _cmd_set_password() -> None:
 
 @_app.callback(invoke_without_command=True)
 def _cmd_default(ctx: _typer.Context) -> None:
-    """MCP Server para o SEI — 126 tools, scraper HTTP + REST híbrido."""
+    """MCP Server para o SEI — 127 tools, scraper HTTP + REST híbrido."""
     if ctx.invoked_subcommand is not None:
         return
     if _http_mode:
