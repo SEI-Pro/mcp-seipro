@@ -2942,6 +2942,7 @@ llm = [
 [package.dev-dependencies]
 dev = [
     { name = "bandit" },
+    { name = "litellm" },
     { name = "pip-audit" },
     { name = "pytest" },
     { name = "ruff" },
@@ -2973,6 +2974,7 @@ provides-extras = ["llm"]
 [package.metadata.requires-dev]
 dev = [
     { name = "bandit", specifier = ">=1.8" },
+    { name = "litellm", specifier = ">=1.0" },
     { name = "pip-audit", specifier = ">=2.8" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.9" },

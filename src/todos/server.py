@@ -747,7 +747,7 @@ def _cmd_set_password() -> None:
 
 @_app.callback(invoke_without_command=True)
 def _cmd_default(ctx: _typer.Context) -> None:
-    """MCP Server para o SEI — 126 tools, scraper HTTP + REST híbrido."""
+    """MCP Server para o SEI — 127 tools, scraper HTTP + REST híbrido."""
     if ctx.invoked_subcommand is not None:
         return
     if _http_mode:
