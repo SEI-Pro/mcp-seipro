@@ -34,6 +34,7 @@ env/
 docs/*
 !docs/rfc/
 !docs/adr/
+!docs/audits/
 uploads/
 
 # Claude Code — ignore session data but track shared skills
