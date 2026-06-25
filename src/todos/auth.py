@@ -30,6 +30,7 @@ from html import escape as _html_escape
 from typing import cast
 from urllib.parse import urlparse
 
+import httpx
 from fastmcp.server.auth import AccessToken, OAuthProvider
 from mcp.server.auth.provider import (
     AuthorizationCode,
@@ -113,6 +114,32 @@ def _resolvido_bloqueado(host: str) -> str | None:
     except (socket.gaierror, OSError):
         pass  # DNS failure — let the actual HTTP request handle it
     return blocked
+
+
+class SSRFGuardTransport(httpx.AsyncHTTPTransport):
+    """Re-validates resolved IPs at every request to prevent DNS rebinding.
+
+    Config-time validation in ``_validar_url_sei`` checks the hostname once, but
+    a rebinding attacker can change the DNS answer after that check.  This transport
+    runs the same IP blocklist check immediately before each outgoing connection,
+    reducing the rebinding window to the milliseconds between our resolution and
+    httpcore's own resolution — effectively negligible.
+    """
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """Block connections to internal networks before delegating to the transport."""
+        host = request.url.host
+        if host:
+            ip_result = _is_ip_bloqueado(host)
+            if ip_result:
+                msg = f"SSRF guard: endereço IP bloqueado ({host})"
+                raise httpx.ConnectError(msg)
+            if ip_result is None:
+                blocked = await asyncio.to_thread(_resolvido_bloqueado, host)
+                if blocked is not None:
+                    msg = f"SSRF guard: {host!r} resolve para endereço bloqueado ({blocked})"
+                    raise httpx.ConnectError(msg)
+        return await super().handle_async_request(request)
 
 
 def _validar_url_sei(url: str, campo: str) -> None:

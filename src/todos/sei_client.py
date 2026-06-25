@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from todos.auth import SSRFGuardTransport
 from todos.backends.models import (
     CredenciaisAssinatura,
     EnvioProcesso,
@@ -134,8 +135,8 @@ class SEIClient:
                 else bool(_raw_verify)
             )
         self._client = httpx.AsyncClient(
+            transport=SSRFGuardTransport(verify=_verify),
             timeout=httpx.Timeout(120.0, connect=10.0, read=90.0),
-            verify=_verify,
         )
 
     @property
