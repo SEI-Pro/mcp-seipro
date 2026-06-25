@@ -99,7 +99,7 @@ def _resolvido_bloqueado(host: str) -> str | None:
     try:
         results = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
         for _, _, _, _, sockaddr in results:
-            resolved = sockaddr[0]
+            resolved = str(sockaddr[0])
             try:
                 addr = ipaddress.ip_address(resolved)
             except ValueError:
