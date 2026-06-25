@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-llm = ["litellm>=1.0"]
+llm = ["litellm>=1.84.0"]
 
 [project.scripts]
 todos = "todos.server:main"
@@ -39,7 +39,7 @@ dev = [
     "vulture>=2.14",
     "bandit>=1.8",
     "pip-audit>=2.8",
-    "litellm>=1.0",
+    "litellm>=1.84.0",
 ]
 eval = [
     "anthropic>=0.30",
