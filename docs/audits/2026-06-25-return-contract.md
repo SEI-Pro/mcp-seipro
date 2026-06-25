@@ -32,7 +32,11 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 - *Railway-Oriented Programming* — S. Wlaschin (F# for Fun and Profit)
 - *Effective Python* item 87: "Define a Root Exception to Insulate Callers from APIs"
 
-**Tipos de violação auditados:**
+---
+
+## Regra auditada
+
+**return-contract** (ver Contexto). Tipos de violação e critérios de classificação:
 
 | Código | Nome | Exemplo |
 |---|---|---|
@@ -42,6 +46,12 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 | `RC-UNION-STATUS` | Union-status | `-> X \| None` onde `None` codifica falha |
 | `RC-BOOL-ERROR` | Bool-as-error | `return bool` para indicar sucesso/falha |
 | `RC-DICT-STATUS` | Dict-with-status-key | `return {"encontrado": False, ...}` |
+
+**Critério de `RC-TUPLE` e severidade** (fixado para convergência — todo retorno de tupla posicional desempacotado por ordem é finding):
+- **high** — algum elemento é sentinel de status/formato (ex.: `parse_inbox` → `"detalhada"`/`"desconhecido"`), **ou** a tupla está em path crítico de segurança/credencial (ex.: `setup_wizard`).
+- **low** — tupla de dados puros sem sentinel (ex.: `(html, url)`, `(nivel, hipotese)`), mesmo com `≥3` elementos.
+
+**Critério de `None`/`RC-UNION-STATUS`** (RFC 0015 D3): `-> X | None` **só** é finding quando o `None` colapsa erro com ausência. Quando o `None` é ausência legítima que o caller trata sem `try/except` (cache-miss, lookup opcional, "não encontrado no parse"), **não** é finding.
 
 ---
 
@@ -65,6 +75,10 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 O foco de maior impacto está em `setup_wizard.py` (7 findings RC-TUPLE, 13 instâncias) e `auth.py` (4 findings com nota de constraint de interface externa). Corrigir todos os `high` elimina ~85% do risco prático. `mcp_app.py` tem 2 findings medium (RC-NONE-AS-ERROR em helpers de busca de documento) corrigíveis com esforço baixo.
 
 ---
+
+## Capítulos (um por arquivo)
+
+Um capítulo `##` por arquivo auditado, identificado pelo caminho relativo. Arquivos sem violação trazem `> **Estado:** clean`.
 
 ## `src/todos/__init__.py`
 
@@ -341,6 +355,7 @@ async def _buscar_documento_via_solr(client: SEIClient, referencia: str) -> tupl
 | F-007 | `_ler_senha_keyring` | `RC-UNION-STATUS` | low |
 | F-008 | `_link_acao_visualizacao` | `RC-UNION-STATUS` | medium |
 | F-009 | write methods (×21, 20 métodos) | `RC-DICT-STATUS` | medium |
+| F-028 | tuplas posicionais data-only (×11) | `RC-TUPLE` | low |
 
 #### F-005 — `parse_inbox` (linha 4875)
 
@@ -470,6 +485,31 @@ class ProcessoAlterado(BaseModel):
 
 ---
 
+#### F-028 — tuplas posicionais data-only (×11)
+
+**Tipo:** RC-TUPLE
+**Severidade:** low
+**Funções afetadas** (retornam tupla posicional sem nomes, desempacotada por ordem no call site):
+```
+_extrair_submit_btn:195          tuple[str, str] | None   (name, value)
+_fetch_unit_switch_form:761      tuple[str, Tag]
+_arvore_do_processo:1319         tuple[str, str]          (html, url)
+_pagina_visualizacao_processo:1666  tuple[str, str]       (html, url)
+_pagina_marcador:1724            tuple[str, BeautifulSoup, str]
+_split_marcador_desc:1746        tuple[str, str]
+_navegar_historico:2441          tuple[str, str, str]     (hist_url, id_proc, referer)
+_abrir_form_cadastro_processo:3438  tuple[Tag, str]
+_renumerar_nos_chunk:4682        tuple[str, int]
+fetch_inbox:879                  tuple[int, str]
+_get_doc_signed_url:1858         tuple[str, str]
+```
+**Problema:** Acoplamento posicional — o caller precisa conhecer a ordem dos elementos. Mesmo padrão de F-027 (`extrair_nivel`).
+**Distinção de severidade vs F-005:** **nenhuma** destas codifica sentinel de status no 1º elemento (são pares/triplas de dados puros); por isso **low**, não high. `parse_inbox` (F-005) é a única tupla deste arquivo com sentinel de formato (`"detalhada"`/`"desconhecido"`) → high. Onde há `| None`, o `None` é ausência legítima e permanece.
+**Refatoração sugerida:** frozen dataclass nomeada por função (≥3 elementos primeiro; 2-tuplas são opcionais — Pythonic mas menos explícitas).
+**Esforço:** low (mecânico, escopo por função)
+
+---
+
 ## `src/todos/sei_client.py`
 
 > **Estado:** clean — nenhuma violação encontrada.
@@ -497,8 +537,9 @@ class ProcessoAlterado(BaseModel):
 | ID | Função / linha | Tipo | Severidade |
 |---|---|---|---|
 | F-009 | `get` | `RC-UNION-STATUS` | low |
-| F-010 | `_get_sync` | `RC-UNION-STATUS` | low |
 | F-011 | `ttl` | `RC-UNION-STATUS` | low |
+
+> Os helpers **síncronos** `_get_sync` / `_ttl_sync` **não** são findings: não capturam exceção alguma (sqlite/JSON propagam ao wrapper async), e o `None` deles é exclusivamente cache-miss/entrada expirada — ausência legítima, não erro.
 
 #### F-009 — `get`
 
@@ -528,9 +569,9 @@ async def get(self, namespace: dict[str, str], key: str) -> object | None:
 
 ---
 
-#### F-010 / F-011 — `_get_sync` / `ttl`
+#### F-011 — `ttl`
 
-Mesmo padrão de F-009: `None` cobre erro e ausência. Esforço: low.
+Mesmo padrão de F-009: o wrapper async `ttl` captura `sqlite3.Error`, loga warning e retorna `None`, colapsando erro com "entrada inexistente". Esforço: low.
 
 ---
 
@@ -1149,7 +1190,7 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 | critical | 0 | — |
 | high | 15 | auth.py (4), sei_web_client.py (1), setup_wizard.py (7), tools/configuracao.py (1), backends/rest/documentos.py (1), backends/web/documentos.py (1) |
 | medium | 6 | mcp_app.py (2), sei_web_client.py (2), backends/composite.py (1), backends/web/documentos.py (1) |
-| low | 7 | sei_web_client.py (2), catalog_cache.py (3), setup_wizard.py (1), access_control.py (1) |
+| low | 7 | sei_web_client.py (3), catalog_cache.py (2), setup_wizard.py (1), access_control.py (1) |
 | info | 2 | backends/rest/documentos.py (1), backends/web/documentos.py (1) |
 | **Total** | **30** | **11 arquivos** |
 
@@ -1164,5 +1205,5 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 | 5 | `sei_web_client.py` | F-005, F-008, F-009 (×21, 20 métodos) | medium — F-009 requer modelos de domínio |
 | 6 | `auth.py` | F-001–F-004 | medium — verificar constraint de interface FastMCP primeiro |
 | 7 | `mcp_app.py` | F-001–F-002 | low — propagar exceção em vez de swallow→None |
-| 8 | `catalog_cache.py` | F-009–F-011 | low — separar erro de cache-miss |
+| 8 | `catalog_cache.py` | F-009, F-011 | low — separar erro de cache-miss |
 | 9 | `sei_web_client.py` | F-006, F-007 | low |
