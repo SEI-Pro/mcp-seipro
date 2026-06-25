@@ -49,18 +49,18 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 
 | Archivos auditados | Com violations | Clean |
 |---|---|---|
-| 51 | 9 | 42 |
+| 51 | 10 | 41 |
 
 | Severidade | Findings |
 |---|---|
 | critical | 0 |
 | high | 20 |
-| medium | 5 |
+| medium | 7 |
 | low | 5 |
 | info | 2 |
-| **Total** | **32** |
+| **Total** | **34** |
 
-O foco de maior impacto está em `setup_wizard.py` (12 tuplas nuas) e `auth.py` (4 violations com nota de constraint de interface externa). Corrigir todos os `high` elimina ~93% do risco prático.
+O foco de maior impacto está em `setup_wizard.py` (12 tuplas nuas) e `auth.py` (4 violations com nota de constraint de interface externa). Corrigir todos os `high` elimina ~88% do risco prático. `mcp_app.py` tem 2 findings medium (RC-NONE-AS-ERROR em helpers de busca de documento) corrigíveis com esforço baixo.
 
 ---
 
@@ -190,7 +190,86 @@ def get_sei_credentials_from_token(token: str) -> dict:
 
 ## `src/todos/mcp_app.py`
 
-> **Estado:** clean — nenhuma violação encontrada após refatoração PR #97.
+> **Estado:** violations-found
+
+### Findings
+
+| ID | Função / linha | Tipo | Severidade | Descrição |
+|---|---|---|---|---|
+| F-001 | `_buscar_documento_em_processo:636` | `RC-NONE-AS-ERROR` | medium | Exceção capturada → `None`, colapsando erro com "não encontrado" |
+| F-002 | `_buscar_documento_via_solr:659` | `RC-NONE-AS-ERROR` | medium | Mesma confusão: erro de rede retorna `None` igual a "não encontrado" |
+
+#### F-001 — `_buscar_documento_em_processo` (linha 636)
+
+**Tipo:** RC-NONE-AS-ERROR
+**Severidade:** medium
+**Padrão atual:**
+```python
+async def _buscar_documento_em_processo(
+    client: SEIClient, id_proc: str, referencia: str
+) -> tuple[str, str] | None:
+    try:
+        docs = await client.listar_documentos(id_proc, limit=200)
+        ...
+    except (SEIError, httpx.RequestError) as exc:
+        logger.warning(...)
+    return None  # ← colapsa "erro" com "não encontrado"
+```
+**Problema:** `None` aqui significa duas coisas distintas: (a) documento não existe no processo; (b) houve falha de rede ou SEI. O chamador (`_resolver_documento`) trata ambos como "não encontrado" e tenta a estratégia 2 (id direto), o que pode mascarar erros de conectividade como ausências legítimas.
+**Refatoração sugerida:**
+```python
+async def _buscar_documento_em_processo(
+    client: SEIClient, id_proc: str, referencia: str
+) -> tuple[str, str] | None:
+    """Retorna (id, tipo) ou None se não encontrado. Propaga erros."""
+    docs = await client.listar_documentos(id_proc, limit=200)
+    ref_norm = referencia.lstrip("0")
+    for d in docs:
+        proto = d.get("atributos", {}).get("protocoloFormatado", "")
+        if proto == referencia or proto.lstrip("0") == ref_norm:
+            doc_id = str(d.get("id", ""))
+            if doc_id:
+                tipo = d.get("atributos", {}).get("tipoDocumento", "I")
+                return doc_id, tipo
+    return None
+# Caller captura SEIError / httpx.RequestError se necessário
+```
+**Esforço:** low
+**Impacto se não corrigido:** Erros de rede no `listar_documentos` são silenciados → `_resolver_documento` tenta o ID diretamente e pode retornar resultado errado ou levantar `SEINotFoundError` em vez do erro original.
+
+#### F-002 — `_buscar_documento_via_solr` (linha 659)
+
+**Tipo:** RC-NONE-AS-ERROR
+**Severidade:** medium
+**Padrão atual:**
+```python
+async def _buscar_documento_via_solr(client: SEIClient, referencia: str) -> tuple[str, str] | None:
+    try:
+        result = await client.pesquisar_processos(...)
+        ...
+    except (SEIError, httpx.RequestError) as exc:
+        logger.warning(...)
+    return None  # ← colapsa "não encontrado no Solr" com "Solr falhou"
+```
+**Problema:** Idêntico ao F-001. Falha do Solr produz o mesmo `None` que "nenhum resultado", então `_resolver_documento` silenciosamente degrada para busca por id direto sem que o chamador saiba que o Solr está fora.
+**Refatoração sugerida:** Propagar a exceção; deixar `_resolver_documento` decidir se o fallback é seguro na presença de erros.
+```python
+async def _buscar_documento_via_solr(client: SEIClient, referencia: str) -> tuple[str, str] | None:
+    """Retorna (id, tipo) ou None se não encontrado. Propaga erros de rede/SEI."""
+    result = await client.pesquisar_processos(
+        FiltrosPesquisaProcessos(palavras_chave=referencia, limit=20)
+    )
+    for p in result.get("processos", []):
+        id_proc = str(p.get("idProcedimento", ""))
+        if not id_proc:
+            continue
+        found = await _buscar_documento_em_processo(client, id_proc, referencia)
+        if found is not None:
+            return found
+    return None
+```
+**Esforço:** low
+**Impacto se não corrigido:** Indisponibilidade temporária do Solr degrada silenciosamente para busca por id direto, podendo retornar documento errado em vez de propagar o erro de serviço.
 
 ---
 
@@ -824,10 +903,10 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 |---|---|---|
 | critical | 0 | — |
 | high | 20 | auth.py (×4), sei_web_client.py (×1), setup_wizard.py (×12), tools/configuracao.py (×1), backends/rest/documentos.py (×1), backends/web/documentos.py (×1) |
-| medium | 5 | sei_web_client.py (×1), backends/composite.py (×1), backends/web/documentos.py (×2), auth.py nota-constraint |
+| medium | 7 | mcp_app.py (×2), sei_web_client.py (×1), backends/composite.py (×1), backends/web/documentos.py (×2), auth.py nota-constraint |
 | low | 5 | sei_web_client.py (×2), catalog_cache.py (×3) |
 | info | 2 | backends/rest/documentos.py (×1), backends/web/documentos.py (×1) |
-| **Total** | **32** | **9 arquivos** |
+| **Total** | **34** | **10 arquivos** |
 
 ### Prioridade de correção sugerida
 
@@ -839,5 +918,6 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 | 4 | `backends/composite.py` | F-020 | low — 1 IntEnum |
 | 5 | `sei_web_client.py` | F-005, F-008 | medium |
 | 6 | `auth.py` | F-001–F-004 | medium — verificar constraint de interface FastMCP primeiro |
-| 7 | `catalog_cache.py` | F-009–F-011 | low — separar erro de cache-miss |
-| 8 | `sei_web_client.py` | F-006, F-007 | low |
+| 7 | `mcp_app.py` | F-001–F-002 | low — propagar exceção em vez de swallow→None |
+| 8 | `catalog_cache.py` | F-009–F-011 | low — separar erro de cache-miss |
+| 9 | `sei_web_client.py` | F-006, F-007 | low |
