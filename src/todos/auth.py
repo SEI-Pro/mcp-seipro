@@ -115,11 +115,11 @@ def _resolvido_bloqueado(host: str) -> str | None:
     return blocked
 
 
-def _validar_url_sei(url: str, campo: str) -> None:
+async def _validar_url_sei(url: str, campo: str) -> None:
     """Raise ValueError if the URL is not HTTPS or targets an internal network.
 
-    For IP literals, validates directly. For DNS hostnames, resolves at
-    validation time to prevent DNS rebinding attacks.
+    For IP literals, validates directly. For DNS hostnames, offloads the
+    blocking getaddrinfo call to a thread so the event loop stays responsive.
     """
     if not url:
         return
@@ -130,8 +130,7 @@ def _validar_url_sei(url: str, campo: str) -> None:
     host = parsed.hostname or ""
     ip_result = _is_ip_bloqueado(host)
     if ip_result is None:
-        # hostname DNS — resolve and validate each address
-        blocked = _resolvido_bloqueado(host)
+        blocked = await asyncio.to_thread(_resolvido_bloqueado, host)
         if blocked is not None:
             msg = f"{campo}: hostname {host!r} resolve para endereço bloqueado ({blocked})."
             raise ValueError(msg)
@@ -598,8 +597,8 @@ async def login_submit(request: Request) -> HTMLResponse:
 
     # Validação SSRF — bloqueia IPs internos e esquemas não-HTTPS
     try:
-        _validar_url_sei(sei_url, "URL da API do SEI")
-        _validar_url_sei(sei_web_url, "URL base do SEI")
+        await _validar_url_sei(sei_url, "URL da API do SEI")
+        await _validar_url_sei(sei_web_url, "URL base do SEI")
     except ValueError as exc:
         return HTMLResponse(f"<h1>URL inválida: {_html_escape(str(exc))}</h1>", status_code=400)
 
