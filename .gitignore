@@ -40,6 +40,12 @@ uploads/
 # Claude Code — ignore session data but track shared skills
 .claude/*
 !.claude/skills
+.claude/skills/*
+!.claude/skills/ruff-strict-compliance
+
+# Skills manager (npx skills add) — not committed
+.agents/
+skills-lock.json
 
 # OS
 Thumbs.db
