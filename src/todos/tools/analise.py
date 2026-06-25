@@ -95,22 +95,27 @@ _ERR_SEM_KEY = (
 )
 _ERR_TODAS_KEYS_FALHARAM = "LLM falhou em todas as keys: {exc}"
 _ERR_JSON_INVALIDO = "LLM não retornou JSON válido: {snippet!r}"
+_ERR_RESPOSTA_VAZIA = "LLM retornou resposta vazia ou sem conteúdo (choices={choices!r})"
 _ERR_SEM_LITELLM = "litellm não instalado. Execute: uv pip install 'todos-sei[llm]'"
 _ERR_PDF_GRANDE = "PDF muito grande ({mb}MB > 20MB). Use sei_ler_documento seletivo para processos muito extensos."
+_ERR_COMPRESSAO_INVALIDA = (
+    "Valor inválido para compressao: {val!r}. Use: auto, bw, gray, color, nao."
+)
+_VALID_COMPRESSAO = frozenset({"auto", "bw", "gray", "color", "nao"})
 
 
 # ── Compressão de PDF ─────────────────────────────────────────────────────────
 
 
-def _is_scanned_page(page: Any) -> bool:
+def _is_scanned_page(page: Any, images: list | None = None) -> bool:
     """Return True when the page appears to be a scanned image rather than native digital text."""
     text = page.get_text().strip()
+    imgs = images if images is not None else page.get_images(full=True)
     if not text:
-        return True
-    images = page.get_images(full=True)
-    if images:
+        return bool(imgs)
+    if imgs:
         page_area = page.rect.width * page.rect.height
-        for img in images:
+        for img in imgs:
             rects = page.get_image_rects(img[0])
             if rects:
                 img_area = rects[0].width * rects[0].height
@@ -158,38 +163,45 @@ def _compress_pdf(pdf_bytes: bytes, *, mode: str = "auto") -> bytes:
 
     mode: "auto" detects scanned vs digital pages automatically;
           "bw"/"gray"/"color" force an encoding for all images.
+    Returns original bytes unchanged if compression would increase size.
     """
-    doc = _fitz.open(stream=pdf_bytes, filetype="pdf")
-    page_types: dict[int, str] = (
-        {i: "scanned" if _is_scanned_page(doc[i]) else "digital" for i in range(len(doc))}
-        if mode == "auto"
-        else {}
-    )
+    with _fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        image_to_page: dict[int, int] = {}
+        page_classifications: dict[int, str] = {}
+        for page_idx in range(len(doc)):
+            imgs = doc[page_idx].get_images(full=True)
+            if mode == "auto":
+                page_classifications[page_idx] = (
+                    "scanned" if _is_scanned_page(doc[page_idx], imgs) else "digital"
+                )
+            for img in imgs:
+                xref = img[0]
+                if xref not in image_to_page:
+                    image_to_page[xref] = page_idx
 
-    image_to_page: dict[int, int] = {}
-    for page_idx in range(len(doc)):
-        for img in doc[page_idx].get_images(full=True):
-            xref = img[0]
-            if xref not in image_to_page:
-                image_to_page[xref] = page_idx
+        for xref, page_idx in image_to_page.items():
+            try:
+                base_image = doc.extract_image(xref)
+                w, h = base_image["width"], base_image["height"]
+                if w <= _COMPRESS_SKIP_SMALL and h <= _COMPRESS_SKIP_SMALL:
+                    continue
+                img = _PILImage.open(io.BytesIO(base_image["image"]))
+                if w > _COMPRESS_MAX_DIM or h > _COMPRESS_MAX_DIM:
+                    img.thumbnail(
+                        (_COMPRESS_MAX_DIM, _COMPRESS_MAX_DIM), _PILImage.Resampling.LANCZOS
+                    )
+                img = _flatten_alpha(img)
+                current = _select_mode(
+                    mode, page_classifications.get(page_idx, "digital"), img.mode
+                )
+                doc[page_idx].replace_image(xref, stream=_encode_image(img, current))
+            except (OSError, RuntimeError, ValueError) as exc:
+                logger.warning("PDF compression: skipping image xref=%d: %s", xref, exc)
 
-    for xref, page_idx in image_to_page.items():
-        try:
-            base_image = doc.extract_image(xref)
-            w, h = base_image["width"], base_image["height"]
-            if w <= _COMPRESS_SKIP_SMALL and h <= _COMPRESS_SKIP_SMALL:
-                continue
-            img = _PILImage.open(io.BytesIO(base_image["image"]))
-            if w > _COMPRESS_MAX_DIM or h > _COMPRESS_MAX_DIM:
-                img.thumbnail((_COMPRESS_MAX_DIM, _COMPRESS_MAX_DIM), _PILImage.Resampling.LANCZOS)
-            img = _flatten_alpha(img)
-            current = _select_mode(mode, page_types.get(page_idx, "digital"), img.mode)
-            doc[page_idx].replace_image(xref, stream=_encode_image(img, current))
-        except (OSError, RuntimeError, ValueError) as exc:
-            logger.warning("PDF compression: skipping image xref=%d: %s", xref, exc)
+        result = doc.tobytes(garbage=4, deflate=True, clean=True)
 
-    result = doc.tobytes(garbage=4, deflate=True, clean=True)
-    doc.close()
+    if len(result) >= len(pdf_bytes):
+        return pdf_bytes
     return result
 
 
@@ -220,7 +232,10 @@ def _extract_json(raw: str) -> dict:
         pass
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
     if m:
-        return json.loads(m.group(1))
+        try:
+            return json.loads(m.group(1))
+        except json.JSONDecodeError:
+            pass
     msg = _ERR_JSON_INVALIDO.format(snippet=raw[:200])
     raise SEIError(msg)
 
@@ -264,6 +279,9 @@ async def _call_llm(
                 fallbacks=fallbacks,
                 timeout=request_timeout,
             )
+            if not resp.choices or resp.choices[0].message.content is None:
+                msg = _ERR_RESPOSTA_VAZIA.format(choices=resp.choices)
+                raise SEIError(msg)
             return resp.choices[0].message.content
         except litellm.RateLimitError as exc:
             logger.warning("LiteLLM RateLimitError (key=...%s): %s", key[-4:], exc)
@@ -323,6 +341,9 @@ async def sei_analisar_processo(
     """
     if not _LITELLM_AVAILABLE:
         raise SEIError(_ERR_SEM_LITELLM)
+
+    if compressao not in _VALID_COMPRESSAO:
+        raise SEIError(_ERR_COMPRESSAO_INVALIDA.format(val=compressao))
 
     backend = await _backend(ctx)
 
