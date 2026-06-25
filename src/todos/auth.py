@@ -116,30 +116,30 @@ def _resolvido_bloqueado(host: str) -> str | None:
     return blocked
 
 
-class SSRFGuardTransport(httpx.AsyncHTTPTransport):
-    """Re-validates resolved IPs at every request to prevent DNS rebinding.
+async def ssrf_request_hook(request: httpx.Request) -> None:
+    """Httpx request event hook that blocks connections to internal networks.
 
-    Config-time validation in ``_validar_url_sei`` checks the hostname once, but
-    a rebinding attacker can change the DNS answer after that check.  This transport
-    runs the same IP blocklist check immediately before each outgoing connection,
-    reducing the rebinding window to the milliseconds between our resolution and
-    httpcore's own resolution — effectively negligible.
+    Registered as ``event_hooks={"request": [ssrf_request_hook]}`` on every
+    SEI HTTP client.  httpx calls this before every outgoing request —
+    including redirect hops — without touching the transport layer, so
+    environment-proxy settings (HTTPS_PROXY, HTTP_PROXY, …) are preserved.
+
+    Re-running the IP blocklist check here closes the DNS-rebinding window
+    left by config-time validation in ``_validar_url_sei``: the hook resolves
+    the hostname immediately before each connection attempt, making it
+    infeasible for an attacker to win the DNS race.
     """
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        """Block connections to internal networks before delegating to the transport."""
-        host = request.url.host
-        if host:
-            ip_result = _is_ip_bloqueado(host)
-            if ip_result:
-                msg = f"SSRF guard: endereço IP bloqueado ({host})"
+    host = request.url.host
+    if host:
+        ip_result = _is_ip_bloqueado(host)
+        if ip_result:
+            msg = f"SSRF guard: endereço IP bloqueado ({host})"
+            raise httpx.ConnectError(msg)
+        if ip_result is None:
+            blocked = await asyncio.to_thread(_resolvido_bloqueado, host)
+            if blocked is not None:
+                msg = f"SSRF guard: {host!r} resolve para endereço bloqueado ({blocked})"
                 raise httpx.ConnectError(msg)
-            if ip_result is None:
-                blocked = await asyncio.to_thread(_resolvido_bloqueado, host)
-                if blocked is not None:
-                    msg = f"SSRF guard: {host!r} resolve para endereço bloqueado ({blocked})"
-                    raise httpx.ConnectError(msg)
-        return await super().handle_async_request(request)
 
 
 def _validar_url_sei(url: str, campo: str) -> None:

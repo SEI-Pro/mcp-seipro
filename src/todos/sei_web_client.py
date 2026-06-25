@@ -36,7 +36,7 @@ from bs4 import BeautifulSoup, Tag
 if TYPE_CHECKING:
     from types import ModuleType
 
-from todos.auth import SSRFGuardTransport
+from todos.auth import ssrf_request_hook
 from todos.backends.models import (
     DocumentoExternoInclusaoWeb,
     NovoProcessoWeb,
@@ -339,9 +339,10 @@ class SEIWebClient:
         )
 
         self._http = httpx.AsyncClient(
-            transport=SSRFGuardTransport(verify=_verify),
+            verify=_verify,
             follow_redirects=True,
             timeout=httpx.Timeout(60.0, connect=10.0, read=45.0),
+            event_hooks={"request": [ssrf_request_hook]},
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
