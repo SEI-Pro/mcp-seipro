@@ -55,10 +55,10 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 |---|---|
 | critical | 0 |
 | high | 20 |
-| medium | 5 |
+| medium | 6 |
 | low | 5 |
 | info | 2 |
-| **Total** | **32** |
+| **Total** | **33** |
 
 O foco de maior impacto está em `setup_wizard.py` (12 tuplas nuas) e `auth.py` (4 violations com nota de constraint de interface externa). Corrigir todos os `high` elimina ~88% do risco prático. `mcp_app.py` tem 2 findings medium (RC-NONE-AS-ERROR em helpers de busca de documento) corrigíveis com esforço baixo.
 
@@ -305,12 +305,13 @@ async def _buscar_documento_via_solr(client: SEIClient, referencia: str) -> tupl
 
 | ID | Função / linha | Tipo | Severidade |
 |---|---|---|---|
-| F-005 | `_parse_inbox_html` | `RC-TUPLE` | high |
+| F-005 | `parse_inbox:4875` | `RC-TUPLE` | high |
 | F-006 | `_extrair_erro_sei` | `RC-UNION-STATUS` | low |
 | F-007 | `_ler_senha_keyring` | `RC-UNION-STATUS` | low |
 | F-008 | `_link_acao_visualizacao` | `RC-UNION-STATUS` | medium |
+| F-009 | write methods (×12) | `RC-DICT-STATUS` | medium |
 
-#### F-005 — `_parse_inbox_html`
+#### F-005 — `parse_inbox` (linha 4875)
 
 **Tipo:** RC-TUPLE
 **Severidade:** high
@@ -401,6 +402,39 @@ async def _link_acao_visualizacao(self, protocolo: str, nome_var: str) -> str:
         )
 ```
 **Esforço:** medium
+
+---
+
+#### F-009 — write methods (×12)
+
+**Tipo:** RC-DICT-STATUS
+**Severidade:** medium
+**Funções afetadas:**
+```
+remover_sobrestamento_web:1664   reabrir_processo_web:1722
+desmarcar_processo_web:1844      remover_anotacao_web:1850
+alterar_secoes_web:2073          alterar_documento_interno_web:2162
+criar_bloco_assinatura_web:2908  disponibilizar_bloco_assinatura_web:2921
+_executar_acao_bloco:2956        alterar_bloco_assinatura_web:3074
+alterar_processo_web:3713        remover_acompanhamento_web:4483
+```
+**Padrão atual:**
+```python
+return {"ok": True, "mensagem": "Sobrestamento removido.", "protocolo": protocolo}
+return {"status": "ok", "id_documento": id_documento}
+```
+**Problema:** O backend web retorna diretamente o dict de resposta MCP (`"ok"`, `"status"`) em vez de um domínio tipado. Isso acopla a camada de backend ao formato de resposta MCP — o back end não deveria saber que existe um `"ok"`. Bugs de validação de campos do dict são silenciosos (nenhum type error no retorno `-> dict`).
+**Refatoração sugerida:** Criar dataclasses de resultado por domínio (`ProcessoAlteradoResult`, `DocumentoCriadoResult`, etc.) e deixar a tool MCP converter para o dict de resposta:
+```python
+@dataclass
+class WriteResult:
+    protocolo: str
+    mensagem: str
+
+# A tool MCP faz: return {"ok": True, **asdict(result), "_next": [...]}
+```
+**Esforço:** medium — requer dataclasses por domínio + atualizar callers nas tools
+**Impacto se não corrigido:** Refatoração do formato de resposta MCP (ex: adicionar `_next` de forma consistente) exige varrer todos os 12 métodos manualmente; nenhum type error avisa de campos faltantes.
 
 ---
 
@@ -921,10 +955,10 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 |---|---|---|
 | critical | 0 | — |
 | high | 20 | auth.py (×4), sei_web_client.py (×1), setup_wizard.py (×12), tools/configuracao.py (×1), backends/rest/documentos.py (×1), backends/web/documentos.py (×1) |
-| medium | 5 | mcp_app.py (×2), sei_web_client.py (×1), backends/composite.py (×1), backends/web/documentos.py (×1) |
+| medium | 6 | mcp_app.py (×2), sei_web_client.py (×2), backends/composite.py (×1), backends/web/documentos.py (×1) |
 | low | 5 | sei_web_client.py (×2), catalog_cache.py (×3) |
 | info | 2 | backends/rest/documentos.py (×1), backends/web/documentos.py (×1) |
-| **Total** | **32** | **10 arquivos** |
+| **Total** | **33** | **10 arquivos** |
 
 ### Prioridade de correção sugerida
 
@@ -934,7 +968,7 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 | 2 | `backends/rest/documentos.py` + `backends/web/documentos.py` | F-021 + F-023 | medium — substituir `{"encontrado": False}` por `SEINotFoundError` |
 | 3 | `tools/configuracao.py` | F-019 | low — 1 dataclass |
 | 4 | `backends/composite.py` | F-020 | low — 1 IntEnum |
-| 5 | `sei_web_client.py` | F-005, F-008 | medium |
+| 5 | `sei_web_client.py` | F-005, F-008, F-009 (×12) | medium — F-009 requer dataclasses de domínio |
 | 6 | `auth.py` | F-001–F-004 | medium — verificar constraint de interface FastMCP primeiro |
 | 7 | `mcp_app.py` | F-001–F-002 | low — propagar exceção em vez de swallow→None |
 | 8 | `catalog_cache.py` | F-009–F-011 | low — separar erro de cache-miss |
