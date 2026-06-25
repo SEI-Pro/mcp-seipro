@@ -61,18 +61,18 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 
 | Arquivos auditados | Com violations | Clean |
 |---|---|---|
-| 52 | 11 | 41 |
+| 52 | 12 | 40 |
 
 | Severidade | Findings |
 |---|---|
 | critical | 0 |
 | high | 14 |
-| medium | 6 |
-| low | 8 |
+| medium | 7 |
+| low | 9 |
 | info | 2 |
-| **Total** | **30** |
+| **Total** | **32** |
 
-> **Convenção de contagem:** 1 finding = 1 linha de tabela. Findings que agrupam múltiplas instâncias do mesmo padrão na mesma função/arquivo trazem a multiplicidade no rótulo (`×N`) mas contam como **1**. Instâncias agrupadas: F-009 (×21, 20 métodos), F-015 (×4), F-016 (×4), F-026 (×3). Total de instâncias individuais ≈ 60.
+> **Convenção de contagem:** 1 finding = 1 linha de tabela. Findings que agrupam múltiplas instâncias do mesmo padrão na mesma função/arquivo trazem a multiplicidade no rótulo (`×N`) mas contam como **1**. Instâncias agrupadas: F-009 (×20, 20 métodos), F-015 (×4), F-016 (×4), F-026 (×3). Total de instâncias individuais ≈ 59.
 
 O foco de maior impacto está em `setup_wizard.py` (7 findings RC-TUPLE, 13 instâncias) e `auth.py` (4 findings com nota de constraint de interface externa). Corrigir todos os `high` elimina ~85% do risco prático. `mcp_app.py` tem 2 findings medium (RC-NONE-AS-ERROR em helpers de busca de documento) corrigíveis com esforço baixo.
 
@@ -106,6 +106,7 @@ Um capítulo `##` por arquivo auditado, identificado pelo caminho relativo. Arqu
 | F-002 | `load_refresh_token` | `RC-UNION-STATUS` | high |
 | F-003 | `load_authorization_code` | `RC-UNION-STATUS` | high |
 | F-004 | `get_sei_credentials_from_token` | `RC-UNION-STATUS` | high |
+| F-030 | `_verify:204` | `RC-NONE-AS-ERROR` | medium |
 
 #### F-001 — `load_access_token`
 
@@ -191,6 +192,30 @@ def get_sei_credentials_from_token(token: str) -> dict:
     return sei
 ```
 **Esforço:** medium
+
+---
+
+#### F-030 — `_verify` (linha 204)
+
+**Tipo:** RC-NONE-AS-ERROR
+**Severidade:** medium
+**Padrão atual:**
+```python
+def _verify(token: str) -> dict | None:
+    if len(parts) != _JWT_PARTS:
+        return None                 # token malformado
+    if not hmac.compare_digest(sig, expected):
+        return None                 # assinatura inválida (possível forja)
+    except (ValueError, UnicodeDecodeError):
+        return None                 # payload ilegível
+    if payload.get("exp", 0) < time.time():
+        return None                 # expirado
+    return payload
+```
+**Problema:** Helper central que F-001–F-004 todos chamam (`if not payload`). Os **quatro** `return None` colapsam motivos distintos — malformado, assinatura forjada, payload corrompido, expirado — num único sinal. O caller não distingue "expirado" (renovável) de "forjado" (suspeito de ataque), informação relevante para logging/resposta de segurança. Os motivos são logados em `debug` (invisível em produção).
+**Refatoração sugerida:** `raise` por motivo (`TokenExpiradoError`, `TokenInvalidoError`) ou retornar resultado tipado com a razão; logar forja/expiração em `warning`. Corrigir F-030 na raiz simplifica F-001–F-004 (deixam de re-checar `if not payload`).
+**Esforço:** medium
+**Impacto se não corrigido:** Tentativas de forja de token ficam indistinguíveis de expiração normal nos logs e no fluxo de auth.
 
 ---
 
@@ -355,7 +380,7 @@ async def _buscar_documento_via_solr(client: SEIClient, referencia: str) -> tupl
 | F-005 | `parse_inbox:4875` | `RC-TUPLE` | high |
 | F-007 | `_ler_senha_keyring` | `RC-UNION-STATUS` | low |
 | F-008 | `_link_acao_visualizacao` | `RC-UNION-STATUS` | medium |
-| F-009 | write methods (×21, 20 métodos) | `RC-DICT-STATUS` | medium |
+| F-009 | write methods (×20, 20 métodos) | `RC-DICT-STATUS` | medium |
 | F-028 | tuplas posicionais data-only (×11) | `RC-TUPLE` | low |
 
 #### F-005 — `parse_inbox` (linha 4875)
@@ -435,13 +460,13 @@ async def _link_acao_visualizacao(self, protocolo: str, nome_var: str) -> str:
 
 ---
 
-#### F-009 — write methods (×21, 20 métodos)
+#### F-009 — write methods (×20, 20 métodos)
 
 **Tipo:** RC-DICT-STATUS
 **Severidade:** medium
 **Funções afetadas** (busca por `"ok": True` / `"status": "ok"`, incluindo `return {` multi-linha):
 ```
-executar_acao_processo:1460 (×2)          remover_sobrestamento_web:1616
+executar_acao_processo:1546               remover_sobrestamento_web:1616
 reabrir_processo_web:1700                 desmarcar_processo_web:1763
 remover_anotacao_web:1846                 alterar_secoes_web:2018
 alterar_documento_interno_web:2075        enviar_processo_web:2587
@@ -900,7 +925,28 @@ def _prioridade_erro(exc: Exception) -> _ErroPrioridade:
 
 ## `src/todos/backends/base.py`
 
-> **Estado:** clean — nenhuma violação encontrada.
+> **Estado:** violations-found
+
+### Findings
+
+| ID | Função / linha | Tipo | Severidade |
+|---|---|---|---|
+| F-031 | `resolver_documento` (contrato) | `RC-TUPLE` | low |
+
+#### F-031 — `resolver_documento` (contrato do backend)
+
+**Tipo:** RC-TUPLE
+**Severidade:** low
+**Padrão atual:**
+```python
+# backends/base.py — contrato abstrato
+async def resolver_documento(self, referencia: str) -> tuple[str, str]: ...
+# rest/documentos.py e web/documentos.py espelham o mesmo (id_interno, tipo)
+# tools desempacotam por posição: doc_id, _ = ...  /  id_documento, tipo_doc = ...
+```
+**Problema:** Tupla posicional `(id_interno, tipo)` declarada no contrato e espelhada nas duas implementações; a camada de tools desempacota por ordem. Mesmo acoplamento posicional de F-027/F-028.
+**Severidade (critério §Regra auditada):** **low** — dados puros, sem sentinel de status. Refatoração cosmética (1 modelo `DocumentoResolvido(id, tipo)` no contrato + impls + call sites).
+**Esforço:** medium (toca contrato + 2 backends + callers nas tools)
 
 ---
 
@@ -1197,10 +1243,10 @@ Contagem por finding (linha de tabela), não por instância — ver convenção 
 |---|---|---|
 | critical | 0 | — |
 | high | 14 | auth.py (4), sei_web_client.py (1), setup_wizard.py (7), backends/rest/documentos.py (1), backends/web/documentos.py (1) |
-| medium | 6 | mcp_app.py (2), sei_web_client.py (2), backends/composite.py (1), backends/web/documentos.py (1) |
-| low | 8 | sei_web_client.py (2), catalog_cache.py (2), setup_wizard.py (2), access_control.py (1), tools/configuracao.py (1) |
+| medium | 7 | auth.py (1), mcp_app.py (2), sei_web_client.py (2), backends/composite.py (1), backends/web/documentos.py (1) |
+| low | 9 | sei_web_client.py (2), catalog_cache.py (2), setup_wizard.py (2), access_control.py (1), tools/configuracao.py (1), backends/base.py (1) |
 | info | 2 | backends/rest/documentos.py (1), backends/web/documentos.py (1) |
-| **Total** | **30** | **11 arquivos** |
+| **Total** | **32** | **12 arquivos** |
 
 ### Prioridade de correção sugerida
 
@@ -1210,7 +1256,7 @@ Contagem por finding (linha de tabela), não por instância — ver convenção 
 | 2 | `backends/rest/documentos.py` + `backends/web/documentos.py` | F-021 + F-023 | medium — substituir `{"encontrado": False}` por `SEINotFoundError` |
 | 3 | `tools/configuracao.py` | F-019 | low — 1 dataclass |
 | 4 | `backends/composite.py` | F-020 | low — 1 IntEnum |
-| 5 | `sei_web_client.py` | F-005, F-008, F-009 (×21, 20 métodos) | medium — F-009 requer modelos de domínio |
+| 5 | `sei_web_client.py` | F-005, F-008, F-009 (×20, 20 métodos) | medium — F-009 requer modelos de domínio |
 | 6 | `auth.py` | F-001–F-004 | medium — verificar constraint de interface FastMCP primeiro |
 | 7 | `mcp_app.py` | F-001–F-002 | low — propagar exceção em vez de swallow→None |
 | 8 | `catalog_cache.py` | F-009, F-011 | low — separar erro de cache-miss |

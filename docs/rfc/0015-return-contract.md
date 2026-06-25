@@ -23,7 +23,7 @@ Este RFC fecha a lacuna entre esses dois: **o que cada camada retorna no caminho
 
 ### 1. O backend conhece o formato de resposta MCP
 
-Os métodos de escrita em `sei_web_client.py` (audit F-009, 21 returns em 20 métodos) retornam `{"ok": True, ...}` ou `{"status": "ok", ...}` diretamente. O backend fala SEI — não deveria saber que existe um `"ok"` do outro lado. Isso acopla a camada de scraping ao envelope MCP e esconde o contrato do type checker (`-> dict`).
+Os métodos de escrita em `sei_web_client.py` (audit F-009, 20 returns em 20 métodos) retornam `{"ok": True, ...}` ou `{"status": "ok", ...}` diretamente. O backend fala SEI — não deveria saber que existe um `"ok"` do outro lado. Isso acopla a camada de scraping ao envelope MCP e esconde o contrato do type checker (`-> dict`).
 
 ### 2. Tuplas nuas codificam estado por posição
 
@@ -107,13 +107,15 @@ async def alterar_processo_web(self, ...) -> ProcessoAlterado:
 @mcp.tool(annotations=_WRITE)
 async def sei_alterar_processo(...) -> ProcessoAlterado:
     res = await backend.alterar_processo(...)          # SEIError propaga → ToolError
-    res.next_actions = [NextAction(
+    # Modelo é frozen (D2) — anexa next_actions com model_copy, sem mutar in-place.
+    return res.model_copy(update={"next_actions": [NextAction(
         tool="sei_consultar_processo",
         args={"nup": res.protocolo},
         reason="confirme a alteração",
-    )]
-    return res
+    )]})
 ```
+
+> Modelos frozen (D2) não aceitam `res.next_actions = ...` (levanta em runtime). Para anexar `next_actions` na camada de tool, use `model_copy(update=...)` (retorna nova instância) ou construa o modelo já com as ações.
 
 ```python
 # setup_wizard.py — multi-valor interno vira modelo Pydantic frozen (F-012–F-018)
@@ -130,7 +132,7 @@ class CredentialsResult(BaseModel):
 
 1. **`setup_wizard.py` + `tools/configuracao.py`** — modelos Pydantic frozen puramente internos. Zero impacto de wire, zero churn de teste de saída. Resolve os findings RC-TUPLE/RC-BOOL-ERROR internos (F-012–F-019, F-026).
 2. **`backends/{rest,web}/documentos.py`** — `buscar_documento` para de emitir `{"encontrado": False}`; `raise SEINotFoundError`. Toca só os callers de `buscar_documento` (F-021, F-023, F-024).
-3. **`sei_web_client.py` F-009** — remove `ok`/`status` dos status-dicts de escrita (21 returns, 20 métodos); `_shape_resposta_escrita` já absorve os campos por alias, então as tools não mudam.
+3. **`sei_web_client.py` F-009** — remove `ok`/`status` dos status-dicts de escrita (20 returns, 20 métodos); `_shape_resposta_escrita` já absorve os campos por alias, então as tools não mudam.
 4. **`mcp_app.py` / `composite.py` / `catalog_cache.py`** — propagar-não-engolir (RFC 0004 §6) em F-001/F-002; o `IntEnum` do `_prioridade_erro` (F-020); manter `None` legítimo no cache (D3).
 5. **Remover `status: "ok"` de `RespostaEscrita`** — mudança de `outputSchema`, coordenar como o RFC 0013 fez (compat de clientes que introspectam schema).
 6. **`auth.py` por último** — F-001–F-004 são constrangidos pela interface `OAuthTokenStore` do FastMCP (assinaturas `-> T | None` externas). Precisa de adapter; fazer deliberadamente, não mecânico.

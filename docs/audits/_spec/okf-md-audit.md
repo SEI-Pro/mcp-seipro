@@ -73,7 +73,7 @@ Documenta violações de uma regra ou padrão de código, organizadas por arquiv
 
 Cada arquivo auditado recebe um capítulo `##` nomeado com o caminho relativo ao root do projeto.
 
-```markdown
+````markdown
 ## `src/foo/bar.py`
 
 > **Estado:** clean | violations-found | not-applicable
@@ -99,15 +99,15 @@ Cada arquivo auditado recebe um capítulo `##` nomeado com o caminho relativo ao
 ```
 **Esforço:** low | medium | high
 **Impacto se não corrigido:** <consequência prática>
-```
+````
 
 Se o arquivo não tem violações:
 
-```markdown
+````markdown
 ## `src/foo/bar.py`
 
 > **Estado:** clean — nenhuma violação encontrada.
-```
+````
 
 ### 2.4 Tipos de violação canônicos para `return-contract`
 
