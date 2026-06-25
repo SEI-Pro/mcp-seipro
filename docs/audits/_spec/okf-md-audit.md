@@ -159,8 +159,8 @@ Novos tipos de documento OKF MD (ex: `rfc`, `adr`, `runbook`) seguem a mesma est
 ```
 docs/audits/<YYYY-MM-DD>-<slug>.md        # audit datado
 docs/audits/_spec/<slug>.md               # specs dos tipos OKF MD
-docs/rfcs/<NNN>-<slug>.md                 # type: rfc
-docs/adrs/<NNN>-<slug>.md                 # type: adr
+docs/rfc/<NNN>-<slug>.md                  # type: rfc (singular — convenção do repo)
+docs/adr/<NNN>-<slug>.md                  # type: adr (singular — convenção do repo)
 ```
 
 ---

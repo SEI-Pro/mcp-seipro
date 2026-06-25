@@ -8,7 +8,7 @@
 
 ## Contexto
 
-O audit `2026-06-25-return-contract.md` encontrou **34 violações** de contrato de retorno em 10 arquivos: funções que retornam `tuple[status, payload]`, strings/ints mágicos, `None`-como-erro, `bool`-como-erro e dicts com chave de status. A regra violada é *Clean Code* cap. 7 — "Use Exceptions Rather Than Return Codes".
+O audit `2026-06-25-return-contract.md` encontrou violações de contrato de retorno espalhadas por vários arquivos: funções que retornam `tuple[status, payload]`, strings/ints mágicos, `None`-como-erro, `bool`-como-erro e dicts com chave de status. A regra violada é *Clean Code* cap. 7 — "Use Exceptions Rather Than Return Codes". **A contagem exata e por-arquivo vive no audit** (este RFC não duplica os totais para não divergir dele).
 
 Duas peças do desenho já existem e **não devem ser reinventadas**:
 
@@ -23,7 +23,7 @@ Este RFC fecha a lacuna entre esses dois: **o que cada camada retorna no caminho
 
 ### 1. O backend conhece o formato de resposta MCP
 
-12 métodos de escrita em `sei_web_client.py` (audit F-009) retornam `{"ok": True, ...}` ou `{"status": "ok", ...}` diretamente. O backend fala SEI — não deveria saber que existe um `"ok"` do outro lado. Isso acopla a camada de scraping ao envelope MCP e esconde o contrato do type checker (`-> dict`).
+Os métodos de escrita em `sei_web_client.py` (audit F-009, 21 returns em 20 métodos) retornam `{"ok": True, ...}` ou `{"status": "ok", ...}` diretamente. O backend fala SEI — não deveria saber que existe um `"ok"` do outro lado. Isso acopla a camada de scraping ao envelope MCP e esconde o contrato do type checker (`-> dict`).
 
 ### 2. Tuplas nuas codificam estado por posição
 
@@ -120,9 +120,9 @@ class CredentialsResult:
 
 ## Plano de migração (incremental, cada passo um PR, testes verdes)
 
-1. **`setup_wizard.py` + `tools/configuracao.py`** — frozen dataclasses puramente internas. Zero impacto de wire, zero churn de teste de saída. Resolve ~14 dos 34 findings (F-012–F-019).
+1. **`setup_wizard.py` + `tools/configuracao.py`** — frozen dataclasses puramente internas. Zero impacto de wire, zero churn de teste de saída. Resolve os findings RC-TUPLE/RC-BOOL-ERROR internos (F-012–F-019, F-026).
 2. **`backends/{rest,web}/documentos.py`** — `buscar_documento` para de emitir `{"encontrado": False}`; `raise SEINotFoundError`. Toca só os callers de `buscar_documento` (F-021, F-023, F-024).
-3. **`sei_web_client.py` F-009** — remove `ok`/`status` dos 12 dicts de escrita; `_shape_resposta_escrita` já absorve os campos por alias, então as tools não mudam.
+3. **`sei_web_client.py` F-009** — remove `ok`/`status` dos status-dicts de escrita (21 returns, 20 métodos); `_shape_resposta_escrita` já absorve os campos por alias, então as tools não mudam.
 4. **`mcp_app.py` / `composite.py` / `catalog_cache.py`** — propagar-não-engolir (RFC 0004 §6) em F-001/F-002; o `IntEnum` do `_prioridade_erro` (F-020); manter `None` legítimo no cache (D3).
 5. **Remover `status: "ok"` de `RespostaEscrita`** — mudança de `outputSchema`, coordenar como o RFC 0013 fez (compat de clientes que introspectam schema).
 6. **`auth.py` por último** — F-001–F-004 são constrangidos pela interface `OAuthTokenStore` do FastMCP (assinaturas `-> T | None` externas). Precisa de adapter; fazer deliberadamente, não mecânico.

@@ -49,16 +49,16 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 
 | Arquivos auditados | Com violations | Clean |
 |---|---|---|
-| 52 | 10 | 42 |
+| 52 | 11 | 41 |
 
 | Severidade | Findings |
 |---|---|
 | critical | 0 |
 | high | 15 |
 | medium | 6 |
-| low | 6 |
+| low | 7 |
 | info | 2 |
-| **Total** | **29** |
+| **Total** | **30** |
 
 > **Convenção de contagem:** 1 finding = 1 linha de tabela. Findings que agrupam múltiplas instâncias do mesmo padrão na mesma função/arquivo trazem a multiplicidade no rótulo (`×N`) mas contam como **1**. Instâncias agrupadas: F-009 (×21, 20 métodos), F-015 (×4), F-016 (×4), F-026 (×3). Total de instâncias individuais ≈ 60.
 
@@ -180,7 +180,36 @@ def get_sei_credentials_from_token(token: str) -> dict:
 
 ## `src/todos/access_control.py`
 
-> **Estado:** clean — nenhuma violação encontrada.
+> **Estado:** violations-found
+
+### Findings
+
+| ID | Função / linha | Tipo | Severidade |
+|---|---|---|---|
+| F-027 | `extrair_nivel:306` | `RC-TUPLE` | low |
+
+#### F-027 — `extrair_nivel` (linha 306)
+
+**Tipo:** RC-TUPLE
+**Severidade:** low
+**Padrão atual:**
+```python
+def extrair_nivel(metadata: dict) -> tuple[str | None, str | None]:
+    ...
+    return None, None
+    return normalizar_nivel(nivel), hipotese
+```
+**Problema:** Retorna `(nivel_acesso, hipotese_legal)` — dois valores posicionais que o caller desempacota por ordem (`nivel, hl = extrair_nivel(...)`). Mesmo acoplamento posicional dos tuples do `setup_wizard`.
+**Nuance:** **nenhum** dos dois elementos é sentinel de status/erro — são dois campos de dado legitimamente opcionais, e `(None, None)` significa "ambos ausentes", não falha. Por isso é **low** (ergonomia/acoplamento posicional, não error-hiding): a refatoração é cosmética, não corrige bug.
+**Refatoração sugerida:**
+```python
+@dataclass(frozen=True, slots=True)
+class NivelExtraido:
+    nivel: str | None
+    hipotese: str | None
+```
+**Esforço:** low
+**Impacto se não corrigido:** Baixo — caller troca a ordem dos dois campos sem o type checker avisar (ambos `str | None`).
 
 ---
 
@@ -1120,9 +1149,9 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 | critical | 0 | — |
 | high | 15 | auth.py (4), sei_web_client.py (1), setup_wizard.py (7), tools/configuracao.py (1), backends/rest/documentos.py (1), backends/web/documentos.py (1) |
 | medium | 6 | mcp_app.py (2), sei_web_client.py (2), backends/composite.py (1), backends/web/documentos.py (1) |
-| low | 6 | sei_web_client.py (2), catalog_cache.py (3), setup_wizard.py (1) |
+| low | 7 | sei_web_client.py (2), catalog_cache.py (3), setup_wizard.py (1), access_control.py (1) |
 | info | 2 | backends/rest/documentos.py (1), backends/web/documentos.py (1) |
-| **Total** | **29** | **10 arquivos** |
+| **Total** | **30** | **11 arquivos** |
 
 ### Prioridade de correção sugerida
 
