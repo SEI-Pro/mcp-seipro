@@ -171,15 +171,15 @@ async def _ler_documento_via_backend(
     pode ser "auto" — nesse caso tenta interno e cai para externo.
     """
     gate_tipo = "X" if tipo_documento == "X" else "I"
-    acao, payload = await _aplicar_gate_documento(
-        ctx,
-        backend,
-        _DocumentoRef(id=str(id_documento), tipo_documento=gate_tipo, processo=processo),
-        confirmou=confirmou,
-    )
-    if acao in ("bloquear", "recusou"):
-        return _json(payload)
-    disclaimer = payload
+    try:
+        disclaimer = await _aplicar_gate_documento(
+            ctx,
+            backend,
+            _DocumentoRef(id=str(id_documento), tipo_documento=gate_tipo, processo=processo),
+            confirmou=confirmou,
+        )
+    except access_control.GateBloqueadoError as exc:
+        return _json(exc.payload)
 
     if tipo_documento == "X":
         content = await backend.baixar_anexo(str(id_documento), processo)
@@ -317,14 +317,15 @@ async def sei_baixar_anexo(
                 msg = "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' para baixar anexos."
                 raise SEIValidationError(msg) from None
 
-        acao, payload = await _aplicar_gate_documento(
-            ctx,
-            backend,
-            _DocumentoRef(id=str(id_documento), tipo_documento="X", processo=processo),
-            confirmou=confirmar_acesso_restrito,
-        )
-        if acao in ("bloquear", "recusou"):
-            return _json(payload)
+        try:
+            disclaimer = await _aplicar_gate_documento(
+                ctx,
+                backend,
+                _DocumentoRef(id=str(id_documento), tipo_documento="X", processo=processo),
+                confirmou=confirmar_acesso_restrito,
+            )
+        except access_control.GateBloqueadoError as exc:
+            return _json(exc.payload)
 
         content = await backend.baixar_anexo(str(id_documento), processo)
         if len(content) > MAX_BINARY_SIZE:
@@ -337,8 +338,8 @@ async def sei_baixar_anexo(
             "base64": base64.b64encode(content).decode(),
             "size_bytes": len(content),
         }
-        if payload:
-            resposta["aviso_acesso"] = payload
+        if disclaimer:
+            resposta["aviso_acesso"] = disclaimer
         resposta["_next"] = [{"tool": "sei_ler_documento", "args": {"id_documento": id_documento}}]
         return _json(resposta)
     except httpx.RequestError as e:

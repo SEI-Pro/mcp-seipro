@@ -15,7 +15,6 @@ import html as _html
 import logging
 import os
 import unicodedata as _unicodedata
-from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,18 @@ ROTULOS = {
     SIGILOSO: "Sigiloso",
 }
 
-Decisao = Literal["liberar", "bloquear"]
+
+class GateBloqueadoError(Exception):
+    """Levantada por _aplicar_gate_documento quando o acesso é bloqueado."""
+
+    def __init__(self, payload: dict) -> None:
+        """Inicializa com o payload de bloqueio serializado como JSON pelo caller."""
+        super().__init__()
+        self.payload = payload
+
+
+class ConsentRecusadoError(GateBloqueadoError):
+    """Levantada quando o usuário recusou explicitamente o consentimento via elicit."""
 
 
 def normalizar_nivel(valor: object) -> str | None:
@@ -211,36 +221,6 @@ def construir_aviso_recusado(
         "alvo": alvo,
         "nivel_acesso": nivel,
     }
-
-
-def avaliar_acesso(
-    nivel_acesso: object,
-    hipotese_legal: str | None = None,
-    *,
-    confirmou: bool,
-    alvo: dict,
-) -> tuple[Decisao, dict | None]:
-    """Decide se o conteúdo pode ser entregue.
-
-    Retorna ("liberar", None) para conteúdo público.
-    Retorna ("liberar", disclaimer) para conteúdo restrito quando há
-    consentimento (parâmetro per-call ou env var).
-    Retorna ("bloquear", aviso) quando há restrição sem consentimento.
-    """
-    nivel = normalizar_nivel(nivel_acesso)
-    if not precisa_disclaimer(nivel):
-        return "liberar", None
-
-    if confirmou or env_permite_restritos():
-        if env_permite_restritos() and not confirmou:
-            logger.warning(
-                "SEI_PERMITIR_RESTRITOS: acesso irrestrito liberado para alvo=%r nivel=%s",
-                alvo,
-                nivel,
-            )
-        return "liberar", construir_disclaimer_acompanhante(nivel, hipotese_legal, alvo)
-
-    return "bloquear", construir_aviso_bloqueio(nivel, hipotese_legal, alvo)
 
 
 def prefixar_markdown(disclaimer: dict, conteudo: str) -> str:

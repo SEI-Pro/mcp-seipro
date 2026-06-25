@@ -445,6 +445,14 @@ class _ConsentimentoRestrito(BaseModel):
 _ELICIT_TIMEOUT_S = float(os.environ.get("SEI_ELICIT_TIMEOUT_S", "30"))
 
 
+class _ElicitNaoSuportadoError(Exception):
+    """Cliente MCP não implementa elicitInput ou não respondeu — fallback para gate JSON."""
+
+
+class _ElicitRecusadoError(Exception):
+    """Usuário recusou explicitamente o consentimento via elicit."""
+
+
 def _cliente_suporta_elicit(ctx: Context | None) -> bool:
     """Verifica via MCP capabilities se o cliente declarou suporte a elicit."""
     if ctx is None:
@@ -465,17 +473,16 @@ async def _solicitar_consentimento_via_elicit(
     rotulo: str,
     hipotese: str | None,
     alvo: dict,
-) -> str:
+) -> None:
     """Solicita consentimento ao usuário via MCP elicitInput.
 
-    Retorna:
-      - "aceitou": usuário marcou autorizo_acesso=True
-      - "recusou": usuário rejeitou ou desmarcou
-      - "nao_suportado": cliente MCP não implementa elicitInput, ou não
-        respondeu dentro de SEI_ELICIT_TIMEOUT_S — cair no fallback JSON
+    Retorna normalmente (None) quando o usuário aceitou.
+    Levanta _ElicitNaoSuportadoError quando o cliente não suporta elicit ou não
+    respondeu dentro de SEI_ELICIT_TIMEOUT_S — cair no fallback JSON.
+    Levanta _ElicitRecusadoError quando o usuário rejeitou explicitamente.
     """
     if ctx is None or not _cliente_suporta_elicit(ctx):
-        return "nao_suportado"
+        raise _ElicitNaoSuportadoError
 
     riscos_txt = "\n".join(f"• {r}" for r in access_control.riscos_padrao())
     hl_txt = f"\nHipótese legal: {hipotese}" if hipotese else ""
@@ -502,21 +509,21 @@ async def _solicitar_consentimento_via_elicit(
             "elicit timeout após %ss — cliente não respondeu, caindo no fallback JSON",
             _ELICIT_TIMEOUT_S,
         )
-        return "nao_suportado"
+        raise _ElicitNaoSuportadoError from None
     except (NotImplementedError, TypeError) as e:
         logger.debug(
             "elicit não suportado pelo cliente (%s: %s) — fallback JSON", type(e).__name__, e
         )
-        return "nao_suportado"
+        raise _ElicitNaoSuportadoError from e
     except (AttributeError, RuntimeError, ValueError) as e:
         logger.warning(
             "elicit falhou inesperadamente (%s: %s) — fallback JSON", type(e).__name__, e
         )
-        return "nao_suportado"
+        raise _ElicitNaoSuportadoError from e
 
     if result.action == "accept" and result.data and result.data.autorizo_acesso:
-        return "aceitou"
-    return "recusou"
+        return
+    raise _ElicitRecusadoError
 
 
 async def _consultar_meta_documento(
@@ -545,7 +552,7 @@ async def _aplicar_gate_documento(
     doc: _DocumentoRef,
     *,
     confirmou: bool,
-) -> tuple[str, dict | None]:
+) -> dict | None:
     """Resolve metadados pelo backend composto e aplica o gate de acesso.
 
     Roteia a consulta de metadados pelo composite (REST-first com fallback web),
@@ -556,10 +563,9 @@ async def _aplicar_gate_documento(
     propaga e a leitura nunca acontece — conteúdo potencialmente restrito não é
     liberado sem checar o nível. Isso vale INCLUSIVE com `confirmou=True`.
 
-    Retorna (acao, payload):
-      - "liberar": prossiga; payload é o disclaimer acompanhante (ou None se público)
-      - "bloquear": retorne payload (JSON de bloqueio) ao caller
-      - "recusou": retorne payload (JSON de recusa) ao caller
+    Retorna o disclaimer acompanhante (ou None se público).
+    Levanta access_control.ConsentRecusadoError quando o usuário recusou via elicit.
+    Levanta access_control.GateBloqueadoError quando o conteúdo é restrito e não há consentimento.
     """
     meta = await _consultar_meta_documento(
         backend, doc["id"], doc["tipo_documento"], doc["processo"]
@@ -574,19 +580,23 @@ async def _aplicar_gate_documento(
     }
 
     if not access_control.precisa_disclaimer(nivel):
-        return ("liberar", None)
+        return None
 
     if confirmou or access_control.env_permite_restritos():
-        return ("liberar", access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo))
+        return access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo)
 
     rotulo = access_control.ROTULOS.get(nivel, "Restrito")
-    consent = await _solicitar_consentimento_via_elicit(ctx, rotulo, hipotese, alvo)
-
-    if consent == "aceitou":
-        return ("liberar", access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo))
-    if consent == "recusou":
-        return ("recusou", access_control.construir_aviso_recusado(nivel, rotulo, alvo))
-    return ("bloquear", access_control.construir_aviso_bloqueio(nivel, hipotese, alvo))
+    try:
+        await _solicitar_consentimento_via_elicit(ctx, rotulo, hipotese, alvo)
+    except _ElicitRecusadoError:
+        raise access_control.ConsentRecusadoError(
+            access_control.construir_aviso_recusado(nivel, rotulo, alvo)
+        ) from None
+    except _ElicitNaoSuportadoError:
+        raise access_control.GateBloqueadoError(
+            access_control.construir_aviso_bloqueio(nivel, hipotese, alvo)
+        ) from None
+    return access_control.construir_disclaimer_acompanhante(nivel, hipotese, alvo)
 
 
 async def _resolver_processo(client: SEIClient, referencia: str) -> str:
