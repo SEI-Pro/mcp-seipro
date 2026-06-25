@@ -4,7 +4,6 @@ import asyncio
 import base64
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
@@ -31,6 +30,7 @@ from todos.exceptions import (
     SEINotFoundError,
     erro_do_sei,
 )
+from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +70,13 @@ class SEIClient:
     def __init__(self, config: SEIClientConfig | None = None) -> None:
         """Initialise from a SEIClientConfig (or env vars when config is None/default)."""
         cfg = config or SEIClientConfig()
-        self.base_url = (cfg.sei_url or os.environ.get("SEI_URL", "")).rstrip("/")
-        self._usuario = cfg.sei_usuario or os.environ.get("SEI_USUARIO", "")
+        settings = get_settings()
+        self.base_url = (cfg.sei_url or settings.sei_url).rstrip("/")
+        self._usuario = cfg.sei_usuario or settings.sei_usuario
 
         # Resolve o sei_root de forma consistente com SEIWebClient para namespace do keyring.
         # §1.1: usa urlparse para extrair scheme://host sem assumir componentes do path.
-        _sei_web_url = cfg.sei_web_url or os.environ.get("SEI_WEB_URL", "")
+        _sei_web_url = cfg.sei_web_url or settings.sei_web_url
         if _sei_web_url:
             self.sei_root = _sei_web_url.rstrip("/")
         elif self.base_url:
@@ -93,7 +94,7 @@ class SEIClient:
         else:
             self.sei_root = self.base_url.rstrip("/")
 
-        self._senha = cfg.sei_senha or os.environ.get("SEI_SENHA", "")
+        self._senha = cfg.sei_senha or settings.sei_senha
         # Pre-compute keyring key so autenticar() can do the actual lookup in a thread.
         # §1.5: usa apenas netloc (host+port) para chave estável, nunca a URL completa.
         self._keyring_user: str | None = None
@@ -104,8 +105,8 @@ class SEIClient:
                 f"{self._usuario}@{instance_host}" if instance_host else self._usuario
             )
 
-        self._orgao = cfg.sei_orgao or os.environ.get("SEI_ORGAO", "0")
-        self._contexto = cfg.sei_contexto or os.environ.get("SEI_CONTEXTO", "")
+        self._orgao = cfg.sei_orgao or settings.sei_orgao
+        self._contexto = cfg.sei_contexto or settings.sei_contexto
         self._token: str | None = None
         self._unidade_ativa: str | None = None
         self._id_usuario: str | None = None
@@ -118,11 +119,9 @@ class SEIClient:
             "contexto": self._contexto,
         }
 
-        _ca_bundle = cfg.sei_ca_bundle or os.environ.get("SEI_CA_BUNDLE", "")
+        _ca_bundle = cfg.sei_ca_bundle or settings.sei_ca_bundle
         _raw_verify: str | bool = (
-            cfg.sei_verify_ssl
-            if cfg.sei_verify_ssl is not None
-            else os.environ.get("SEI_VERIFY_SSL", "true")
+            cfg.sei_verify_ssl if cfg.sei_verify_ssl is not None else settings.sei_verify_ssl
         )
         _verify: bool | str
         if _ca_bundle:
