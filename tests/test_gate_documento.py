@@ -16,6 +16,7 @@ import asyncio
 
 import pytest
 
+from todos.access_control import ConsentRecusadoError, GateBloqueadoError
 from todos.backends.base import SEIBackend
 from todos.exceptions import SEIDocumentoNaoAutorizadoError, SEIError
 from todos.mcp_app import _aplicar_gate_documento, _DocumentoRef
@@ -51,14 +52,20 @@ class _GateBackend(SEIBackend):
 
 
 def _gate(backend: SEIBackend, tipo: str = "X", *, confirmou: bool = False) -> tuple:
-    return asyncio.run(
-        _aplicar_gate_documento(
-            None,
-            backend,
-            _DocumentoRef(id="123", tipo_documento=tipo, processo="PROC"),
-            confirmou=confirmou,
+    try:
+        disclaimer = asyncio.run(
+            _aplicar_gate_documento(
+                None,
+                backend,
+                _DocumentoRef(id="123", tipo_documento=tipo, processo="PROC"),
+                confirmou=confirmou,
+            )
         )
-    )
+    except ConsentRecusadoError as exc:
+        return "recusou", exc.payload
+    except GateBloqueadoError as exc:
+        return "bloquear", exc.payload
+    return "liberar", disclaimer
 
 
 @pytest.fixture(autouse=True)
