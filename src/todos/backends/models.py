@@ -137,6 +137,7 @@ class SEIClientConfig:
     sei_orgao: str = ""
     sei_contexto: str = ""
     sei_verify_ssl: str | bool | None = None
+    sei_ca_bundle: str = ""
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,7 @@ class SEIWebClientConfig:
     sei_sigla_sistema: str = ""
     sei_sigla_orgao_sistema: str = ""
     sei_verify_ssl: str | bool | None = None
+    sei_ca_bundle: str = ""
 
 
 @dataclass(frozen=True)

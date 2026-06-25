@@ -391,10 +391,10 @@ async def sei_status_resource(ctx: Context) -> str:
         return "\n".join(linhas)
     except (SEIError, httpx.HTTPError) as exc:
         logger.warning("sei_status: erro ao consultar status — %s: %s", type(exc).__name__, exc)
-        return f"Status: erro ao obter sessão — {exc}"
+        return f"Status: erro ao obter sessão — {type(exc).__name__}"
     except AttributeError as exc:
         logger.warning("sei_status: contrato inesperado no objeto de sessão — %s", exc)
-        return f"Status: erro interno ao obter sessão — {exc}"
+        return "Status: erro interno ao obter sessão"
 
 
 @mcp.resource("sei://estilos-css")

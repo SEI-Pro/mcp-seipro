@@ -314,15 +314,22 @@ class SEIWebClient:
             or self._sigla_orgao
         )
 
+        _ca_bundle = cfg.sei_ca_bundle or os.environ.get("SEI_CA_BUNDLE", "")
         _raw_verify: str | bool = (
             cfg.sei_verify_ssl
             if cfg.sei_verify_ssl is not None
             else os.environ.get("SEI_VERIFY_SSL", "true")
         )
-        _verify: bool = (
-            _raw_verify.lower() != "false" if isinstance(_raw_verify, str) else _raw_verify
-        )
-        if not _verify:
+        _verify: bool | str
+        if _ca_bundle:
+            _verify = _ca_bundle  # use explicit CA bundle path (preferred over boolean bypass)
+        else:
+            _verify = (
+                _raw_verify.lower() != "false"
+                if isinstance(_raw_verify, str)
+                else bool(_raw_verify)
+            )
+        if _verify is False:
             warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
         self.login_url = (
@@ -394,6 +401,19 @@ class SEIWebClient:
         """True após login bem-sucedido (inbox_url capturada)."""
         return self._inbox_url is not None
 
+    def _reset_session_state(self) -> None:
+        """Limpa todo o estado de sessão para garantir retry limpo."""
+        self._inbox_url = None
+        self._form_action = None
+        self._form_hidden = {}
+        self._trabalhar_links = {}
+        self._pesquisa_rapida_action = None
+        self._arvore_cache = {}
+        self._unidade_atual = None
+        self._nome_usuario = None
+        self._id_usuario = None
+        self._orgao_usuario = None
+
     def limpar_senha(self) -> None:
         """Sobrescreve a senha em memória após uso."""
         self._senha = ""
@@ -421,17 +441,14 @@ class SEIWebClient:
                 timeout=5.0,
             )
         except TimeoutError:
-            logger.warning(
-                "Timeout ao buscar senha do keyring (>5s) para %r; use SEI_SENHA como fallback",
-                keyring_user,
-            )
+            logger.warning("Timeout ao buscar senha do keyring (>5s); use SEI_SENHA como fallback")
             return None
         except AttributeError as e:
             # Linux SecretService/dbus backend raises this on headless sessions — expected
-            logger.info("_ler_senha_keyring %r: keyring indisponível: %s", keyring_user, e)
+            logger.info("_ler_senha_keyring: keyring indisponível: %s", e)
             return None
         except (OSError, RuntimeError, ValueError) as e:
-            logger.warning("_ler_senha_keyring %r: erro ao buscar senha: %s", keyring_user, e)
+            logger.warning("_ler_senha_keyring: erro ao buscar senha: %s", e)
             return None
 
     async def login(self, *, _retry_keyring: bool = True) -> None:
@@ -589,6 +606,7 @@ class SEIWebClient:
                     if nova and nova != self._senha:
                         logger.info("Senha do keyring mudou desde o último login; refazendo.")
                         self._senha = nova
+                        self._reset_session_state()
                         await self.login(_retry_keyring=False)
                         return
                 if not self._senha:
@@ -615,7 +633,8 @@ class SEIWebClient:
                     f"{dica}"
                 )
                 raise SEICredenciaisError(msg)
-            msg = f"URL inesperada após login: {final_url}"
+            logger.warning("SEI login: URL inesperada após redirecionamento: %s", final_url)
+            msg = "URL inesperada após login — o servidor SEI não redirecionou para a caixa de entrada."
             raise SEIParseError(msg)
 
         _soup = BeautifulSoup(post_resp.text, "html.parser")
@@ -1021,7 +1040,7 @@ class SEIWebClient:
         proto_norm = protocolo.replace(" ", "")
         for a in soup.find_all("a", href=re.compile(r"procedimento_trabalhar")):
             txt = a.get_text(strip=True).replace(" ", "")
-            if proto_norm in txt:
+            if proto_norm == txt:
                 href = _tag_str(a, "href").replace("&amp;", "&")
                 async with self._form_lock:
                     self._trabalhar_links[protocolo] = href
@@ -1156,8 +1175,9 @@ class SEIWebClient:
 
             tipo_cell = row0.find("td")
             tipo_text = tipo_cell.get_text(" ", strip=True) if tipo_cell is not None else ""
-            # tipo_text é "Tipo Nº protocolo" — extrai só o tipo (antes do Nº)
-            tipo = re.sub(r"\s+N[ºo°]?\s*\S+.*$", "", tipo_text).strip()
+            # tipo_text é "Tipo Nº protocolo" — extrai só o tipo (antes do Nº).
+            # Limite de comprimento antes do regex evita ReDoS com input malformado.
+            tipo = re.sub(r"\s+N[ºo°]?\s*\S+.*$", "", tipo_text[:200]).strip()
 
             trecho = siblings[0].get_text(" ", strip=True) if len(siblings) > 0 else ""
             meta = siblings[1].get_text(" ", strip=True) if len(siblings) > 1 else ""

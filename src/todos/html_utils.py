@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
 # Número máximo de caracteres retornados pelo fallback regex de html_to_text.
 _FALLBACK_TEXT_LIMIT: int = 10_000
 
+# Tamanho máximo de HTML aceito para parse completo (50 MB).
+# Respostas maiores são truncadas antes de entrar no BeautifulSoup para evitar DoS.
+_MAX_HTML_PARSE_BYTES: int = 50 * 1024 * 1024
+
 # Comprimento máximo de uma linha para ser formatada como título em negrito no PDF.
 _HEADER_MAX_LEN: int = 100
 
@@ -90,6 +94,14 @@ def html_to_text(raw: str) -> str:
     try:
         # A API retorna HTML-escaped — decodificar primeiro
         html = html_module.unescape(raw)
+
+        if len(html) > _MAX_HTML_PARSE_BYTES:
+            logger.warning(
+                "HTML muito grande (%d bytes); truncando para %d antes de parsear",
+                len(html),
+                _MAX_HTML_PARSE_BYTES,
+            )
+            html = html[:_MAX_HTML_PARSE_BYTES]
 
         # Remover blocos <style> e <script> antes do parse
         cleaned = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
@@ -253,6 +265,13 @@ def html_to_markdown(raw: str) -> str:
     """
     try:
         html = html_module.unescape(raw)
+        if len(html) > _MAX_HTML_PARSE_BYTES:
+            logger.warning(
+                "HTML muito grande (%d bytes); truncando para %d antes de converter para Markdown",
+                len(html),
+                _MAX_HTML_PARSE_BYTES,
+            )
+            html = html[:_MAX_HTML_PARSE_BYTES]
         cleaned = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
         cleaned = re.sub(r"<script[^>]*>.*?</script>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
         resultado = _SEIMarkdownConverter(
