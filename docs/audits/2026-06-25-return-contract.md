@@ -54,11 +54,11 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 | Severidade | Findings |
 |---|---|
 | critical | 0 |
-| high | 20 |
+| high | 21 |
 | medium | 6 |
 | low | 5 |
 | info | 2 |
-| **Total** | **33** |
+| **Total** | **34** |
 
 O foco de maior impacto está em `setup_wizard.py` (12 tuplas nuas) e `auth.py` (4 violations com nota de constraint de interface externa). Corrigir todos os `high` elimina ~88% do risco prático. `mcp_app.py` tem 2 findings medium (RC-NONE-AS-ERROR em helpers de busca de documento) corrigíveis com esforço baixo.
 
@@ -514,11 +514,85 @@ Mesmo padrão de F-009: `None` cobre erro e ausência. Esforço: low.
 | F-013 | `_resolve_organ_from_list` | `RC-TUPLE` | high |
 | F-014 | `_resolve_organ_manual` | `RC-TUPLE` | high |
 | F-015 | `_save_password_to_keyring` (×4) | `RC-TUPLE` | high |
-| F-016 | `_detect_organs_with_ssl_fallback` (×3) | `RC-TUPLE` | high |
+| F-016 | `_detect_organs_with_ssl_fallback` (×4) | `RC-TUPLE` | high |
 | F-017 | `_setup_credentials` | `RC-TUPLE` | high |
 | F-018 | `_build_mcp_env` | `RC-TUPLE` | high |
 
-Este arquivo concentra **12 instâncias** de funções que retornam tuplas nuas com 2–4 elementos posicionais sem nome. A raiz é que `setup_wizard.py` foi desenvolvido como script imperativo e nunca migrado para types estruturados.
+Este arquivo concentra **13 instâncias** de funções que retornam tuplas nuas com 2–4 elementos posicionais sem nome. A raiz é que `setup_wizard.py` foi desenvolvido como script imperativo e nunca migrado para types estruturados.
+
+#### F-012 — `_detect_organs`
+
+**Tipo:** RC-TUPLE
+**Severidade:** high
+**Padrão atual:**
+```python
+def _detect_organs(...) -> tuple[list[tuple[str, str]], str, str]:
+    ...
+    return organs, sigla_orgao_sistema, sigla_sistema
+```
+**Problema:** Retorna 3-tupla onde os dois últimos strings são parâmetros de URL extraídos da resposta — callers fazem `organs, sigla, sistema = _detect_organs(...)` sem nomes. Adicionalmente, `organs` é `list[tuple[str, str]]` — nested RC-TUPLE.
+**Refatoração sugerida:**
+```python
+@dataclass
+class OrgaoSEI:
+    id: str
+    nome: str
+
+@dataclass
+class DetectOrgansResult:
+    organs: list[OrgaoSEI]
+    sigla_orgao_sistema: str
+    sigla_sistema: str
+```
+**Esforço:** medium
+
+---
+
+#### F-013 — `_resolve_organ_from_list`
+
+**Tipo:** RC-TUPLE
+**Severidade:** high
+**Padrão atual:**
+```python
+def _resolve_organ_from_list(organs: list[tuple[str, str]]) -> tuple[str, str]:
+    ...
+    return orgao_id, sigla_orgao
+```
+**Problema:** `(orgao_id, sigla_orgao)` — dois strings posicionais sem nome. Callers fazem `orgao_id, sigla = _resolve_organ_from_list(...)`.
+**Refatoração sugerida:**
+```python
+@dataclass
+class OrganSelection:
+    orgao_id: str
+    sigla_orgao: str
+```
+**Esforço:** low
+
+---
+
+#### F-014 — `_resolve_organ_manual`
+
+**Tipo:** RC-TUPLE
+**Severidade:** high
+**Padrão atual:**
+```python
+def _resolve_organ_manual(sigla_orgao_sistema: str) -> tuple[str, str, str, str]:
+    ...
+    return sigla_orgao, sigla_orgao_sistema, orgao_id, default_sigla_sistema
+```
+**Problema:** 4-tupla de strings totalmente posicionais — callers precisam conhecer a ordem exata de 4 campos. `default_sigla_sistema` retornado junto com config mutável torna o contrato opaco.
+**Refatoração sugerida:**
+```python
+@dataclass
+class ManualOrganConfig:
+    sigla_orgao: str
+    sigla_orgao_sistema: str
+    orgao_id: str
+    default_sigla_sistema: str
+```
+**Esforço:** low
+
+---
 
 #### F-015 — `_save_password_to_keyring` (caso crítico)
 
@@ -546,6 +620,60 @@ class KeyringResult:
 # Erros de I/O → raise KeyringWriteError("mensagem")
 ```
 **Esforço:** medium
+
+---
+
+#### F-016 — `_detect_organs_with_ssl_fallback` (×4)
+
+**Tipo:** RC-TUPLE
+**Severidade:** high
+**Padrão atual:**
+```python
+def _detect_organs_with_ssl_fallback(...) -> tuple[list[tuple[str, str]], str, str, bool]:
+    ...
+    return [], sigla_orgao_sistema, sigla_sistema, False   # user recusou SSL
+    return [], sigla_orgao_sistema, sigla_sistema, False   # HTTP error
+    return organs, sigla_orgao_sistema, sigla_sistema, False  # sucesso
+    return organs, sigla_orgao_sistema, sigla_sistema, True   # sucesso sem SSL
+```
+**Problema:** `bool` na posição 4 é sentinel de estado ("SSL desabilitado?"). Há 4 `return` distintos, dois deles indistinguíveis pelo caller (`([], ..., False)` cobre tanto recusa do usuário quanto erro HTTP).
+**Refatoração sugerida:**
+```python
+@dataclass
+class OrgansDetectionResult:
+    organs: list[OrgaoSEI]
+    sigla_orgao_sistema: str
+    sigla_sistema: str
+    ssl_disabled: bool
+
+# recusa e HTTP error → raise OrgansDetectionError("mensagem") com campo reason
+```
+**Esforço:** medium
+
+---
+
+#### F-017 — `_setup_credentials`
+
+**Tipo:** RC-TUPLE
+**Severidade:** high
+**Padrão atual:**
+```python
+def _setup_credentials(sei_root: str) -> tuple[str, str, str]:
+    ...
+    return usuario, senha_config, senha_validacao
+```
+**Problema:** 3-tuple de strings; callers fazem `usuario, senha_config, senha_val = _setup_credentials(...)`. A distinção entre `senha_config` (pode ser vazia para keyring) e `senha_validacao` é posicional.
+**Refatoração sugerida:**
+```python
+@dataclass
+class CredentialsResult:
+    usuario: str
+    senha_config: str   # vazia = usar keyring
+    senha_validacao: str
+```
+**Esforço:** low
+
+---
 
 #### F-018 — `_build_mcp_env`
 
@@ -954,17 +1082,17 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 | Severidade | Findings | Arquivos afetados |
 |---|---|---|
 | critical | 0 | — |
-| high | 20 | auth.py (×4), sei_web_client.py (×1), setup_wizard.py (×12), tools/configuracao.py (×1), backends/rest/documentos.py (×1), backends/web/documentos.py (×1) |
+| high | 21 | auth.py (×4), sei_web_client.py (×1), setup_wizard.py (×13), tools/configuracao.py (×1), backends/rest/documentos.py (×1), backends/web/documentos.py (×1) |
 | medium | 6 | mcp_app.py (×2), sei_web_client.py (×2), backends/composite.py (×1), backends/web/documentos.py (×1) |
 | low | 5 | sei_web_client.py (×2), catalog_cache.py (×3) |
 | info | 2 | backends/rest/documentos.py (×1), backends/web/documentos.py (×1) |
-| **Total** | **33** | **10 arquivos** |
+| **Total** | **34** | **10 arquivos** |
 
 ### Prioridade de correção sugerida
 
 | Prioridade | Arquivo | Findings | Esforço agregado |
 |---|---|---|---|
-| 1 | `setup_wizard.py` | F-012–F-018 (12 findings) | medium — criar 5 dataclasses, escopo isolado |
+| 1 | `setup_wizard.py` | F-012–F-018 (13 instâncias) | medium — criar 6 dataclasses, escopo isolado |
 | 2 | `backends/rest/documentos.py` + `backends/web/documentos.py` | F-021 + F-023 | medium — substituir `{"encontrado": False}` por `SEINotFoundError` |
 | 3 | `tools/configuracao.py` | F-019 | low — 1 dataclass |
 | 4 | `backends/composite.py` | F-020 | low — 1 IntEnum |

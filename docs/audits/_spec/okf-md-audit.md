@@ -4,6 +4,7 @@ okf:
   subtype: okf-md/audit
   version: "1.0"
   status: draft
+  scope: "Especificação do tipo de documento OKF MD — audit"
   authors:
     - franklinbaldo
   created: 2026-06-25
