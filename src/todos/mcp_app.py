@@ -474,7 +474,7 @@ async def _solicitar_consentimento_via_elicit(
       - "nao_suportado": cliente MCP não implementa elicitInput, ou não
         respondeu dentro de SEI_ELICIT_TIMEOUT_S — cair no fallback JSON
     """
-    if not _cliente_suporta_elicit(ctx):
+    if ctx is None or not _cliente_suporta_elicit(ctx):
         return "nao_suportado"
 
     riscos_txt = "\n".join(f"• {r}" for r in access_control.riscos_padrao())
