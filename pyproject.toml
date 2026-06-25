@@ -25,6 +25,9 @@ dependencies = [
     "typer>=0.12",
 ]
 
+[project.optional-dependencies]
+llm = ["litellm>=1.0"]
+
 [project.scripts]
 todos = "todos.server:main"
 
@@ -109,6 +112,9 @@ ignore = [
 ]
 "src/todos/tools/processos.py" = [
     "PLR0913",  # sei_criar_processo (7 business fields) + sei_alterar_processo: MCP API surface
+]
+"src/todos/tools/analise.py" = [
+    "ASYNC109",  # timeout é parâmetro MCP público — não pode ser substituído por asyncio.timeout()
 ]
 "tests/**" = ["S101", "ANN", "D", "PLR2004", "SLF001", "FBT003"]  # assert/no-annot/no-docstring/magic-vals/bool-args ok in tests
 "evals/**" = ["S101", "ANN", "D", "PLR2004", "PLR0913", "SLF001", "FBT003", "INP001", "ARG"]  # same relaxations as tests/
