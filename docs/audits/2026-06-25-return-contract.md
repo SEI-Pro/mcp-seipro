@@ -8,7 +8,7 @@ okf:
   rule_ref: "Clean Code cap. 7 (Martin, 2008); Effective Python item 87; Railway-Oriented Programming (Wlaschin, 2014)"
   severity_scale: [critical, high, medium, low, info]
   codebase: franklinbaldo/todos
-  scope: src/todos/ — todos os 51 arquivos Python
+  scope: src/todos/ — todos os 52 arquivos Python
   authors:
     - claude-sonnet-4-6
   created: 2026-06-25
@@ -47,20 +47,32 @@ A regra **return-contract** estabelece que toda função deve ter exatamente um 
 
 ## Resumo executivo
 
-| Archivos auditados | Com violations | Clean |
+| Arquivos auditados | Com violations | Clean |
 |---|---|---|
-| 51 | 10 | 41 |
+| 52 | 10 | 42 |
 
 | Severidade | Findings |
 |---|---|
 | critical | 0 |
 | high | 20 |
-| medium | 7 |
+| medium | 5 |
 | low | 5 |
 | info | 2 |
-| **Total** | **34** |
+| **Total** | **32** |
 
 O foco de maior impacto está em `setup_wizard.py` (12 tuplas nuas) e `auth.py` (4 violations com nota de constraint de interface externa). Corrigir todos os `high` elimina ~88% do risco prático. `mcp_app.py` tem 2 findings medium (RC-NONE-AS-ERROR em helpers de busca de documento) corrigíveis com esforço baixo.
+
+---
+
+## `src/todos/__init__.py`
+
+> **Estado:** clean — nenhuma violação encontrada.
+
+---
+
+## `src/todos/__main__.py`
+
+> **Estado:** clean — nenhuma violação encontrada.
 
 ---
 
@@ -606,6 +618,12 @@ def _prioridade_erro(exc: Exception) -> _ErroPrioridade:
 
 ---
 
+## `src/todos/backends/__init__.py`
+
+> **Estado:** clean — nenhuma violação encontrada.
+
+---
+
 ## `src/todos/backends/base.py`
 
 > **Estado:** clean — nenhuma violação encontrada.
@@ -903,10 +921,10 @@ Mesmo caso de F-022 — query de capacidade booleana legítima. Severidade: info
 |---|---|---|
 | critical | 0 | — |
 | high | 20 | auth.py (×4), sei_web_client.py (×1), setup_wizard.py (×12), tools/configuracao.py (×1), backends/rest/documentos.py (×1), backends/web/documentos.py (×1) |
-| medium | 7 | mcp_app.py (×2), sei_web_client.py (×1), backends/composite.py (×1), backends/web/documentos.py (×2), auth.py nota-constraint |
+| medium | 5 | mcp_app.py (×2), sei_web_client.py (×1), backends/composite.py (×1), backends/web/documentos.py (×1) |
 | low | 5 | sei_web_client.py (×2), catalog_cache.py (×3) |
 | info | 2 | backends/rest/documentos.py (×1), backends/web/documentos.py (×1) |
-| **Total** | **34** | **10 arquivos** |
+| **Total** | **32** | **10 arquivos** |
 
 ### Prioridade de correção sugerida
 
