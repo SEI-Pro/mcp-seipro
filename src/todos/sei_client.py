@@ -118,14 +118,21 @@ class SEIClient:
             "contexto": self._contexto,
         }
 
+        _ca_bundle = cfg.sei_ca_bundle or os.environ.get("SEI_CA_BUNDLE", "")
         _raw_verify: str | bool = (
             cfg.sei_verify_ssl
             if cfg.sei_verify_ssl is not None
             else os.environ.get("SEI_VERIFY_SSL", "true")
         )
-        _verify: bool = (
-            _raw_verify.lower() != "false" if isinstance(_raw_verify, str) else _raw_verify
-        )
+        _verify: bool | str
+        if _ca_bundle:
+            _verify = _ca_bundle  # use explicit CA bundle path (preferred over boolean bypass)
+        else:
+            _verify = (
+                _raw_verify.lower() != "false"
+                if isinstance(_raw_verify, str)
+                else bool(_raw_verify)
+            )
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(120.0, connect=10.0, read=90.0),
             verify=_verify,
