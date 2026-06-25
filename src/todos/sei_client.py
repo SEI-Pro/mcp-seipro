@@ -13,7 +13,6 @@ from urllib.parse import urlparse
 
 import httpx
 
-from todos.auth import ssrf_request_hook
 from todos.backends.models import (
     CredenciaisAssinatura,
     EnvioProcesso,
@@ -137,7 +136,6 @@ class SEIClient:
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(120.0, connect=10.0, read=90.0),
             verify=_verify,
-            event_hooks={"request": [ssrf_request_hook]},
         )
 
     @property

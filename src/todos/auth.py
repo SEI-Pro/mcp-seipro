@@ -30,7 +30,6 @@ from html import escape as _html_escape
 from typing import cast
 from urllib.parse import urlparse
 
-import httpx
 from fastmcp.server.auth import AccessToken, OAuthProvider
 from mcp.server.auth.provider import (
     AuthorizationCode,
@@ -111,35 +110,9 @@ def _resolvido_bloqueado(host: str) -> str | None:
                     break
             if blocked is not None:
                 break
-    except (socket.gaierror, OSError):
-        pass  # DNS failure — let the actual HTTP request handle it
+    except (socket.gaierror, OSError) as exc:
+        logger.debug("DNS resolution failed for SSRF pre-check of %r: %s", host, exc)
     return blocked
-
-
-async def ssrf_request_hook(request: httpx.Request) -> None:
-    """Httpx request event hook that blocks connections to internal networks.
-
-    Registered as ``event_hooks={"request": [ssrf_request_hook]}`` on every
-    SEI HTTP client.  httpx calls this before every outgoing request —
-    including redirect hops — without touching the transport layer, so
-    environment-proxy settings (HTTPS_PROXY, HTTP_PROXY, …) are preserved.
-
-    Re-running the IP blocklist check here closes the DNS-rebinding window
-    left by config-time validation in ``_validar_url_sei``: the hook resolves
-    the hostname immediately before each connection attempt, making it
-    infeasible for an attacker to win the DNS race.
-    """
-    host = request.url.host
-    if host:
-        ip_result = _is_ip_bloqueado(host)
-        if ip_result:
-            msg = f"SSRF guard: endereço IP bloqueado ({host})"
-            raise httpx.ConnectError(msg)
-        if ip_result is None:
-            blocked = await asyncio.to_thread(_resolvido_bloqueado, host)
-            if blocked is not None:
-                msg = f"SSRF guard: {host!r} resolve para endereço bloqueado ({blocked})"
-                raise httpx.ConnectError(msg)
 
 
 def _validar_url_sei(url: str, campo: str) -> None:
