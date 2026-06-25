@@ -129,7 +129,8 @@ class _RestBase(_RestMixin):
 
         msg = (
             f"Documento '{referencia}' não encontrado via pesquisa. "
-            "Se é um documento recém-criado, o Solr pode não ter indexado ainda. "
+            "Se é um documento recém-criado, o Solr pode não ter indexado ainda — "
+            "verifique os avisos de conectividade nos logs. "
             "Use sei_arvore_processo com o protocolo do processo para encontrá-lo."
         )
         raise SEINotFoundError(msg)

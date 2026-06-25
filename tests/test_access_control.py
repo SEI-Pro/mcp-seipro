@@ -102,7 +102,8 @@ class TestEnvPermiteRestritos:
 
 
 # ---------------------------------------------------------------------------
-# avaliar_acesso — the decision matrix
+# Decision matrix — now tested via the building blocks directly
+# (avaliar_acesso was removed; the gate lives in _aplicar_gate_documento)
 # ---------------------------------------------------------------------------
 
 
@@ -113,16 +114,14 @@ class TestAvaliarAcesso:
         # env var must start unset so it cannot leak a "liberar" decision.
         monkeypatch.delenv("SEI_PERMITIR_RESTRITOS", raising=False)
 
-    def test_public_always_liberates_without_disclaimer(self, alvo: dict) -> None:
-        decisao, payload = ac.avaliar_acesso("0", confirmou=False, alvo=alvo)
-        assert decisao == "liberar"
-        assert payload is None
+    def test_public_always_liberates_without_disclaimer(self) -> None:
+        assert not ac.precisa_disclaimer("0")
 
     @pytest.mark.parametrize("nivel", ["1", "2"])
     def test_restricted_without_consent_blocks(self, nivel: str, alvo: dict) -> None:
-        decisao, payload = ac.avaliar_acesso(nivel, confirmou=False, alvo=alvo)
-        assert decisao == "bloquear"
-        assert payload is not None
+        assert ac.precisa_disclaimer(nivel)
+        assert not ac.env_permite_restritos()
+        payload = ac.construir_aviso_bloqueio(nivel, None, alvo)
         assert payload["consentimento_necessario"] is True
         assert payload["tipo_resposta"] == "consentimento_pendente"
 
@@ -130,9 +129,8 @@ class TestAvaliarAcesso:
     def test_restricted_with_per_call_consent_liberates_with_disclaimer(
         self, nivel: str, alvo: dict
     ) -> None:
-        decisao, payload = ac.avaliar_acesso(nivel, confirmou=True, alvo=alvo)
-        assert decisao == "liberar"
-        assert payload is not None
+        assert ac.precisa_disclaimer(nivel)
+        payload = ac.construir_disclaimer_acompanhante(nivel, None, alvo)
         assert payload["consentimento_necessario"] is False
         assert payload["tipo_resposta"] == "aviso_classificacao_informativo"
 
@@ -141,31 +139,25 @@ class TestAvaliarAcesso:
         self, monkeypatch: pytest.MonkeyPatch, nivel: str, alvo: dict
     ) -> None:
         monkeypatch.setenv("SEI_PERMITIR_RESTRITOS", "true")
-        decisao, payload = ac.avaliar_acesso(nivel, confirmou=False, alvo=alvo)
-        assert decisao == "liberar"
-        assert payload is not None
+        assert ac.env_permite_restritos()
+        payload = ac.construir_disclaimer_acompanhante(nivel, None, alvo)
         assert payload["consentimento_necessario"] is False
         assert payload["tipo_resposta"] == "aviso_classificacao_informativo"
 
     def test_hipotese_legal_propagated_to_bloqueio(self, alvo: dict) -> None:
-        _, payload = ac.avaliar_acesso("1", "Art. 31 LAI", confirmou=False, alvo=alvo)
-        assert payload is not None
+        payload = ac.construir_aviso_bloqueio("1", "Art. 31 LAI", alvo)
         assert payload["hipotese_legal"] == "Art. 31 LAI"
 
     def test_hipotese_legal_propagated_to_disclaimer(self, alvo: dict) -> None:
-        _, payload = ac.avaliar_acesso("1", "Art. 31 LAI", confirmou=True, alvo=alvo)
-        assert payload is not None
+        payload = ac.construir_disclaimer_acompanhante("1", "Art. 31 LAI", alvo)
         assert payload["hipotese_legal"] == "Art. 31 LAI"
         assert payload["tipo_resposta"] == "aviso_classificacao_informativo"
 
-    def test_missing_nivel_is_safe_path(self, alvo: dict) -> None:
-        decisao, payload = ac.avaliar_acesso(None, confirmou=False, alvo=alvo)
-        assert decisao == "liberar"
-        assert payload is None
+    def test_missing_nivel_is_safe_path(self) -> None:
+        assert not ac.precisa_disclaimer(None)
 
     def test_alvo_is_propagated(self, alvo: dict) -> None:
-        _, payload = ac.avaliar_acesso("1", confirmou=False, alvo=alvo)
-        assert payload is not None
+        payload = ac.construir_aviso_bloqueio("1", None, alvo)
         assert payload["alvo"] == _ALVO
 
     # --- the invariant that justifies this whole module ---------------------
@@ -175,17 +167,18 @@ class TestAvaliarAcesso:
         [(n, e) for n in ("1", "2") for e in ("false", "0", "no", "", "garbage")],
     )
     def test_safety_restricted_without_any_consent_never_liberates(
-        self, monkeypatch: pytest.MonkeyPatch, nivel: str, env_val: str, alvo: dict
+        self, monkeypatch: pytest.MonkeyPatch, nivel: str, env_val: str
     ) -> None:
-        """No combination of 'no consent' may produce a 'liberar' decision.
+        """No combination of 'no consent' may produce content delivery without consent.
 
         This is the legal firewall: restricted/classified content must not reach
         the LLM unless the human explicitly authorized it (per-call flag) or the
         operator opted in at deploy time (env var).
         """
         monkeypatch.setenv("SEI_PERMITIR_RESTRITOS", env_val)
-        decisao, _ = ac.avaliar_acesso(nivel, confirmou=False, alvo=alvo)
-        assert decisao == "bloquear"
+        # precisa_disclaimer=True AND env not set → gate must block, not liberate
+        assert ac.precisa_disclaimer(nivel)
+        assert not ac.env_permite_restritos()
 
 
 # ---------------------------------------------------------------------------
@@ -406,18 +399,16 @@ class TestGateSigiloso:
     # --- nivel string "2" --------------------------------------------------
 
     def test_nivel_2_string_blocks_without_consent(self, alvo: dict) -> None:
-        """nivelAcesso='2' without consent must produce a block."""
-        decisao, payload = ac.avaliar_acesso("2", confirmou=False, alvo=alvo)
-        assert decisao == "bloquear"
-        assert payload is not None
+        """nivelAcesso='2' without consent must produce a block payload."""
+        assert ac.precisa_disclaimer("2")
+        assert not ac.env_permite_restritos()
+        payload = ac.construir_aviso_bloqueio("2", None, alvo)
         assert payload["tipo_resposta"] == "consentimento_pendente"
         assert payload["consentimento_necessario"] is True
 
     def test_nivel_2_string_liberates_with_consent(self, alvo: dict) -> None:
         """nivelAcesso='2' with explicit consent must liberate with a disclaimer."""
-        decisao, payload = ac.avaliar_acesso("2", confirmou=True, alvo=alvo)
-        assert decisao == "liberar"
-        assert payload is not None
+        payload = ac.construir_disclaimer_acompanhante("2", None, alvo)
         assert payload["tipo_resposta"] == "aviso_classificacao_informativo"
         assert payload["rotulo_nivel"] == "Sigiloso"
 
@@ -427,50 +418,39 @@ class TestGateSigiloso:
         # hipoteseLegal is metadata-only — it does NOT change the gate decision.
         # The gate key is nivelAcesso; this test confirms hipoteseLegal text
         # with "sigiloso" is properly propagated but doesn't bypass the block.
-        decisao, payload = ac.avaliar_acesso(
+        assert ac.precisa_disclaimer("2")
+        payload = ac.construir_aviso_bloqueio(
             "2",
             "Sigilo de investigacao policial (art. 20 LAI) - sigiloso",
-            confirmou=False,
-            alvo=alvo,
+            alvo,
         )
-        assert decisao == "bloquear"
-        assert payload is not None
         assert "sigiloso" in payload["hipotese_legal"].lower()
 
     def test_sigiloso_hipotese_legal_propagated_when_released(self, alvo: dict) -> None:
         """hipotese_legal is passed through unchanged when access is granted."""
-        decisao, payload = ac.avaliar_acesso(
-            "2",
-            "Sigilo bancario (LC 105/2001)",
-            confirmou=True,
-            alvo=alvo,
-        )
-        assert decisao == "liberar"
-        assert payload is not None
+        payload = ac.construir_disclaimer_acompanhante("2", "Sigilo bancario (LC 105/2001)", alvo)
         assert payload["hipotese_legal"] == "Sigilo bancario (LC 105/2001)"
 
     # --- extrair_nivel then gate -------------------------------------------
 
-    def test_extrair_nivel_camel_then_gate_blocks(self, alvo: dict) -> None:
-        """End-to-end: REST metadata with nivelAcesso=2 must produce a block."""
-        nivel, hl = ac.extrair_nivel({"nivelAcesso": "2", "hipoteseLegal": "Art. 26 LAI"})
+    def test_extrair_nivel_camel_then_gate_blocks(self) -> None:
+        """End-to-end: REST metadata with nivelAcesso=2 must need a block."""
+        nivel, _ = ac.extrair_nivel({"nivelAcesso": "2", "hipoteseLegal": "Art. 26 LAI"})
         assert nivel == "2"
-        decisao, _ = ac.avaliar_acesso(nivel, hl, confirmou=False, alvo=alvo)
-        assert decisao == "bloquear"
+        assert ac.precisa_disclaimer(nivel)
+        assert not ac.env_permite_restritos()
 
-    def test_extrair_nivel_integer_2_then_gate_blocks(self, alvo: dict) -> None:
+    def test_extrair_nivel_integer_2_then_gate_blocks(self) -> None:
         """Integer nivelAcesso=2 (REST sometimes returns ints) must also block."""
         nivel, _ = ac.extrair_nivel({"nivelAcesso": 2})
         assert nivel == "2"
-        decisao, _ = ac.avaliar_acesso(nivel, confirmou=False, alvo=alvo)
-        assert decisao == "bloquear"
+        assert ac.precisa_disclaimer(nivel)
 
-    def test_extrair_nivel_web_sigiloso_then_gate_blocks(self, alvo: dict) -> None:
-        """Web-scraped text 'Sigiloso' must flow through to a gate block."""
+    def test_extrair_nivel_web_sigiloso_then_gate_blocks(self) -> None:
+        """Web-scraped text 'Sigiloso' must flow through to precisa_disclaimer=True."""
         nivel = ac.extrair_nivel_web({"nivel_de_acesso": "Sigiloso"})
         assert nivel == "2"
-        decisao, _ = ac.avaliar_acesso(nivel, confirmou=False, alvo=alvo)
-        assert decisao == "bloquear"
+        assert ac.precisa_disclaimer(nivel)
 
     # --- bloqueio payload structure for sigiloso ---------------------------
 

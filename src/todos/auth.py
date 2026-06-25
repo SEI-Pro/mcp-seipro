@@ -215,11 +215,13 @@ def _verify(token: str) -> dict | None:
     try:
         padded = raw + "=" * (-len(raw) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded))
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError) as exc:
+        logger.debug("decode_jwt: payload inválido — %s", exc)
         return None
     if "exp" not in payload:
         logger.warning("Token sem campo 'exp' — tratado como expirado.")
     if payload.get("exp", 0) < time.time():
+        logger.debug("decode_jwt: token expirado (exp=%s)", payload.get("exp"))
         return None
     return payload
 

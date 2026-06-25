@@ -53,7 +53,11 @@ async def _validar_cargo(backend: "SEIBackend", cargo: str) -> None:
             cargos = await backend.listar_assinantes()
         except SEIConnectionError:
             raise
-        except (SEIError, httpx.HTTPError):
+        except (SEIError, httpx.HTTPError) as exc:
+            logger.warning(
+                "_validar_cargo: listar_assinantes falhou — cargo obrigatório mas lista indisponível: %s",
+                exc,
+            )
             cargos = []
         raise _exigir_cargo(cargos)
 

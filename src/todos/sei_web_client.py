@@ -428,7 +428,7 @@ class SEIWebClient:
             return None
         except AttributeError as e:
             # Linux SecretService/dbus backend raises this on headless sessions — expected
-            logger.debug("_ler_senha_keyring %r: keyring indisponível: %s", keyring_user, e)
+            logger.info("_ler_senha_keyring %r: keyring indisponível: %s", keyring_user, e)
             return None
         except (OSError, RuntimeError, ValueError) as e:
             logger.warning("_ler_senha_keyring %r: erro ao buscar senha: %s", keyring_user, e)
@@ -3289,7 +3289,8 @@ class SEIWebClient:
                                             opcoes.append({"value": v, "texto": t})
                 if opcoes:
                     break
-            except (SEIParseError, SEINotFoundError, httpx.HTTPError, OSError):
+            except (SEIParseError, SEINotFoundError, httpx.HTTPError, OSError) as exc:
+                logger.debug("_obter_opcoes_marcador: falha em processo %r — %s", protocolo, exc)
                 continue
         marcadores: list[dict[str, str]] = []
         for opt in opcoes:
@@ -3360,7 +3361,10 @@ class SEIWebClient:
             try:
                 soup = await self._obter_soup_documento_receber(protocolo)
                 break
-            except SEIParseError:
+            except SEIParseError as exc:
+                logger.debug(
+                    "pesquisar_tipos_documento_web: parse falhou para %r — %s", protocolo, exc
+                )
                 continue
         if soup is None:
             return {"tipos": [], "total_itens": 0}
@@ -3393,7 +3397,10 @@ class SEIWebClient:
             try:
                 soup = await self._obter_soup_documento_receber(protocolo)
                 break
-            except SEIParseError:
+            except SEIParseError as exc:
+                logger.debug(
+                    "pesquisar_tipos_conferencia_web: parse falhou para %r — %s", protocolo, exc
+                )
                 continue
         if soup is None:
             return {"tipos": [], "total_itens": 0}

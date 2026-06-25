@@ -2,7 +2,6 @@
 
 import asyncio
 import concurrent.futures
-import contextlib
 import getpass
 import json
 import logging
@@ -307,8 +306,11 @@ def _save_password_to_keyring(
         return senha, senha
     else:
         lida: str | None = None
-        with contextlib.suppress(OSError, ValueError):
+        try:
             lida = _keyring.get_password("todos-mcp", keyring_user)
+        except (OSError, ValueError) as exc:
+            _warn(f"Leitura de verificação do Keyring falhou: {exc}")
+            return "", senha
         if lida:
             _ok("Leitura de verificação do Keyring OK!")
             return "", lida
@@ -408,7 +410,7 @@ def _mcp_add_via_cli(
     except _sp.CalledProcessError as e:
         if "already exists" not in (e.stderr or "") and "already exists" not in (e.stdout or ""):
             return False
-        with contextlib.suppress(_sp.CalledProcessError):
+        try:
             _sp.run(
                 [claude_cli, "mcp", "remove", "-s", scope, "todos"],
                 check=True,
@@ -417,8 +419,11 @@ def _mcp_add_via_cli(
                 cwd=cwd_str,
             )
             _sp.run(cmd, check=True, capture_output=True, text=True, cwd=cwd_str)
+        except _sp.CalledProcessError as re_exc:
+            _logger_setup.debug("mcp add re-tentativa falhou: %s", re_exc)
+            return False
+        else:
             return True
-        return False
     except OSError:
         return False
     else:
@@ -547,7 +552,7 @@ def _update_codex_via_cli(codex_cli: str, todos_cmd: str, mcp_env: dict[str, str
         _sp.run(cmd_codex, check=True, capture_output=True, text=True)
     except _sp.CalledProcessError as e:
         if "already" in (e.stderr or "") or "already" in (e.stdout or ""):
-            with contextlib.suppress(_sp.CalledProcessError):
+            try:
                 _sp.run(
                     [codex_cli, "mcp", "remove", "todos"],
                     check=True,
@@ -555,6 +560,9 @@ def _update_codex_via_cli(codex_cli: str, todos_cmd: str, mcp_env: dict[str, str
                     text=True,
                 )
                 _sp.run(cmd_codex, check=True, capture_output=True, text=True)
+            except _sp.CalledProcessError as re_exc:
+                _logger_setup.debug("codex mcp add re-tentativa falhou: %s", re_exc)
+            else:
                 _ok("Atualizado: Codex (global) via `codex mcp add`")
                 return True
         return False
