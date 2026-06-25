@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-llm = ["litellm>=1.84.0"]
+llm = ["litellm>=1.84.0", "pymupdf>=1.24"]
 
 [project.scripts]
 todos = "todos.server:main"
@@ -40,6 +40,7 @@ dev = [
     "bandit>=1.8",
     "pip-audit>=2.8",
     "litellm>=1.84.0",
+    "pymupdf>=1.24",
 ]
 eval = [
     "anthropic>=0.30",
@@ -57,6 +58,7 @@ include = ["src/todos/", "pyproject.toml", "README.md"]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+exclude = [".agents/"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -116,6 +118,8 @@ ignore = [
 ]
 "src/todos/tools/analise.py" = [
     "ASYNC109",  # timeout é parâmetro MCP público — não pode ser substituído por asyncio.timeout()
+    "ANN401",   # Any necessário para tipos fitz/PIL importados condicionalmente (C-extensions)
+    "PLR0913",  # sei_analisar_processo: processo+prompt_extra+modelo+timeout+compressao+ctx = 6 MCP params
 ]
 "tests/**" = ["S101", "ANN", "D", "PLR2004", "SLF001", "FBT003"]  # assert/no-annot/no-docstring/magic-vals/bool-args ok in tests
 "evals/**" = ["S101", "ANN", "D", "PLR2004", "PLR0913", "SLF001", "FBT003", "INP001", "ARG"]  # same relaxations as tests/

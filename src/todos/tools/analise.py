@@ -1,7 +1,8 @@
 """Tool de análise de processos SEI via LLM multimodal (LiteLLM).
 
-Consolida o processo em PDF via sei_gerar_pdf_processo e envia ao LLM
-escolhido para produzir um resumo estruturado pronto para triagem.
+Consolida o processo em PDF via sei_gerar_pdf_processo, comprime as imagens
+opcionalmente via pymupdf/pillow, e envia ao LLM escolhido para produzir um
+resumo estruturado pronto para triagem.
 
 Sem `from __future__ import annotations`: o FastMCP introspecta os type hints em
 tempo de execução para montar o schema de cada tool, então as anotações precisam
@@ -9,10 +10,12 @@ ser objetos reais (não strings adiadas).
 """
 
 import base64
+import io
 import json
 import logging
 import os
 import re
+from typing import Any
 
 from fastmcp import Context
 
@@ -33,7 +36,23 @@ try:
 except ImportError:
     _LITELLM_AVAILABLE = False
 
+try:
+    import fitz as _fitz  # pymupdf — compressão de imagens no PDF
+    from PIL import Image as _PILImage
+
+    _FITZ_AVAILABLE = True
+except ImportError:
+    _FITZ_AVAILABLE = False
+
 _MAX_PDF_BYTES = 20 * 1024 * 1024  # 20 MB — limite de payload inline
+
+# Parâmetros de compressão de imagens
+_COMPRESS_MAX_DIM = 1200  # pixels — downscale se maior
+_COMPRESS_JPEG_QUALITY = 50  # qualidade JPEG para gray/color
+_COMPRESS_SKIP_SMALL = 150  # ignora imagens menores (ícones, bullets)
+_COMPRESS_SCANNED_AREA_RATIO = 0.85  # fração da página coberta por imagem → escaneado
+_COMPRESS_SCANNED_TEXT_MAX = 800  # chars — escasso texto reforça hipótese escaneado
+_COMPRESS_BW_THRESHOLD = 128  # limiar para binarização em modo B&W
 
 _FALLBACK_MODELS = [
     "gemini/gemini-2.5-flash-lite-preview-06-17",
@@ -78,6 +97,103 @@ _ERR_TODAS_KEYS_FALHARAM = "LLM falhou em todas as keys: {exc}"
 _ERR_JSON_INVALIDO = "LLM não retornou JSON válido: {snippet!r}"
 _ERR_SEM_LITELLM = "litellm não instalado. Execute: uv pip install 'todos-sei[llm]'"
 _ERR_PDF_GRANDE = "PDF muito grande ({mb}MB > 20MB). Use sei_ler_documento seletivo para processos muito extensos."
+
+
+# ── Compressão de PDF ─────────────────────────────────────────────────────────
+
+
+def _is_scanned_page(page: Any) -> bool:
+    """Return True when the page appears to be a scanned image rather than native digital text."""
+    text = page.get_text().strip()
+    if not text:
+        return True
+    images = page.get_images(full=True)
+    if images:
+        page_area = page.rect.width * page.rect.height
+        for img in images:
+            rects = page.get_image_rects(img[0])
+            if rects:
+                img_area = rects[0].width * rects[0].height
+                if (img_area / page_area) > _COMPRESS_SCANNED_AREA_RATIO and len(
+                    text
+                ) < _COMPRESS_SCANNED_TEXT_MAX:
+                    return True
+    return False
+
+
+def _flatten_alpha(img: Any) -> Any:
+    """Flatten RGBA/LA/P-transparent images onto a white RGB background."""
+    if img.mode in {"RGBA", "LA"} or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        bg = _PILImage.new("RGB", img.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.split()[-1])
+        return bg
+    return img
+
+
+def _encode_image(img: Any, mode: str) -> bytes:
+    """Re-encode a PIL image to compressed bytes using the requested mode."""
+    out = io.BytesIO()
+    if mode == "bw":
+        bw = img.convert("L").point(lambda x: 0 if x < _COMPRESS_BW_THRESHOLD else 255, mode="1")
+        bw.save(out, format="TIFF", compression="group4")
+    elif mode == "gray":
+        img.convert("L").save(out, format="JPEG", quality=_COMPRESS_JPEG_QUALITY, optimize=True)
+    else:
+        img.convert("RGB").save(out, format="JPEG", quality=_COMPRESS_JPEG_QUALITY, optimize=True)
+    return out.getvalue()
+
+
+def _select_mode(requested: str, page_type: str, img_mode: str) -> str:
+    """Choose final compression mode for an image given page classification and PIL mode."""
+    if requested != "auto":
+        return requested
+    if page_type == "scanned":
+        return "bw"
+    return "gray" if img_mode in {"L", "1"} else "color"
+
+
+def _compress_pdf(pdf_bytes: bytes, *, mode: str = "auto") -> bytes:
+    """Compress PDF images (downscale + re-encode) to reduce LLM payload.
+
+    mode: "auto" detects scanned vs digital pages automatically;
+          "bw"/"gray"/"color" force an encoding for all images.
+    """
+    doc = _fitz.open(stream=pdf_bytes, filetype="pdf")
+    page_types: dict[int, str] = (
+        {i: "scanned" if _is_scanned_page(doc[i]) else "digital" for i in range(len(doc))}
+        if mode == "auto"
+        else {}
+    )
+
+    image_to_page: dict[int, int] = {}
+    for page_idx in range(len(doc)):
+        for img in doc[page_idx].get_images(full=True):
+            xref = img[0]
+            if xref not in image_to_page:
+                image_to_page[xref] = page_idx
+
+    for xref, page_idx in image_to_page.items():
+        try:
+            base_image = doc.extract_image(xref)
+            w, h = base_image["width"], base_image["height"]
+            if w <= _COMPRESS_SKIP_SMALL and h <= _COMPRESS_SKIP_SMALL:
+                continue
+            img = _PILImage.open(io.BytesIO(base_image["image"]))
+            if w > _COMPRESS_MAX_DIM or h > _COMPRESS_MAX_DIM:
+                img.thumbnail((_COMPRESS_MAX_DIM, _COMPRESS_MAX_DIM), _PILImage.Resampling.LANCZOS)
+            img = _flatten_alpha(img)
+            current = _select_mode(mode, page_types.get(page_idx, "digital"), img.mode)
+            doc[page_idx].replace_image(xref, stream=_encode_image(img, current))
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.warning("PDF compression: skipping image xref=%d: %s", xref, exc)
+
+    result = doc.tobytes(garbage=4, deflate=True, clean=True)
+    doc.close()
+    return result
+
+
+# ── LiteLLM helpers ───────────────────────────────────────────────────────────
 
 
 def _provider_prefix(modelo: str) -> str:
@@ -165,13 +281,14 @@ async def sei_analisar_processo(
     prompt_extra: str = "",
     modelo: str = "gemini/gemini-2.5-flash",
     timeout: float = 60.0,
+    compressao: str = "auto",
     ctx: Context | None = None,
 ) -> str:
     """Analisa um processo SEI usando LLM multimodal, retornando resumo estruturado.
 
-    Consolida todos os documentos do processo em PDF (via sei_gerar_pdf_processo)
-    e envia ao LLM para análise. Útil para triagem e diagnóstico rápido de
-    processos sem precisar ler documento por documento.
+    Consolida todos os documentos do processo em PDF (via sei_gerar_pdf_processo),
+    opcionalmente comprime as imagens para reduzir o payload, e envia ao LLM.
+    Útil para triagem e diagnóstico rápido sem precisar ler documento por documento.
 
     Parâmetros:
     - processo: número SEI formatado (ex: "0020.009007/2026-04")
@@ -179,6 +296,13 @@ async def sei_analisar_processo(
     - modelo: modelo LiteLLM — ex: "gemini/gemini-2.5-flash", "openai/gpt-4o",
               "anthropic/claude-opus-4-8"; padrão: "gemini/gemini-2.5-flash"
     - timeout: segundos máximos aguardando o LLM (padrão: 60s)
+    - compressao: modo de compressão do PDF antes de enviar ao LLM:
+        "auto"  — detecta páginas escaneadas (B&W CCITT-4) vs digitais (JPEG); padrão
+        "bw"    — força CCITT Group 4 (mínimo tamanho, ideal para texto escaneado)
+        "gray"  — força JPEG escala de cinza
+        "color" — força JPEG preservando cores
+        "nao"   — sem compressão (envia PDF original)
+      Requer pymupdf (incluído em todos-sei[llm]).
 
     Requer: GEMINI_API_KEY (ou OPENAI_API_KEY / ANTHROPIC_API_KEY conforme o provider).
     Para múltiplas keys Gemini: GEMINI_API_KEYS=key1,key2,...
@@ -207,12 +331,29 @@ async def sei_analisar_processo(
 
     pdf_bytes = await backend.gerar_pdf_processo(processo)
 
+    if compressao != "nao":
+        if _FITZ_AVAILABLE:
+            if ctx:
+                await ctx.report_progress(33, 100, "Comprimindo PDF…")
+            original_size = len(pdf_bytes)
+            pdf_bytes = _compress_pdf(pdf_bytes, mode=compressao)
+            logger.info(
+                "PDF comprimido: %.1fMB → %.1fMB (%.0f%%)",
+                original_size / 1024 / 1024,
+                len(pdf_bytes) / 1024 / 1024,
+                (1 - len(pdf_bytes) / original_size) * 100,
+            )
+        else:
+            logger.warning(
+                "pymupdf não instalado — compressão desativada. Execute: uv pip install 'todos-sei[llm]'"
+            )
+
     if len(pdf_bytes) > _MAX_PDF_BYTES:
         msg = _ERR_PDF_GRANDE.format(mb=len(pdf_bytes) // 1024 // 1024)
         raise SEIError(msg)
 
     if ctx:
-        await ctx.report_progress(50, 100, "Enviando ao LLM para análise…")
+        await ctx.report_progress(60, 100, "Enviando ao LLM para análise…")
 
     prompt = _PROMPT_BASE.format(extra=prompt_extra)
     raw_text = await _call_llm(pdf_bytes, prompt, modelo, request_timeout=timeout)
