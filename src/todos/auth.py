@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import secrets
+import socket
 import time
 from html import escape as _html_escape
 from typing import cast
@@ -80,11 +81,45 @@ _REDES_BLOQUEADAS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
 ]
 
 
-def _validar_url_sei(url: str, campo: str) -> None:
+def _is_ip_bloqueado(host: str) -> str | None:
+    """Return the blocked IP string if ``host`` (IP literal) is in a blocked range, else None."""
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return None  # not an IP literal
+    for net in _REDES_BLOQUEADAS:
+        if addr in net:
+            return host
+    return ""  # valid IP, not blocked (empty string = "checked, OK")
+
+
+def _resolvido_bloqueado(host: str) -> str | None:
+    """Resolve ``host`` via DNS and return the first blocked address, or None."""
+    blocked: str | None = None
+    try:
+        results = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for _, _, _, _, sockaddr in results:
+            resolved = str(sockaddr[0])
+            try:
+                addr = ipaddress.ip_address(resolved)
+            except ValueError:
+                continue
+            for net in _REDES_BLOQUEADAS:
+                if addr in net:
+                    blocked = resolved
+                    break
+            if blocked is not None:
+                break
+    except (socket.gaierror, OSError) as exc:
+        logger.debug("DNS resolution failed for SSRF pre-check of %r: %s", host, exc)
+    return blocked
+
+
+async def _validar_url_sei(url: str, campo: str) -> None:
     """Raise ValueError if the URL is not HTTPS or targets an internal network.
 
-    IP literal checks protect against direct SSRF; DNS hostnames are not
-    resolved here to avoid DNS rebinding outside the request path.
+    For IP literals, validates directly. For DNS hostnames, offloads the
+    blocking getaddrinfo call to a thread so the event loop stays responsive.
     """
     if not url:
         return
@@ -93,14 +128,15 @@ def _validar_url_sei(url: str, campo: str) -> None:
         msg = f"{campo}: esquema '{parsed.scheme}' não permitido — use HTTPS."
         raise ValueError(msg)
     host = parsed.hostname or ""
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        return  # hostname DNS — não validamos aqui
-    for net in _REDES_BLOQUEADAS:
-        if addr in net:
-            msg = f"{campo}: endereço IP bloqueado ({host})."
+    ip_result = _is_ip_bloqueado(host)
+    if ip_result is None:
+        blocked = await asyncio.to_thread(_resolvido_bloqueado, host)
+        if blocked is not None:
+            msg = f"{campo}: hostname {host!r} resolve para endereço bloqueado ({blocked})."
             raise ValueError(msg)
+    elif ip_result:
+        msg = f"{campo}: endereço IP bloqueado ({host})."
+        raise ValueError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -521,10 +557,23 @@ _LOGIN_HTML = """<!DOCTYPE html>
 </html>"""
 
 
+_SECURITY_HEADERS: dict[str, str] = {
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": (
+        "default-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
+    ),
+}
+
+
 async def login_page(request: Request) -> HTMLResponse:
     """GET /login — renderiza formulário de credenciais SEI."""
     session = request.query_params.get("session", "")
-    return HTMLResponse(_LOGIN_HTML.replace("{session}", _html_escape(session)))
+    return HTMLResponse(
+        _LOGIN_HTML.replace("{session}", _html_escape(session)),
+        headers=_SECURITY_HEADERS,
+    )
 
 
 async def login_submit(request: Request) -> HTMLResponse:
@@ -548,22 +597,22 @@ async def login_submit(request: Request) -> HTMLResponse:
 
     # Validação SSRF — bloqueia IPs internos e esquemas não-HTTPS
     try:
-        _validar_url_sei(sei_url, "URL da API do SEI")
-        _validar_url_sei(sei_web_url, "URL base do SEI")
+        await _validar_url_sei(sei_url, "URL da API do SEI")
+        await _validar_url_sei(sei_web_url, "URL base do SEI")
     except ValueError as exc:
         return HTMLResponse(f"<h1>URL inválida: {_html_escape(str(exc))}</h1>", status_code=400)
 
     # Validação ok — consome a sessão pendente (uso único)
     await _delete_auth_code(f"pending:{session_id}")
 
-    # §31.1 — sei_senha não vai para o token; é lida de SEI_SENHA em runtime.
-    # Armazenamos apenas no auth code (vida útil de 5 min, no SQLite) para que
-    # exchange_authorization_code possa repassar ao SEIClient na criação da sessão.
+    # §31.1 — sei_senha não vai para o token nem para o auth code.
+    # A senha é lida de SEI_SENHA em runtime por get_sei_credentials_from_token().
+    # Não armazenar a senha no SQLite elimina o risco de exposição durante a
+    # janela de vida do auth code (5 min).
     sei_creds = {
         "sei_url": sei_url,
         "sei_web_url": sei_web_url,
         "sei_usuario": str(form.get("sei_usuario", "")),
-        "sei_senha": str(form.get("sei_senha", "")),
         "sei_orgao": str(form.get("sei_orgao", "0")),
         "sei_verify_ssl": verify_ssl,
     }
@@ -590,7 +639,7 @@ async def login_submit(request: Request) -> HTMLResponse:
     page = _SUCCESS_HTML.replace("{redirect_uri}", _html_escape(str(redirect_uri))).replace(
         "{usuario}", _html_escape(usuario)
     )
-    return HTMLResponse(page)
+    return HTMLResponse(page, headers=_SECURITY_HEADERS)
 
 
 _SUCCESS_HTML = """<!DOCTYPE html>
