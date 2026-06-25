@@ -66,8 +66,10 @@ async def _sei_host_from_ctx(ctx: Context | None) -> str:
             web = await _get_web_client(ctx)
             if web.sei_root:
                 return urlparse(web.sei_root).netloc
-        except (ValueError, AttributeError, OSError, RuntimeError):
-            pass
+        except (ValueError, AttributeError, OSError, RuntimeError) as exc:
+            logger.debug(
+                "_sei_host_from_ctx: fallback para env var — %s: %s", type(exc).__name__, exc
+            )
     return _sei_host()
 
 
@@ -85,7 +87,10 @@ def _read_keyring_pattern_sync(host: str) -> str:
     try:
         future = pool.submit(_keyring_mod.get_password, _KEYRING_SERVICE, key)
         return future.result(timeout=2.0) or ""
-    except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError) as exc:
+    except (OSError, RuntimeError) as exc:
+        logger.warning("keyring read failed: %s", exc)
+        return ""
+    except (TimeoutError, AttributeError, ValueError, _KeyringError) as exc:
         logger.debug("keyring read failed: %s", exc)
         return ""
     finally:
@@ -201,7 +206,11 @@ async def sei_detectar_formato_protocolo(
                 timeout=2.0,
             )
             persistido = True
-        except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
+        except (OSError, RuntimeError) as exc:
+            logger.warning("keyring write failed for pattern: %s", exc)
+            persistido = False
+        except (TimeoutError, AttributeError, ValueError, _KeyringError) as exc:
+            logger.debug("keyring write failed for pattern: %s", exc)
             persistido = False
 
     if not persistido:
@@ -257,7 +266,11 @@ async def sei_redefinir_formato_protocolo(
             timeout=2.0,
         )
         removido = True
-    except (TimeoutError, OSError, RuntimeError, AttributeError, ValueError, _KeyringError):
+    except (OSError, RuntimeError) as exc:
+        logger.warning("keyring delete failed: %s", exc)
+        removido = False
+    except (TimeoutError, AttributeError, ValueError, _KeyringError) as exc:
+        logger.debug("keyring delete failed: %s", exc)
         removido = False
     return _json(
         {

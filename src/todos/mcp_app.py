@@ -389,9 +389,12 @@ async def sei_status_resource(ctx: Context) -> str:
             marker = "▶" if u.get("sigla") == sigla else " "
             linhas.append(f"  {marker} {u['sigla']} — {u['nome']} (id: {u.get('id_unidade', '?')})")
         return "\n".join(linhas)
-    except (SEIError, httpx.HTTPError, AttributeError) as exc:
+    except (SEIError, httpx.HTTPError) as exc:
         logger.warning("sei_status: erro ao consultar status — %s: %s", type(exc).__name__, exc)
         return f"Status: erro ao obter sessão — {exc}"
+    except AttributeError as exc:
+        logger.warning("sei_status: contrato inesperado no objeto de sessão — %s", exc)
+        return f"Status: erro interno ao obter sessão — {exc}"
 
 
 @mcp.resource("sei://estilos-css")
@@ -451,7 +454,8 @@ def _cliente_suporta_elicit(ctx: Context | None) -> bool:
         if client_params is None:
             return False
         caps = client_params.capabilities
-    except AttributeError:
+    except AttributeError as exc:
+        logger.debug("_cliente_suporta_elicit: AttributeError — %s", exc)
         return False
     return getattr(caps, "elicitation", None) is not None
 
@@ -488,8 +492,6 @@ async def _solicitar_consentimento_via_elicit(
         "Se não autorizar, o MCP retornará apenas um aviso ao modelo."
     )
 
-    if ctx is None:
-        return "nao_suportado"
     try:
         result = await asyncio.wait_for(
             ctx.elicit(message=message, response_type=_ConsentimentoRestrito),
@@ -501,17 +503,15 @@ async def _solicitar_consentimento_via_elicit(
             _ELICIT_TIMEOUT_S,
         )
         return "nao_suportado"
-    except (AttributeError, NotImplementedError, RuntimeError, TypeError, ValueError) as e:
-        # NotImplementedError/TypeError → client doesn't support elicit (expected, debug only).
-        # Check these first: NotImplementedError is a RuntimeError subclass, so the order matters.
-        if isinstance(e, (NotImplementedError, TypeError)):
-            logger.debug(
-                "elicit não suportado pelo cliente (%s: %s) — fallback JSON", type(e).__name__, e
-            )
-        else:
-            logger.warning(
-                "elicit falhou inesperadamente (%s: %s) — fallback JSON", type(e).__name__, e
-            )
+    except (NotImplementedError, TypeError) as e:
+        logger.debug(
+            "elicit não suportado pelo cliente (%s: %s) — fallback JSON", type(e).__name__, e
+        )
+        return "nao_suportado"
+    except (AttributeError, RuntimeError, ValueError) as e:
+        logger.warning(
+            "elicit falhou inesperadamente (%s: %s) — fallback JSON", type(e).__name__, e
+        )
         return "nao_suportado"
 
     if result.action == "accept" and result.data and result.data.autorizo_acesso:
