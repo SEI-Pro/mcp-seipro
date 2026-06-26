@@ -38,6 +38,7 @@ from todos.sei_styles import (
     STYLE_SHORTCUTS,
 )
 from todos.sei_web_client import SEI_WEB_PAGE_SIZE, SEIWebClient
+from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,10 @@ configure_logging(
 @asynccontextmanager
 async def lifespan(_server: FastMCP) -> AsyncGenerator[dict[str, object], None]:
     """Set up and tear down SEI client sessions for the MCP server lifespan."""
-    if os.environ.get("SEI_VERIFY_SSL", "true").strip().lower() in ("false", "0", "no"):
+    # Lê via get_settings() para que SEI_VERIFY_SSL definido apenas no .env
+    # (agora uma fonte suportada) também dispare o aviso — e para que a regra de
+    # parsing seja a mesma usada pelos clientes (só "false" desabilita).
+    if not get_settings().sei_verify_ssl:
         logger.warning(
             "SEI_VERIFY_SSL=false: verificação TLS desabilitada. "
             "Não use em produção com dados sensíveis."

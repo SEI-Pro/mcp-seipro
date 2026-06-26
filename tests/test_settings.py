@@ -45,10 +45,18 @@ def test_reads_env_with_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_verify_ssl_parsed_as_bool(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SEI_VERIFY_SSL=false vira bool False (sem parsing manual no chamador)."""
+    """SEI_VERIFY_SSL: só o literal ``false`` desabilita; o resto mantém ligado."""
     monkeypatch.setenv("SEI_VERIFY_SSL", "false")
     assert TodosSettings(_env_file=None).sei_verify_ssl is False
+    monkeypatch.setenv("SEI_VERIFY_SSL", "FALSE")
+    assert TodosSettings(_env_file=None).sei_verify_ssl is False
     monkeypatch.setenv("SEI_VERIFY_SSL", "true")
+    assert TodosSettings(_env_file=None).sei_verify_ssl is True
+
+
+def test_verify_ssl_blank_does_not_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SEI_VERIFY_SSL='' (vazio) não levanta ValidationError; vale o default ligado."""
+    monkeypatch.setenv("SEI_VERIFY_SSL", "")
     assert TodosSettings(_env_file=None).sei_verify_ssl is True
 
 

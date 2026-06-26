@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,6 +51,20 @@ class TodosSettings(BaseSettings):
     sei_sigla_orgao: str = "ANTAQ"
     sei_sigla_sistema: str = "SEI"
     sei_sigla_orgao_sistema: str = ""
+
+    @field_validator("sei_verify_ssl", mode="before")
+    @classmethod
+    def _verify_ssl_from_env(cls, value: object) -> object:
+        """Interpreta ``SEI_VERIFY_SSL`` como string do ambiente: só ``false`` desabilita.
+
+        Preserva a semântica histórica dos clientes (qualquer valor diferente de
+        ``false`` mantém a verificação ligada) e evita um ``ValidationError`` quando
+        o operador define ``SEI_VERIFY_SSL=`` (vazio) no ambiente ou no ``.env`` —
+        nesse caso vale o default documentado (verificação ligada).
+        """
+        if isinstance(value, str):
+            return value.strip().lower() != "false"
+        return value
 
 
 @lru_cache(maxsize=1)
