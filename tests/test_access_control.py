@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from todos import access_control as ac
+from todos.settings import get_settings
 
 # Template kept as a module-level constant so it can serve as an expected value
 # for equality assertions (e.g. ``assert payload["alvo"] == _ALVO``).  Every
@@ -92,12 +93,12 @@ class TestEnvPermiteRestritos:
         monkeypatch.delenv("SEI_PERMITIR_RESTRITOS", raising=False)
         assert ac.env_permite_restritos() is False
 
-    def test_read_at_call_time_supports_runtime_override(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_cache_clear_picks_up_env_change(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Settings are cached per process; clearing the cache picks up env changes."""
         monkeypatch.delenv("SEI_PERMITIR_RESTRITOS", raising=False)
         assert ac.env_permite_restritos() is False
         monkeypatch.setenv("SEI_PERMITIR_RESTRITOS", "true")
+        get_settings.cache_clear()
         assert ac.env_permite_restritos() is True
 
 

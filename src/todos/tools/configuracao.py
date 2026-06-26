@@ -14,7 +14,6 @@ ser objetos reais (não strings adiadas).
 import asyncio
 import concurrent.futures
 import logging
-import os
 import re
 from types import ModuleType
 from typing import Annotated
@@ -26,6 +25,7 @@ from pydantic_core import SchemaError as _SchemaError
 
 from todos.exceptions import SEIValidationError
 from todos.mcp_app import _IDEM, _backend, _get_web_client, _json, mcp
+from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +47,10 @@ _KEYRING_SERVICE = "todos-mcp"
 
 
 def _sei_host() -> str:
-    """Retorna o netloc da instância SEI configurada via env var (startup only)."""
-    for var in ("SEI_WEB_URL", "SEI_URL"):
-        url = os.environ.get(var, "").strip()
-        if url:
+    """Retorna o netloc da instância SEI configurada (startup only)."""
+    settings = get_settings()
+    for url in (settings.sei_web_url, settings.sei_url):
+        if url.strip():
             return urlparse(url).netloc
     return ""
 
@@ -102,9 +102,7 @@ def _read_keyring_pattern_sync(host: str) -> str:
 _host = _sei_host()
 # Env var takes priority so an explicit SEI_PROTOCOLO_PATTERN always overrides a stale
 # keyring entry without requiring sei_redefinir_formato_protocolo to be run first.
-_SEI_PROTOCOLO_PATTERN = os.environ.get("SEI_PROTOCOLO_PATTERN", "") or _read_keyring_pattern_sync(
-    _host
-)
+_SEI_PROTOCOLO_PATTERN = get_settings().sei_protocolo_pattern or _read_keyring_pattern_sync(_host)
 _ProtocoloFormatadoBase = Annotated[str, Field(description=_PROTOCOLO_DESC)]
 if _SEI_PROTOCOLO_PATTERN:
     _candidate = Annotated[str, Field(pattern=_SEI_PROTOCOLO_PATTERN, description=_PROTOCOLO_DESC)]

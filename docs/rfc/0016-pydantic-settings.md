@@ -1,6 +1,6 @@
 # RFC 0016 — Configuração centralizada com pydantic-settings
 
-**Status:** 🟡 Em adoção (Fase 1 implementada)
+**Status:** ✅ Implementado (Fases 1, 2 e 3 concluídas)
 **Data:** 2026-06-25
 **Autor:** avaliação + revisão manual
 

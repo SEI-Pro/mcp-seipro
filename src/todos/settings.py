@@ -1,9 +1,9 @@
 """Configuração de processo centralizada (RFC 0016).
 
 `TodosSettings` é a fonte única das variáveis de ambiente de **processo** —
-conexão SEI, credenciais lidas do ambiente e identificadores do frontend web.
-Substitui as chamadas `os.environ.get(...)` espalhadas pelos construtores de
-`SEIClient`/`SEIWebClient`.
+conexão SEI, credenciais, limites operacionais, controle de acesso e
+identificadores do frontend web. Substitui as chamadas `os.environ.get(...)`
+espalhadas pelos módulos da aplicação.
 
 Os campos têm o mesmo nome (em minúsculas) da variável de ambiente que leem,
 espelhando os campos dos dataclasses `SEIClientConfig`/`SEIWebClientConfig`:
@@ -15,10 +15,13 @@ HTTP elas vêm do token via `auth.get_sei_credentials_from_token`, não daqui.
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class TodosSettings(BaseSettings):
@@ -33,9 +36,10 @@ class TodosSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
-    # -- Conexão SEI --------------------------------------------------------
+    # -- Conexão SEI (Phase 1) ------------------------------------------------
     sei_url: str = ""
     sei_web_url: str = ""
     sei_usuario: str = ""
@@ -43,14 +47,46 @@ class TodosSettings(BaseSettings):
     sei_orgao: str = "0"
     sei_contexto: str = ""
 
-    # -- TLS ----------------------------------------------------------------
+    # -- TLS (Phase 1) --------------------------------------------------------
     sei_verify_ssl: bool = True
     sei_ca_bundle: str = ""
 
-    # -- Identificadores do frontend web ------------------------------------
+    # -- Identificadores do frontend web (Phase 1) ----------------------------
     sei_sigla_orgao: str = "ANTAQ"
     sei_sigla_sistema: str = "SEI"
     sei_sigla_orgao_sistema: str = ""
+
+    # -- Sessões e limites (Phase 2) ------------------------------------------
+    sei_max_sessions: int = 100
+    sei_max_ocr_pages: int = 20
+    sei_elicit_timeout_s: float = 30.0
+    # AliasChoices: SEI_CACHE_TTL_SECONDS takes priority; CATALOG_CACHE_TTL kept for compatibility.
+    sei_cache_ttl_seconds: int | None = Field(
+        None,
+        validation_alias=AliasChoices("sei_cache_ttl_seconds", "catalog_cache_ttl"),
+    )
+
+    # -- Controle de acesso (Phase 2) -----------------------------------------
+    # Pipe-separated extra risk strings; parsed to list by access_control.riscos_padrao().
+    sei_riscos_extra: str = ""
+    sei_permitir_restritos: bool = False
+
+    # -- Caminhos e uploads (Phase 2) -----------------------------------------
+    todos_cache_dir: str = ""
+    sei_upload_dir: str = ""
+
+    # -- Protocolo e OCR (Phase 2) --------------------------------------------
+    sei_protocolo_pattern: str = ""
+    sei_ocr_lang: str = "por"
+
+    # -- Hints para agentes (Phase 2) -----------------------------------------
+    # JSON array of strings; empty/invalid JSON → built-in defaults applied by hints.py.
+    sei_hints: str = ""
+
+    # -- Segurança HTTP (Phase 3) ---------------------------------------------
+    jwt_secret: str = ""
+
+    # -- Validators -----------------------------------------------------------
 
     @field_validator("sei_verify_ssl", mode="before")
     @classmethod
@@ -64,6 +100,55 @@ class TodosSettings(BaseSettings):
         """
         if isinstance(value, str):
             return value.strip().lower() != "false"
+        return value
+
+    @field_validator("sei_max_sessions", mode="before")
+    @classmethod
+    def _coerce_max_sessions(cls, value: object) -> object:
+        """Blank env var → default 100 (avoids ValidationError em SEI_MAX_SESSIONS='')."""
+        if isinstance(value, str) and not value.strip():
+            return 100
+        return value
+
+    @field_validator("sei_max_ocr_pages", mode="before")
+    @classmethod
+    def _coerce_max_ocr_pages(cls, value: object) -> object:
+        """Blank env var → default 20 (avoids ValidationError em SEI_MAX_OCR_PAGES='')."""
+        if isinstance(value, str) and not value.strip():
+            return 20
+        return value
+
+    @field_validator("sei_elicit_timeout_s", mode="before")
+    @classmethod
+    def _coerce_elicit_timeout(cls, value: object) -> object:
+        """Blank env var → default 30.0 (avoids ValidationError em SEI_ELICIT_TIMEOUT_S='')."""
+        if isinstance(value, str) and not value.strip():
+            return 30.0
+        return value
+
+    @field_validator("sei_cache_ttl_seconds", mode="before")
+    @classmethod
+    def _coerce_cache_ttl(cls, value: object) -> object:
+        """Blank env var → None (caller uses the hardcoded 24 h default)."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("sei_cache_ttl_seconds")
+    @classmethod
+    def _validate_ttl_positive(cls, value: int | None) -> int | None:
+        """TTL must be positive when explicitly set."""
+        if value is not None and value <= 0:
+            msg = f"SEI_CACHE_TTL_SECONDS deve ser positivo; recebido: {value}"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("sei_permitir_restritos", mode="before")
+    @classmethod
+    def _parse_permitir_restritos(cls, value: object) -> object:
+        """Aceita '1', 'true', 'yes', 'sim' (preserva suporte a pt-BR)."""
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "sim")
         return value
 
 

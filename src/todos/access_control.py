@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import html as _html
 import logging
-import os
 import unicodedata as _unicodedata
+
+from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +59,8 @@ def precisa_disclaimer(nivel_acesso: object) -> bool:
 
 
 def env_permite_restritos() -> bool:
-    """Lê SEI_PERMITIR_RESTRITOS a cada chamada (suporta override em runtime)."""
-    raw = os.getenv("SEI_PERMITIR_RESTRITOS", "false").strip().lower()
-    return raw in ("1", "true", "yes", "sim")
+    """Retorna SEI_PERMITIR_RESTRITOS via settings (cacheado por processo)."""
+    return get_settings().sei_permitir_restritos
 
 
 _RISCOS_BASE = [
@@ -78,10 +78,6 @@ _RISCOS_BASE = [
     "fora do controle do SEI.",
 ]
 
-_RISCOS_EXTRA_RAW = os.environ.get("SEI_RISCOS_EXTRA", "")
-# Use "|" as separator so legal citations like "art. 6, II LGPD" can contain commas
-_RISCOS_EXTRA: list[str] = [r.strip() for r in _RISCOS_EXTRA_RAW.split("|") if r.strip()]
-_RISCOS = _RISCOS_BASE + _RISCOS_EXTRA
 
 _COMO_LIBERAR = [
     "O operador do servidor pode definir a variável de ambiente "
@@ -143,7 +139,7 @@ def _bloco_base(nivel: str | None, hipotese_legal: str | None, alvo: dict) -> di
         "rotulo_nivel": ROTULOS.get(nivel, "Desconhecido"),
         "hipotese_legal": hipotese_legal or None,
         "alvo": alvo,
-        "riscos": list(_RISCOS),
+        "riscos": riscos_padrao(),
     }
 
 
@@ -273,7 +269,9 @@ def envelopar_html(disclaimer: dict, conteudo: str) -> str:
 
 def riscos_padrao() -> list[str]:
     """Lista padrão de riscos exibida em disclaimers e elicit prompts."""
-    return list(_RISCOS)
+    raw = get_settings().sei_riscos_extra
+    extra = [r.strip() for r in raw.split("|") if r.strip()] if raw else []
+    return _RISCOS_BASE + extra
 
 
 def _nfkd(s: str) -> str:

@@ -145,7 +145,7 @@ async def _get_client(ctx: Context | None) -> SEIClient:
             msg = "Token invalido ou expirado. Reconecte o MCP."
             raise SEIAuthError(msg)
 
-        max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
+        max_sessions = get_settings().sei_max_sessions
         lock: asyncio.Lock = ctx.lifespan_context["sei_by_session_lock"]
         async with lock:
             clients = ctx.lifespan_context["sei_by_session"]
@@ -190,7 +190,7 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
             msg = "Token invalido ou expirado. Reconecte o MCP."
             raise SEIAuthError(msg)
 
-        max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
+        max_sessions = get_settings().sei_max_sessions
         lock: asyncio.Lock = ctx.lifespan_context["sei_web_by_session_lock"]
         async with lock:
             clients = ctx.lifespan_context["sei_web_by_session"]
@@ -361,7 +361,8 @@ async def sei_status_resource(ctx: Context) -> str:
         )
         sigla = unidade.get("sigla", "?")
         nome = unidade.get("nome", "?")
-        web_url = os.environ.get("SEI_WEB_URL") or os.environ.get("SEI_URL", "?")
+        _s = get_settings()
+        web_url = _s.sei_web_url or _s.sei_url or "?"
         nome_usuario = web.nome_usuario
         id_usuario = web.id_usuario
         orgao_usuario = web.orgao_usuario
@@ -446,7 +447,7 @@ class _ConsentimentoRestrito(BaseModel):
     )
 
 
-_ELICIT_TIMEOUT_S = float(os.environ.get("SEI_ELICIT_TIMEOUT_S", "30"))
+_ELICIT_TIMEOUT_S = get_settings().sei_elicit_timeout_s
 
 
 class _ElicitNaoSuportadoError(Exception):

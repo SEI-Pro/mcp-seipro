@@ -22,7 +22,6 @@ import hmac
 import ipaddress
 import json
 import logging
-import os
 import secrets
 import socket
 import time
@@ -44,6 +43,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse
 
 from todos.catalog_cache import get_catalog_cache
+from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _JWT_SECRET_MIN_LEN = 32
-
-_JWT_SECRET = os.environ.get("JWT_SECRET", "")
 
 _JWT_CONFIG_ERR = (
     "JWT_SECRET não configurado ou muito curto — "
@@ -152,7 +150,7 @@ async def _revogar_token(sig: str) -> None:
     cache = get_catalog_cache()
     # CatalogCache.set() has no per-entry TTL; we embed the expiry in the value
     # and check it in _esta_revogado() to enforce the full TOKEN_TTL window even
-    # when CATALOG_CACHE_TTL (default 24 h) is shorter than TOKEN_TTL (30 d).
+    # when SEI_CACHE_TTL_SECONDS (default 24 h) is shorter than TOKEN_TTL (30 d).
     await cache.set(_REVOCATION_NS, sig[:64], {"at": time.time(), "exp": time.time() + TOKEN_TTL})
 
 
@@ -178,7 +176,7 @@ def validate_jwt_secret() -> None:
     Call this at HTTP server startup (run_remote) for fail-fast behaviour.
     Not called at import time so the module stays importable in test environments.
     """
-    if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+    if len(get_settings().jwt_secret) < _JWT_SECRET_MIN_LEN:
         raise RuntimeError(_JWT_CONFIG_ERR)
 
 
@@ -230,22 +228,24 @@ async def _delete_auth_code(code: str) -> None:
 
 def _sign(payload: dict) -> str:
     """Cria um token JWT-like: base64(payload).base64(signature)."""
-    if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+    if len(get_settings().jwt_secret) < _JWT_SECRET_MIN_LEN:
         raise RuntimeError(_JWT_CONFIG_ERR)
     raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
-    sig = hmac.new(_JWT_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    sig = hmac.new(get_settings().jwt_secret.encode(), raw.encode(), hashlib.sha256).hexdigest()
     return f"{raw}.{sig}"
 
 
 def _verify(token: str) -> dict | None:
     """Verifica e decodifica um token. Retorna None se invalido."""
-    if len(_JWT_SECRET) < _JWT_SECRET_MIN_LEN:
+    if len(get_settings().jwt_secret) < _JWT_SECRET_MIN_LEN:
         raise RuntimeError(_JWT_CONFIG_ERR)
     parts = token.split(".")
     if len(parts) != _JWT_PARTS:
         return None
     raw, sig = parts
-    expected = hmac.new(_JWT_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(
+        get_settings().jwt_secret.encode(), raw.encode(), hashlib.sha256
+    ).hexdigest()
     if not hmac.compare_digest(sig, expected):
         return None
     try:
@@ -713,7 +713,7 @@ def get_sei_credentials_from_token(token: str) -> dict | None:
     if sei is None:
         return None
     # Injeta sei_senha a partir do ambiente — nunca do token
-    senha = os.environ.get("SEI_SENHA", "")
+    senha = get_settings().sei_senha
     if not senha:
         _err = (
             "SEI_SENHA não configurado no servidor. "
