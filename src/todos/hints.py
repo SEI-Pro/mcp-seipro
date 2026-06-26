@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+
+from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +25,12 @@ _DEFAULT_HINTS: list[str] = [
 
 def get_hints() -> list[str]:
     """Return hints from SEI_HINTS (JSON array of strings) or built-in defaults."""
-    raw = os.getenv("SEI_HINTS", "").strip()
+    raw = get_settings().sei_hints.strip()
     if raw:
         try:
             parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(h) for h in parsed if str(h)]
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("SEI_HINTS inválido — usando hints padrão: %s", exc)
-            return _DEFAULT_HINTS
-        if isinstance(parsed, list):
-            return [str(h) for h in parsed if str(h)]
     return _DEFAULT_HINTS

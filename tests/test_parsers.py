@@ -6,6 +6,8 @@ no live SEI server required.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from bs4 import BeautifulSoup, Tag
 
@@ -18,10 +20,14 @@ from todos.sei_web_client import (
     parse_arvore_nos,
     parse_inbox,
 )
+from todos.settings import get_settings
 from todos.tools.configuracao import (
     _CANONICAL_PROTOCOLO_RE,
+    _compilar_pattern,
     _inferir_padrao_protocolo,
     _keyring_pattern_key,
+    _resolver_pattern_sync,
+    _validar_protocolo,
 )
 
 # ---------------------------------------------------------------------------
@@ -362,6 +368,60 @@ class TestInferirPadraoProtocolo:
     def test_key_format(self) -> None:
         key = _keyring_pattern_key("sei.orgao.gov.br")
         assert key == "SEI_PROTOCOLO_PATTERN@sei.orgao.gov.br"
+
+
+# ---------------------------------------------------------------------------
+# Validação lazy de protocolo_formatado (RFC 0017)
+# ---------------------------------------------------------------------------
+
+
+class TestValidarProtocolo:
+    """A validação lê o padrão de get_settings() a cada chamada (lazy)."""
+
+    def test_compilar_pattern_valido(self) -> None:
+        compiled = _compilar_pattern(r"^\d{5}\.\d{6}/\d{4}-\d{2}$")
+        assert compiled is not None
+        assert compiled.fullmatch("50300.000123/2025-00")
+
+    def test_compilar_pattern_invalido_retorna_none(self) -> None:
+        # Regex malformado não derruba o processo — retorna None (constraint ignorado).
+        assert _compilar_pattern(r"[invalid(regex") is None
+
+    def test_resolver_prioriza_env_sobre_keyring(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SEI_PROTOCOLO_PATTERN", r"^\d{5}\.\d{6}/\d{4}-\d{2}$")
+        get_settings.cache_clear()
+        pattern = _resolver_pattern_sync("qualquer.host")
+        assert pattern is not None
+        assert pattern.pattern == r"^\d{5}\.\d{6}/\d{4}-\d{2}$"
+
+    def test_sem_padrao_e_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SEI_PROTOCOLO_PATTERN", raising=False)
+        get_settings.cache_clear()
+        # host vazio → keyring não é consultado; nenhum padrão → validação não levanta.
+        asyncio.run(_validar_protocolo("qualquer-coisa", ctx=None))
+
+    def test_protocolo_valido_passa(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SEI_PROTOCOLO_PATTERN", r"^\d{5}\.\d{6}/\d{4}-\d{2}$")
+        get_settings.cache_clear()
+        asyncio.run(_validar_protocolo("50300.000123/2025-00", ctx=None))
+
+    def test_protocolo_invalido_levanta(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SEI_PROTOCOLO_PATTERN", r"^\d{5}\.\d{6}/\d{4}-\d{2}$")
+        get_settings.cache_clear()
+        with pytest.raises(SEIValidationError, match="não bate no padrão"):
+            asyncio.run(_validar_protocolo("formato-errado", ctx=None))
+
+    def test_mudanca_de_env_vale_apos_cache_clear(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """O cerne do RFC 0017: alterar o padrão em runtime passa a valer (era impossível antes)."""
+        monkeypatch.setenv("SEI_PROTOCOLO_PATTERN", r"^\d{5}\.\d{6}/\d{4}-\d{2}$")
+        get_settings.cache_clear()
+        # "00.000001/2024-99" (prefixo de 2 dígitos) não bate no padrão de 5 dígitos.
+        with pytest.raises(SEIValidationError):
+            asyncio.run(_validar_protocolo("00.000001/2024-99", ctx=None))
+        # Troca o padrão para aceitar prefixos de 2 a 5 dígitos — agora deve passar.
+        monkeypatch.setenv("SEI_PROTOCOLO_PATTERN", r"^\d{2,5}\.\d{6}/\d{4}-\d{2}$")
+        get_settings.cache_clear()
+        asyncio.run(_validar_protocolo("00.000001/2024-99", ctx=None))
 
 
 # ---------------------------------------------------------------------------

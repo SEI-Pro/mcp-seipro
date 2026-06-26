@@ -3,8 +3,10 @@
 Gerencia a detecção automática do formato de número de protocolo desta instância
 SEI, com persistência via keyring para uso automático nas sessões futuras.
 
-Exporta `_ProtocoloFormatado` — o tipo Annotated usado pelas tools de processos
-para validar o protocolo_formatado recebido como argumento.
+Exporta `_ProtocoloFormatado` (tipo Annotated com a descrição do argumento) e
+`_validar_protocolo` — a validação lazy do formato do protocolo, feita no corpo
+de cada tool de processo (RFC 0017), não mais via `Field(pattern=...)` em
+import-time.
 
 Sem `from __future__ import annotations`: o FastMCP introspecta os type hints em
 tempo de execução para montar o schema de cada tool, então as anotações precisam
@@ -14,18 +16,18 @@ ser objetos reais (não strings adiadas).
 import asyncio
 import concurrent.futures
 import logging
-import os
 import re
+from functools import lru_cache
 from types import ModuleType
 from typing import Annotated
 from urllib.parse import urlparse
 
 from fastmcp import Context
-from pydantic import Field, TypeAdapter
-from pydantic_core import SchemaError as _SchemaError
+from pydantic import Field
 
 from todos.exceptions import SEIValidationError
 from todos.mcp_app import _IDEM, _backend, _get_web_client, _json, mcp
+from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +49,10 @@ _KEYRING_SERVICE = "todos-mcp"
 
 
 def _sei_host() -> str:
-    """Retorna o netloc da instância SEI configurada via env var (startup only)."""
-    for var in ("SEI_WEB_URL", "SEI_URL"):
-        url = os.environ.get(var, "").strip()
-        if url:
+    """Retorna o netloc da instância SEI configurada (startup only)."""
+    settings = get_settings()
+    for url in (settings.sei_web_url, settings.sei_url):
+        if url.strip():
             return urlparse(url).netloc
     return ""
 
@@ -99,27 +101,66 @@ def _read_keyring_pattern_sync(host: str) -> str:
         pool.shutdown(wait=False, cancel_futures=True)
 
 
-_host = _sei_host()
-# Env var takes priority so an explicit SEI_PROTOCOLO_PATTERN always overrides a stale
-# keyring entry without requiring sei_redefinir_formato_protocolo to be run first.
-_SEI_PROTOCOLO_PATTERN = os.environ.get("SEI_PROTOCOLO_PATTERN", "") or _read_keyring_pattern_sync(
-    _host
-)
-_ProtocoloFormatadoBase = Annotated[str, Field(description=_PROTOCOLO_DESC)]
-if _SEI_PROTOCOLO_PATTERN:
-    _candidate = Annotated[str, Field(pattern=_SEI_PROTOCOLO_PATTERN, description=_PROTOCOLO_DESC)]
+# RFC 0017: a validação do protocolo é lazy, no corpo de cada tool (via
+# _validar_protocolo), não mais via Field(pattern=...) compilado em import-time.
+# Isso torna sei_redefinir/sei_detectar_formato_protocolo efetivos na sessão
+# corrente e o padrão testável com monkeypatch + cache_clear. O schema MCP do
+# argumento continua `{"type": "string"}` — a constraint é enforced pelo servidor.
+_ProtocoloFormatado = Annotated[str, Field(description=_PROTOCOLO_DESC)]
+
+
+@lru_cache(maxsize=8)
+def _compilar_pattern(raw: str) -> re.Pattern[str] | None:
+    """Compila um regex de protocolo; retorna None (com aviso) se inválido."""
     try:
-        TypeAdapter(_candidate)  # forces Pydantic/Rust to compile the regex now
-        _ProtocoloFormatado = _candidate
-    except _SchemaError:
+        return re.compile(raw)
+    except re.error as exc:
         logger.warning(
-            "SEI_PROTOCOLO_PATTERN=%r é um regex inválido "
-            "para o motor Pydantic/Rust — constraint ignorado, qualquer string será aceita.",
-            _SEI_PROTOCOLO_PATTERN,
+            "SEI_PROTOCOLO_PATTERN=%r é um regex inválido — constraint ignorado: %s",
+            raw,
+            exc,
         )
-        _ProtocoloFormatado = _ProtocoloFormatadoBase
-else:
-    _ProtocoloFormatado = _ProtocoloFormatadoBase
+        return None
+
+
+# Cache do padrão lido do keyring, por host. A env var tem prioridade e é lida fresh
+# a cada chamada (get_settings é cacheado por processo); só a leitura do keyring — que
+# pode bloquear até 2 s — é cacheada. Invalidado por sei_detectar/sei_redefinir.
+_keyring_pattern_cache: dict[str, str] = {}
+
+
+def _resolver_pattern_sync(host: str) -> re.Pattern[str] | None:
+    """Resolve o regex de protocolo (env var > keyring) e compila; cacheia o keyring.
+
+    Env var sempre tem prioridade, garantindo que SEI_PROTOCOLO_PATTERN sobreponha
+    uma entrada de keyring obsoleta sem exigir sei_redefinir_formato_protocolo.
+    """
+    env_pattern = get_settings().sei_protocolo_pattern.strip()
+    if env_pattern:
+        return _compilar_pattern(env_pattern)
+    if host not in _keyring_pattern_cache:
+        _keyring_pattern_cache[host] = _read_keyring_pattern_sync(host).strip()
+    raw = _keyring_pattern_cache[host]
+    return _compilar_pattern(raw) if raw else None
+
+
+async def _validar_protocolo(protocolo: str, ctx: Context | None = None) -> None:
+    """Valida protocolo_formatado contra o padrão configurado (env var > keyring).
+
+    No-op quando nenhum padrão está configurado. Levanta SEIValidationError quando
+    o protocolo não bate no padrão. Lazy: lê o padrão a cada chamada, então
+    sei_detectar/sei_redefinir_formato_protocolo passam a valer na sessão corrente.
+    """
+    host = await _sei_host_from_ctx(ctx)
+    pattern = await asyncio.to_thread(_resolver_pattern_sync, host)
+    if pattern is not None and not pattern.fullmatch(protocolo):
+        msg = (
+            f"protocolo_formatado {protocolo!r} não bate no padrão configurado para esta "
+            f"instância SEI ({pattern.pattern}). Verifique o número ou rode "
+            "sei_detectar_formato_protocolo."
+        )
+        raise SEIValidationError(msg)
+
 
 # ---------------------------------------------------------------------------
 # Descoberta automática do formato de protocolo
@@ -197,6 +238,8 @@ async def sei_detectar_formato_protocolo(
     padrao, prefixo_min, prefixo_max = _inferir_padrao_protocolo(amostras)
 
     host = await _sei_host_from_ctx(ctx)
+    # Invalida o cache do keyring para este host — a próxima validação relê o novo padrão.
+    _keyring_pattern_cache.pop(host, None)
     persistido = False
     if _keyring_mod is not None and host:
         key = _keyring_pattern_key(host)
@@ -252,6 +295,8 @@ async def sei_redefinir_formato_protocolo(
             "Não foi possível determinar o host da instância SEI. Configure SEI_WEB_URL ou SEI_URL."
         )
         raise SEIValidationError(msg)
+    # Invalida o cache do keyring para este host — a próxima validação relê (padrão removido).
+    _keyring_pattern_cache.pop(host, None)
     key = _keyring_pattern_key(host)
     if _keyring_mod is None:
         msg = (

@@ -38,6 +38,7 @@ from todos.sei_styles import (
     STYLE_SHORTCUTS,
 )
 from todos.sei_web_client import SEI_WEB_PAGE_SIZE, SEIWebClient
+from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,10 @@ configure_logging(
 @asynccontextmanager
 async def lifespan(_server: FastMCP) -> AsyncGenerator[dict[str, object], None]:
     """Set up and tear down SEI client sessions for the MCP server lifespan."""
-    if os.environ.get("SEI_VERIFY_SSL", "true").strip().lower() in ("false", "0", "no"):
+    # Lê via get_settings() para que SEI_VERIFY_SSL definido apenas no .env
+    # (agora uma fonte suportada) também dispare o aviso — e para que a regra de
+    # parsing seja a mesma usada pelos clientes (só "false" desabilita).
+    if not get_settings().sei_verify_ssl:
         logger.warning(
             "SEI_VERIFY_SSL=false: verificação TLS desabilitada. "
             "Não use em produção com dados sensíveis."
@@ -141,7 +145,7 @@ async def _get_client(ctx: Context | None) -> SEIClient:
             msg = "Token invalido ou expirado. Reconecte o MCP."
             raise SEIAuthError(msg)
 
-        max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
+        max_sessions = get_settings().sei_max_sessions
         lock: asyncio.Lock = ctx.lifespan_context["sei_by_session_lock"]
         async with lock:
             clients = ctx.lifespan_context["sei_by_session"]
@@ -186,7 +190,7 @@ async def _get_web_client(ctx: Context | None) -> SEIWebClient:
             msg = "Token invalido ou expirado. Reconecte o MCP."
             raise SEIAuthError(msg)
 
-        max_sessions = int(os.environ.get("SEI_MAX_SESSIONS", "100"))
+        max_sessions = get_settings().sei_max_sessions
         lock: asyncio.Lock = ctx.lifespan_context["sei_web_by_session_lock"]
         async with lock:
             clients = ctx.lifespan_context["sei_web_by_session"]
@@ -357,7 +361,8 @@ async def sei_status_resource(ctx: Context) -> str:
         )
         sigla = unidade.get("sigla", "?")
         nome = unidade.get("nome", "?")
-        web_url = os.environ.get("SEI_WEB_URL") or os.environ.get("SEI_URL", "?")
+        _s = get_settings()
+        web_url = _s.sei_web_url or _s.sei_url or "?"
         nome_usuario = web.nome_usuario
         id_usuario = web.id_usuario
         orgao_usuario = web.orgao_usuario
@@ -442,9 +447,6 @@ class _ConsentimentoRestrito(BaseModel):
     )
 
 
-_ELICIT_TIMEOUT_S = float(os.environ.get("SEI_ELICIT_TIMEOUT_S", "30"))
-
-
 class _ElicitNaoSuportadoError(Exception):
     """Cliente MCP não implementa elicitInput ou não respondeu — fallback para gate JSON."""
 
@@ -483,6 +485,7 @@ async def _solicitar_consentimento_via_elicit(
     """
     if ctx is None or not _cliente_suporta_elicit(ctx):
         raise _ElicitNaoSuportadoError
+    elicit_timeout = get_settings().sei_elicit_timeout_s
 
     riscos_txt = "\n".join(f"• {r}" for r in access_control.riscos_padrao())
     hl_txt = f"\nHipótese legal: {hipotese}" if hipotese else ""
@@ -502,12 +505,12 @@ async def _solicitar_consentimento_via_elicit(
     try:
         result = await asyncio.wait_for(
             ctx.elicit(message=message, response_type=_ConsentimentoRestrito),
-            timeout=_ELICIT_TIMEOUT_S,
+            timeout=elicit_timeout,
         )
     except TimeoutError:
         logger.warning(
             "elicit timeout após %ss — cliente não respondeu, caindo no fallback JSON",
-            _ELICIT_TIMEOUT_S,
+            elicit_timeout,
         )
         raise _ElicitNaoSuportadoError from None
     except (NotImplementedError, TypeError) as e:

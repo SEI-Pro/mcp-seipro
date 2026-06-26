@@ -89,7 +89,7 @@ class TestTtl:
         remaining = asyncio.run(cache.ttl(_NS, "k"))
         assert remaining is not None
         # Just-written entry: TTL is close to the full window, never above it.
-        assert 0 < remaining <= cc.CATALOG_CACHE_TTL
+        assert 0 < remaining <= cc._DEFAULT_CATALOG_CACHE_TTL
 
     def test_ttl_missing_entry_is_none(self, tmp_path: Path) -> None:
         cache = _cache(tmp_path)
@@ -104,7 +104,7 @@ class TestTtl:
 class TestExpiry:
     def test_expired_entry_returns_none_and_is_deleted(self, tmp_path: Path, monkeypatch) -> None:
         cache = _cache(tmp_path)
-        monkeypatch.setattr(cc, "CATALOG_CACHE_TTL", -1)  # write already-expired
+        monkeypatch.setattr(cc, "_DEFAULT_CATALOG_CACHE_TTL", -1)  # write already-expired
         asyncio.run(cache.set(_NS, "k", {"v": 1}))
         assert asyncio.run(cache.get(_NS, "k")) is None
         # The lazy delete on read must have removed the row.

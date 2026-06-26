@@ -3,13 +3,14 @@
 import html as html_module
 import io
 import logging
-import os
 import re
 from types import ModuleType
 from typing import Any
 
 from bs4 import BeautifulSoup, Tag
 from markdownify import MarkdownConverter
+
+from todos.settings import get_settings
 
 # Optional OCR deps — pre-declared so that except-block None/fallback assignments
 # are always valid (ty checks that assigned types match the declared annotation).
@@ -64,24 +65,6 @@ _COLSPAN_MAX: int = 1_000
 # Número mínimo de partes após split("|") para que a linha de tabela tenha delimitadores externos.
 # Uma linha "|a|b|" gera ["", "a", "b", ""] — 4 partes (> 2 indica delimitadores presentes).
 _TABLE_OUTER_DELIM_MIN: int = 2
-
-
-# Número máximo de páginas que o OCR processa em um único PDF.
-# Lê SEI_MAX_OCR_PAGES do ambiente; deve ser um inteiro positivo.
-def _parse_max_ocr_pages(raw: str) -> int:
-    """Parse and validate SEI_MAX_OCR_PAGES env var; raises ValueError if invalid."""
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        _msg = f"SEI_MAX_OCR_PAGES deve ser um inteiro positivo; recebido: {raw!r}"
-        raise ValueError(_msg) from exc
-    if value <= 0:
-        _msg = f"SEI_MAX_OCR_PAGES deve ser um inteiro positivo; recebido: {raw!r}"
-        raise ValueError(_msg)
-    return value
-
-
-MAX_OCR_PAGES: int = _parse_max_ocr_pages(os.getenv("SEI_MAX_OCR_PAGES", "20"))
 
 
 def html_to_text(raw: str) -> str:
@@ -285,27 +268,26 @@ def html_to_markdown(raw: str) -> str:
         return html_to_text(raw)
 
 
-OCR_LANG = os.environ.get("SEI_OCR_LANG", "por")
-
-
 def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
     """Extract text from a PDF via OCR (pdf2image + tesseract).
 
     Returns list of (page_number, text) tuples.
-    Processing is limited to MAX_OCR_PAGES pages to avoid timeouts.
+    Processing is limited to SEI_MAX_OCR_PAGES pages to avoid timeouts.
     When OCR fails on an individual page, logs a WARNING and skips the page.
     """
     if not _HAS_OCR or _convert_from_bytes is None or _pytesseract is None:
         _msg = "OCR requer pytesseract e pdf2image instalados"
         raise ImportError(_msg)
-    lang = lang or OCR_LANG
+    settings = get_settings()
+    max_ocr_pages = settings.sei_max_ocr_pages
+    lang = lang or settings.sei_ocr_lang
     try:
         images = _convert_from_bytes(content, dpi=_OCR_DPI)
     except (PDFInfoNotInstalledError, PDFPageCountError) as e:
         msg = f"poppler não instalado ou PDF inválido: {e}"
         raise OSError(msg) from e
     pages = []
-    limit = min(len(images), MAX_OCR_PAGES)
+    limit = min(len(images), max_ocr_pages)
     _tesseract_errors = (
         _pytesseract.TesseractError,
         _pytesseract.TesseractNotFoundError,
@@ -323,11 +305,11 @@ def _ocr_pdf(content: bytes, lang: str = "") -> list[tuple[int, str]]:
             continue
         if text and text.strip():
             pages.append((i, text.strip()))
-    if len(images) > MAX_OCR_PAGES:
+    if len(images) > max_ocr_pages:
         pages.append(
             (
-                MAX_OCR_PAGES + 1,
-                f"[OCR limitado a {MAX_OCR_PAGES} páginas. "
+                max_ocr_pages + 1,
+                f"[OCR limitado a {max_ocr_pages} páginas. "
                 f"O documento tem {len(images)} páginas no total. "
                 f"Use sei_baixar_anexo para obter o PDF completo.]",
             )

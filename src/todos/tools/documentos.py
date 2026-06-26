@@ -19,7 +19,6 @@ ser objetos reais (não strings adiadas).
 import base64
 import html as html_module
 import logging
-import os
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -63,6 +62,7 @@ from todos.sei_styles import (
     STYLE_SHORTCUTS,
     html_referencia_sei,
 )
+from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ def _validar_arquivo_path(path: str) -> Path:
             f"Permitidas: {sorted(_EXTENSOES_UPLOAD_PERMITIDAS)}"
         )
         raise SEIValidationError(msg)
-    upload_dir = os.environ.get("SEI_UPLOAD_DIR", "").strip()
+    upload_dir = get_settings().sei_upload_dir.strip()
     if upload_dir:
         base = Path(upload_dir).expanduser().resolve()
         try:

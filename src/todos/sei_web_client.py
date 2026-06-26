@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import mimetypes
-import os
 import re
 import time
 import warnings
@@ -52,6 +51,7 @@ from todos.exceptions import (
     SEIParseError,
     SEIValidationError,
 )
+from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -257,11 +257,12 @@ class SEIWebClient:
     def __init__(self, config: SEIWebClientConfig | None = None) -> None:
         """Initialise from a SEIWebClientConfig (or env vars when config is None/default)."""
         cfg = config or SEIWebClientConfig()
+        settings = get_settings()
         # Reusa as mesmas env vars do SEIClient REST
-        _sei_url = cfg.sei_url or os.environ.get("SEI_URL", "")
+        _sei_url = cfg.sei_url or settings.sei_url
         # SEI_WEB_URL permite modo web-only (sem mod-wssei) apontando direto para
         # a raiz do SEI (ex: https://sei.orgao.gov.br). Tem precedência sobre SEI_URL.
-        _sei_web_url = cfg.sei_web_url or os.environ.get("SEI_WEB_URL", "")
+        _sei_web_url = cfg.sei_web_url or settings.sei_web_url
         if _sei_web_url:
             self.sei_root = _sei_web_url.rstrip("/")
         elif "/sei/" in _sei_url:
@@ -271,9 +272,9 @@ class SEIWebClient:
         else:
             self.sei_root = _sei_url.rstrip("/")
 
-        self._usuario = cfg.sei_usuario or os.environ.get("SEI_USUARIO", "")
+        self._usuario = cfg.sei_usuario or settings.sei_usuario
 
-        _env_senha = os.environ.get("SEI_SENHA", "")
+        _env_senha = settings.sei_senha
         self._senha = cfg.sei_senha or _env_senha
         # Rastreia a fonte da senha para mensagem de erro acionável
         self._senha_source_hint = (
@@ -303,22 +304,18 @@ class SEIWebClient:
         self._sei_orgao = (
             cfg.sei_orgao
         )  # stored for API parity with SEIClient; not used by web flow
-        self._sigla_orgao = cfg.sei_sigla_orgao or os.environ.get("SEI_SIGLA_ORGAO", "ANTAQ")
-        self._sigla_sistema = cfg.sei_sigla_sistema or os.environ.get("SEI_SIGLA_SISTEMA", "SEI")
+        self._sigla_orgao = cfg.sei_sigla_orgao or settings.sei_sigla_orgao
+        self._sigla_sistema = cfg.sei_sigla_sistema or settings.sei_sigla_sistema
         # SEI_SIGLA_ORGAO_SISTEMA: parâmetro da URL do SIP login (ex: "RO" para Rondônia).
         # Quando não definido, usa SEI_SIGLA_ORGAO (mantém compatibilidade p/ instâncias
         # onde sigla_orgao_sistema == sigla do órgão no selOrgao, ex: ANTAQ).
         _sigla_orgao_sistema = (
-            cfg.sei_sigla_orgao_sistema
-            or os.environ.get("SEI_SIGLA_ORGAO_SISTEMA", "")
-            or self._sigla_orgao
+            cfg.sei_sigla_orgao_sistema or settings.sei_sigla_orgao_sistema or self._sigla_orgao
         )
 
-        _ca_bundle = cfg.sei_ca_bundle or os.environ.get("SEI_CA_BUNDLE", "")
+        _ca_bundle = cfg.sei_ca_bundle or settings.sei_ca_bundle
         _raw_verify: str | bool = (
-            cfg.sei_verify_ssl
-            if cfg.sei_verify_ssl is not None
-            else os.environ.get("SEI_VERIFY_SSL", "true")
+            cfg.sei_verify_ssl if cfg.sei_verify_ssl is not None else settings.sei_verify_ssl
         )
         _verify: bool | str
         if _ca_bundle:
