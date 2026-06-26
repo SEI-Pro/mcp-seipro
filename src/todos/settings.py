@@ -121,7 +121,8 @@ class TodosSettings(BaseSettings):
         ainda mais nonsensical. Rejeitar na carga da config dá um erro acionável.
         """
         if value <= 0:
-            msg = f"{info.field_name.upper()} deve ser positivo; recebido: {value}"
+            campo = (info.field_name or "valor").upper()
+            msg = f"{campo} deve ser positivo; recebido: {value}"
             raise ValueError(msg)
         return value
 
