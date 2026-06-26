@@ -106,6 +106,21 @@ def test_sei_cache_ttl_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> None
         TodosSettings(_env_file=None)
 
 
+def test_sei_max_ocr_pages_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SEI_MAX_OCR_PAGES <= 0 falha rápido em vez de OCRar 0 páginas silenciosamente."""
+    for val in ("0", "-1"):
+        monkeypatch.setenv("SEI_MAX_OCR_PAGES", val)
+        with pytest.raises(pydantic.ValidationError):
+            TodosSettings(_env_file=None)
+
+
+def test_sei_max_sessions_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SEI_MAX_SESSIONS <= 0 levanta ValidationError (semáforo com 0 trava tudo)."""
+    monkeypatch.setenv("SEI_MAX_SESSIONS", "0")
+    with pytest.raises(pydantic.ValidationError):
+        TodosSettings(_env_file=None)
+
+
 def test_sei_riscos_extra_pipe_separated(monkeypatch: pytest.MonkeyPatch) -> None:
     """SEI_RISCOS_EXTRA é guardado como string bruta; access_control faz o split."""
     monkeypatch.setenv("SEI_RISCOS_EXTRA", "risco A|art. 6, II LGPD|risco C")

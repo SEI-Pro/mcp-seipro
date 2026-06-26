@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -109,6 +109,19 @@ class TodosSettings(BaseSettings):
         """TTL must be positive when explicitly set."""
         if value is not None and value <= 0:
             msg = f"SEI_CACHE_TTL_SECONDS deve ser positivo; recebido: {value}"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("sei_max_sessions", "sei_max_ocr_pages")
+    @classmethod
+    def _validate_positive_limit(cls, value: int, info: ValidationInfo) -> int:
+        """Limites de contagem devem ser positivos — falha rápido em vez de OCRar 0 páginas.
+
+        ``min(len(images), 0)`` silenciosamente não OCRa nada; um valor negativo é
+        ainda mais nonsensical. Rejeitar na carga da config dá um erro acionável.
+        """
+        if value <= 0:
+            msg = f"{info.field_name.upper()} deve ser positivo; recebido: {value}"
             raise ValueError(msg)
         return value
 
