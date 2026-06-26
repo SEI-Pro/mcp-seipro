@@ -447,9 +447,6 @@ class _ConsentimentoRestrito(BaseModel):
     )
 
 
-_ELICIT_TIMEOUT_S = get_settings().sei_elicit_timeout_s
-
-
 class _ElicitNaoSuportadoError(Exception):
     """Cliente MCP não implementa elicitInput ou não respondeu — fallback para gate JSON."""
 
@@ -488,6 +485,7 @@ async def _solicitar_consentimento_via_elicit(
     """
     if ctx is None or not _cliente_suporta_elicit(ctx):
         raise _ElicitNaoSuportadoError
+    elicit_timeout = get_settings().sei_elicit_timeout_s
 
     riscos_txt = "\n".join(f"• {r}" for r in access_control.riscos_padrao())
     hl_txt = f"\nHipótese legal: {hipotese}" if hipotese else ""
@@ -507,12 +505,12 @@ async def _solicitar_consentimento_via_elicit(
     try:
         result = await asyncio.wait_for(
             ctx.elicit(message=message, response_type=_ConsentimentoRestrito),
-            timeout=_ELICIT_TIMEOUT_S,
+            timeout=elicit_timeout,
         )
     except TimeoutError:
         logger.warning(
             "elicit timeout após %ss — cliente não respondeu, caindo no fallback JSON",
-            _ELICIT_TIMEOUT_S,
+            elicit_timeout,
         )
         raise _ElicitNaoSuportadoError from None
     except (NotImplementedError, TypeError) as e:

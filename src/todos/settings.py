@@ -37,6 +37,7 @@ class TodosSettings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
         populate_by_name=True,
+        env_ignore_empty=True,
     )
 
     # -- Conexão SEI (Phase 1) ------------------------------------------------
@@ -100,38 +101,6 @@ class TodosSettings(BaseSettings):
         """
         if isinstance(value, str):
             return value.strip().lower() != "false"
-        return value
-
-    @field_validator("sei_max_sessions", mode="before")
-    @classmethod
-    def _coerce_max_sessions(cls, value: object) -> object:
-        """Blank env var → default 100 (avoids ValidationError em SEI_MAX_SESSIONS='')."""
-        if isinstance(value, str) and not value.strip():
-            return 100
-        return value
-
-    @field_validator("sei_max_ocr_pages", mode="before")
-    @classmethod
-    def _coerce_max_ocr_pages(cls, value: object) -> object:
-        """Blank env var → default 20 (avoids ValidationError em SEI_MAX_OCR_PAGES='')."""
-        if isinstance(value, str) and not value.strip():
-            return 20
-        return value
-
-    @field_validator("sei_elicit_timeout_s", mode="before")
-    @classmethod
-    def _coerce_elicit_timeout(cls, value: object) -> object:
-        """Blank env var → default 30.0 (avoids ValidationError em SEI_ELICIT_TIMEOUT_S='')."""
-        if isinstance(value, str) and not value.strip():
-            return 30.0
-        return value
-
-    @field_validator("sei_cache_ttl_seconds", mode="before")
-    @classmethod
-    def _coerce_cache_ttl(cls, value: object) -> object:
-        """Blank env var → None (caller uses the hardcoded 24 h default)."""
-        if isinstance(value, str) and not value.strip():
-            return None
         return value
 
     @field_validator("sei_cache_ttl_seconds")

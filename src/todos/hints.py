@@ -31,6 +31,6 @@ def get_hints() -> list[str]:
             parsed = json.loads(raw)
             if isinstance(parsed, list):
                 return [str(h) for h in parsed if str(h)]
-        except (json.JSONDecodeError, ValueError):
-            logger.warning("SEI_HINTS inválido — usando hints padrão")
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("SEI_HINTS inválido — usando hints padrão: %s", exc)
     return _DEFAULT_HINTS

@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import pytest
 
+from todos.catalog_cache import get_catalog_cache
 from todos.settings import get_settings
 
 
 @pytest.fixture(autouse=True)
 def _clear_settings_cache() -> None:
-    """Clear the get_settings() LRU cache before and after each test.
+    """Clear LRU caches before and after each test.
 
-    Any test that sets env vars via monkeypatch must see a fresh TodosSettings
-    instance; without this, the cached instance from a previous test leaks through.
+    Any test that sets env vars via monkeypatch must see fresh instances;
+    without this, cached instances from a previous test leak through.
     """
     get_settings.cache_clear()
+    get_catalog_cache.cache_clear()
     yield
     get_settings.cache_clear()
+    get_catalog_cache.cache_clear()
