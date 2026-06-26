@@ -57,7 +57,7 @@ from todos.responses import (
     SobrestamentoSEI,
     UnidadeSEI,
 )
-from todos.tools.configuracao import _ProtocoloFormatado
+from todos.tools.configuracao import _ProtocoloFormatado, _validar_protocolo
 
 # Nível de acesso: 0=público, 1=restrito, 2=sigiloso
 _NIVEL_ACESSO = r"^[012]$"
@@ -236,6 +236,7 @@ async def sei_consultar_processo(
     Quando o processo é restrito ou sigiloso (nivel_acesso 1 ou 2), a resposta
     inclui `_aviso_acesso` — aviso informativo, não erro de permissão.
     """
+    await _validar_protocolo(protocolo_formatado, ctx)
     backend = await _backend(ctx)
     merged = await backend.consultar_processo(protocolo_formatado)
 
@@ -273,6 +274,7 @@ async def sei_arvore_processo(
 
     Para ler o conteúdo de um documento, use sei_ler_documento com o id.
     """
+    await _validar_protocolo(protocolo_formatado, ctx)
     backend = await _backend(ctx)
     if ctx:
         await ctx.report_progress(0, 100, "Buscando árvore do processo…")
@@ -302,6 +304,7 @@ async def sei_listar_documentos(
 
     Para ler o conteúdo de um documento, use sei_ler_documento com o id.
     """
+    await _validar_protocolo(protocolo_formatado, ctx)
     backend = await _backend(ctx)
     raw = await backend.listar_documentos(protocolo_formatado)
     if include_raw:

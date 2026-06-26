@@ -1,6 +1,6 @@
 # RFC 0017 — Validação lazy de ProtocoloFormatado
 
-**Status:** 🟡 Proposta
+**Status:** ✅ Implementado (Opção A)
 **Data:** 2026-06-26
 **Motivação:** skipped finding do code review de PR #109
 
