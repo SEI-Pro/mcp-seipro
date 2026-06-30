@@ -1,8 +1,20 @@
 # RFC 0016 — Configuração centralizada com pydantic-settings
 
-**Status:** ✅ Implementado (Fases 1, 2 e 3 concluídas)
+**Status:** ✅ Implementado (Fases 1, 2 e 3 concluídas); ⚠️ ponto revertido — ver nota
 **Data:** 2026-06-25
 **Autor:** avaliação + revisão manual
+
+> [!IMPORTANT]
+> **Nota de atualização (2026-06-30):** o item "`.env` nativo" do §4 (Prós) e
+> a afirmação de §6 ("`.env.example` permanece válido") **não valem mais**.
+> `TodosSettings.model_config` tinha `env_file=".env"`; isso foi removido para
+> que o `todos` nunca leia um arquivo `.env` automaticamente, alinhando com o
+> princípio de que credenciais devem vir preferencialmente do **keyring**
+> (RFC 0002) e, como segunda opção, de uma env var já presente no processo —
+> nunca de um arquivo silenciosamente lido do diretório de trabalho. O
+> `.env.example` continua existindo só como lista de referência dos nomes de
+> variável, não como algo que o `todos` carrega sozinho. O restante desta RFC
+> (Fases 1–3, motivação, tipagem) continua valendo.
 
 ---
 
