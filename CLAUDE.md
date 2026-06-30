@@ -63,8 +63,8 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - Visualização Detalhada forçada via POST `hdnTipoVisualizacao=D` no form de procedimento_controlar
 - Especificação extraída do `onmouseover` do link do processo (`infraTooltipMostrar('Especificação','Tipo')`) — disponível INDEPENDENTE da configuração de colunas do painel
 - Labels de documentos parseados via regex: "Despacho GPF 2874369" → tipo=Despacho, sigla=GPF, numero=2874369
-- Tools migradas para web: `sei_listar_processos` (23×), `sei_arvore_processo` (10×), `sei_listar_documentos` (10×), `sei_listar_atividades` (2×)
-- Tools híbridas REST+web: `sei_consultar_processo` (REST rich + web documentos[] em paralelo via asyncio.gather)
+- Tools que tinham caminho web: `sei_listar_processos`, `sei_arvore_processo`, `sei_listar_documentos`, `sei_listar_atividades`, `sei_consultar_processo` (híbrida)
+- **Desde jun/2026 (SSO Microsoft da ANTAQ) o scraper web não loga mais → essas tools rodam por REST por padrão.** O caminho web virou opt-in via `SEI_WEB_SCRAPER=1` (gate `_web_scraper_enabled()` no server.py). Bug corrigido nesse processo: `listar_atividades` REST exige o param `procedimento` (não `protocolo`)
 - `sei_resumo_processos` mantém REST direto (precisa dos flags estruturados de status para agrupamento)
 - Cache in-memory TTL 1h no SEIClient para: `pesquisar_tipos_processo`, `listar_unidades_usuario`, `pesquisar_marcadores`
 

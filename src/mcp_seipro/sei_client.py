@@ -1968,8 +1968,9 @@ class SEIClient:
     ) -> dict:
         """Lista histórico de atividades/andamentos de um processo.
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
+        O endpoint exige o parâmetro `procedimento` (id interno), não `protocolo`.
         """
-        params: dict = {"protocolo": id_procedimento, "limit": limit, "start": start}
+        params: dict = {"procedimento": id_procedimento, "limit": limit, "start": start}
         resp = await self._request("GET", "/atividade/listar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
