@@ -79,10 +79,16 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - Escape hatch temporário/frágil: `SEI_CF_CLEARANCE` (cookie do browser, expira e é atrelado a IP+UA)
 - **Contingência — transporte via browser** (`SEI_TRANSPORT=browser`): `src/mcp_seipro/browser_transport.py` roteia o REST por um Chromium real (Playwright), que resolve o desafio sozinho. Provado contornar o CF da ANTAQ (headless). Opt-in, pesado, serializa chamadas. Extra `playwright` + `playwright install chromium`; no Railway, build com `--build-arg INSTALL_BROWSER=true`. Validação: `scripts/diag_browser_transport.py`. Cobre só o SEIClient REST — o SEIWebClient (scraper) ainda cai no CF nesse modo.
 
-### Bug de instalação do wssei no SEI 5 da ANTAQ (lado servidor)
-- Pós-migração SEI 5 (jun/2026), `POST /autenticar` retorna **500** mesmo passando o Cloudflare: `Class "ConfiguracaoMdWSSEI" not found` em `MdWsSeiUsuarioRN.php:88` (`getTokenSecret()`)
+### Estado verificado (atualização) — SEI 5.0.4 / wssei 3.0.2
+- **REST login/senha via `/autenticar` VOLTOU A FUNCIONAR.** O bug `ConfiguracaoMdWSSEI not found` (abaixo) foi corrigido pela TI da ANTAQ. Em modo `SEI_TRANSPORT=browser` o MCP autentica e opera normalmente (validado: token + `versao` {sei:5.0.4, wssei:3.0.2} + 258 unidades)
+- **O Cloudflare CONTINUA ativo na borda** → httpx puro ainda leva 403; só passa via browser-transport (ou regra de bypass no WAF, ainda pendente)
+- **Login do frontend web virou SSO Microsoft (Entra ID).** A página `/sip/login.php` só expõe "Entrar com Microsoft" (`acaoLogin(11,'Microsoft')` → `login_sso.php`); NÃO há mais campos usuário/senha. POST local é rejeitado. → O **scraper web (SEIWebClient) ficou inoperante**; usar REST. O REST `/autenticar` NÃO é afetado (caminho de auth separado, ainda aceita login/senha local)
+- Automatizar o login Microsoft via Playwright esbarra em MFA/2FA + Conditional Access (IP de datacenter) — frágil e desnecessário pro core. Se o scraper for mesmo necessário, padrão viável é persistir sessão (`storage_state`) após login manual, não automação headless de senha
+
+### Bug de instalação do wssei no SEI 5 da ANTAQ (lado servidor) — RESOLVIDO
+- (Histórico) Pós-migração SEI 5 (jun/2026), `POST /autenticar` retornava **500** mesmo passando o Cloudflare: `Class "ConfiguracaoMdWSSEI" not found` em `MdWsSeiUsuarioRN.php:88` (`getTokenSecret()`)
 - Causa: o arquivo de config do módulo (`<raiz>/sei/config/mod-wssei/ConfiguracaoMdWSSEI.php`) não foi recriado na migração — não é versionado (`.gitignore` do pengovbr/mod-wssei), é criado copiando `ConfiguracaoMdWSSEI.exemplo.php` (passo 6 do `docs/INSTALACAO.md`)
-- Ocorre ANTES de validar credenciais → "falha com qualquer credencial". **Correção é da TI da ANTAQ** (recriar o arquivo em `/opt/sei/config/mod-wssei/`, preencher o array incl. secret do token, permissão de leitura). Quebra também integrações oficiais
+- Ocorria ANTES de validar credenciais → "falha com qualquer credencial". Corrigido pela TI da ANTAQ (arquivo recriado). Mantido aqui como referência caso reincida após updates do módulo
 
 ### Limitações conhecidas
 - Cancelar assinatura: a função `DocumentoRN::cancelarAssinaturaInternoControlado` existe no core SEI (linha 4026) mas NÃO está exposta na API REST
