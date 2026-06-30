@@ -76,6 +76,17 @@ def _get_client(ctx: Context) -> SEIClient:
     raise ValueError("SEIClient nao configurado. Verifique as variaveis de ambiente.")
 
 
+def _web_scraper_enabled() -> bool:
+    """Indica se o scraper web (SEIWebClient) deve ser usado nas tools híbridas.
+
+    Padrão: DESLIGADO. Desde a migração SEI 5 da ANTAQ, o login web virou SSO
+    Microsoft (Entra ID) e o scraper httpx não consegue mais logar — por isso as
+    tools de listagem rodam por REST por padrão. Quem quiser reativar o scraper
+    (ex.: após configurar persistência de sessão) liga SEI_WEB_SCRAPER=1.
+    """
+    return os.environ.get("SEI_WEB_SCRAPER", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _get_web_client(ctx: Context) -> SEIWebClient:
     """Obtém o SEIWebClient (scraper), criando sob demanda em modo HTTP.
 
@@ -459,9 +470,9 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
 
     Exemplo de protocolo: 50300.000123/2025-00
 
-    Implementação **híbrida**: combina REST mod-wssei (campos estruturados)
-    com scraper do frontend web (lista completa de documentos da árvore).
-    As duas fontes rodam em paralelo via asyncio.gather.
+    Por padrão usa só a REST mod-wssei (campos estruturados). Com
+    SEI_WEB_SCRAPER=1, roda também o scraper web em paralelo (asyncio.gather)
+    para anexar documentos[]/relacionados[] — inativo desde o SSO Microsoft.
 
     Campos da REST (`/processo/consultar` + `/processo/consultar/{id}`):
     - IdProcedimento, ProtocoloProcedimentoFormatado, NomeTipoProcedimento
@@ -482,40 +493,40 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
     """
     try:
         client = _get_client(ctx)
-        web = _get_web_client(ctx)
-        if web._inbox_url is None:
-            try:
-                await web.login()
-            except Exception as e:
-                logger.warning(f"web login falhou, seguindo só com REST: {e}")
-
-        # roda REST completo e web em paralelo; suporta falha individual
-        rest_task = asyncio.create_task(client.consultar_processo_completo(protocolo_formatado))
-        web_task = asyncio.create_task(web.consultar_processo(protocolo_formatado))
-        rest_result, web_result = await asyncio.gather(
-            rest_task, web_task, return_exceptions=True
-        )
-
         merged: dict = {}
         warnings: list[str] = []
 
-        if isinstance(rest_result, Exception):
-            warnings.append(f"REST falhou: {rest_result}")
+        if _web_scraper_enabled():
+            # Modo híbrido (opt-in): REST + scraper web em paralelo.
+            web = _get_web_client(ctx)
+            if web._inbox_url is None:
+                try:
+                    await web.login()
+                except Exception as e:
+                    logger.warning(f"web login falhou, seguindo só com REST: {e}")
+            rest_task = asyncio.create_task(client.consultar_processo_completo(protocolo_formatado))
+            web_task = asyncio.create_task(web.consultar_processo(protocolo_formatado))
+            rest_result, web_result = await asyncio.gather(
+                rest_task, web_task, return_exceptions=True
+            )
+            if isinstance(rest_result, Exception):
+                warnings.append(f"REST falhou: {rest_result}")
+            else:
+                merged.update(rest_result)
+            if isinstance(web_result, Exception):
+                warnings.append(f"Web scraper falhou: {web_result}")
+            else:
+                # Web traz documentos[], relacionados[] e id_procedimento (snake_case).
+                # Não sobrescreve campos da REST (fonte canônica); web complementa.
+                for k, v in web_result.items():
+                    if k not in merged:
+                        merged[k] = v
         else:
-            merged.update(rest_result)
-
-        if isinstance(web_result, Exception):
-            warnings.append(f"Web scraper falhou: {web_result}")
-        else:
-            # Web traz documentos[], relacionados[] e id_procedimento (snake_case).
-            # Não sobrescreve campos da REST que tenham nomes parecidos —
-            # REST é a fonte canônica para metadata; web complementa com docs.
-            for k, v in web_result.items():
-                if k not in merged:
-                    merged[k] = v
+            # REST puro (padrão). Para a lista de documentos use sei_listar_documentos.
+            merged.update(await client.consultar_processo_completo(protocolo_formatado))
 
         if not merged:
-            return _error("Ambas as fontes (REST e Web) falharam: " + " | ".join(warnings))
+            return _error("Consulta do processo falhou: " + " | ".join(warnings))
 
         if warnings:
             merged["_warnings"] = warnings
@@ -537,22 +548,26 @@ async def sei_arvore_processo(
     protocolo_formatado: str,
     ctx: Context = None,
 ) -> str:
-    """Mostra a árvore completa de documentos de um processo SEI.
+    """Mostra a árvore (lista) de documentos de um processo SEI.
 
-    Implementação via scraper web (~10× mais rápido que REST: ~1 s vs ~12 s).
-    Parseia arvore_montar.php para extrair id, tipo, sigla da unidade geradora
-    e número SEI de cada documento.
-
-    Aceita o protocolo formatado (ex: 50300.000123/2025-00).
+    Aceita o protocolo formatado (ex: 50300.000123/2025-00) ou IdProcedimento.
 
     Para ler o conteúdo de um documento, use sei_ler_documento com o id.
+
+    Por padrão usa a REST (`/documento/listar/{id}`). O scraper web (mais
+    rápido, mas inativo desde o SSO Microsoft da ANTAQ) só é usado se
+    SEI_WEB_SCRAPER=1.
     """
     try:
-        web = _get_web_client(ctx)
-        if web._inbox_url is None:
-            await web.login()
-        result = await web.listar_documentos(protocolo_formatado)
-        return _json(result)
+        if _web_scraper_enabled():
+            web = _get_web_client(ctx)
+            if web._inbox_url is None:
+                await web.login()
+            return _json(await web.listar_documentos(protocolo_formatado))
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, protocolo_formatado)
+        docs = await client.listar_documentos(id_proc, limit=200)
+        return _json({"id_procedimento": id_proc, "documentos": docs, "total": len(docs)})
     except Exception as e:
         return _error(str(e))
 
@@ -567,15 +582,21 @@ async def sei_listar_documentos(
     Implementação via scraper web (~10× mais rápido que REST).
     Aceita o protocolo formatado (ex: 50300.000123/2025-00).
 
-    Cada documento tem: id, nome_composto, tipo_documento, sigla_unidade,
-    numero_sei. Para ler o conteúdo, use sei_ler_documento com o id.
+    Por padrão usa a REST (`/documento/listar/{id}`): cada documento vem como
+    {id, atributos:{tipoDocumento, tipo, protocoloFormatado, ...}}. Para ler o
+    conteúdo, use sei_ler_documento com o id. O scraper web (inativo desde o
+    SSO Microsoft da ANTAQ) só é usado se SEI_WEB_SCRAPER=1.
     """
     try:
-        web = _get_web_client(ctx)
-        if web._inbox_url is None:
-            await web.login()
-        result = await web.listar_documentos(protocolo_formatado)
-        return _json(result)
+        if _web_scraper_enabled():
+            web = _get_web_client(ctx)
+            if web._inbox_url is None:
+                await web.login()
+            return _json(await web.listar_documentos(protocolo_formatado))
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, protocolo_formatado)
+        docs = await client.listar_documentos(id_proc, limit=200)
+        return _json({"id_procedimento": id_proc, "documentos": docs, "total": len(docs)})
     except Exception as e:
         return _error(str(e))
 
@@ -1117,9 +1138,9 @@ async def sei_listar_processos(
 ) -> str:
     """Lista processos da caixa da unidade atual no SEI (Controle de Processos).
 
-    Implementação via scraper do frontend web (~20× mais rápida que a REST API).
-    Retorna a página inteira de uma vez (a paginação é controlada pelo SEI;
-    para a maioria das unidades todos os processos cabem em poucas páginas).
+    Por padrão usa a REST mod-wssei (`/processo/listar`). O scraper web (mais
+    rápido, mas inativo desde o SSO Microsoft da ANTAQ) só é usado se
+    SEI_WEB_SCRAPER=1.
 
     Parâmetros:
     - pagina: número da página (0=primeira, 1=segunda, etc.)
@@ -1147,16 +1168,31 @@ async def sei_listar_processos(
       custam ~600 ms cada, contra ~14 s da REST API.
     """
     try:
-        web = _get_web_client(ctx)
-        if web._inbox_url is None:
-            await web.login()
-        result = await web.listar_processos(
-            detalhada=True,
-            pagina=pagina,
-            apenas_meus=(apenas_meus.upper() == "S"),
-            tipo=tipo,
-            filtro=filtro,
+        if _web_scraper_enabled():
+            web = _get_web_client(ctx)
+            if web._inbox_url is None:
+                await web.login()
+            return _json(await web.listar_processos(
+                detalhada=True,
+                pagina=pagina,
+                apenas_meus=(apenas_meus.upper() == "S"),
+                tipo=tipo,
+                filtro=filtro,
+            ))
+        # REST (padrão). `filtro` é server-side; `tipo` (substring no nome do
+        # tipo processual) é aplicado client-side sobre atributos.tipoProcesso.
+        client = _get_client(ctx)
+        result = await client.listar_processos(
+            limit=50, start=pagina, apenas_meus=apenas_meus, filtro=filtro,
         )
+        if tipo:
+            tl = tipo.lower()
+            procs = [
+                p for p in result.get("processos", [])
+                if tl in str((p.get("atributos") or {}).get("tipoProcesso", "")).lower()
+            ]
+            result["processos"] = procs
+            result["itens_pagina"] = len(procs)
         return _json(result)
     except Exception as e:
         return _error(str(e))
@@ -3172,17 +3208,21 @@ async def sei_listar_atividades(
 ) -> str:
     """Lista o histórico de atividades/andamentos de um processo.
 
-    Implementação via scraper web (procedimento_consultar_historico.php).
-    Retorna todas as ações registradas (tramitações, assinaturas, edições, etc.)
-    com data/hora, unidade, usuário e descrição.
+    Retorna as ações registradas (tramitações, assinaturas, edições, etc.).
+    Aceita protocolo formatado (ex: 50300.000123/2025-00) ou IdProcedimento.
 
-    Aceita protocolo formatado (ex: 50300.000123/2025-00).
+    Por padrão usa a REST (`/atividade/listar`). O scraper web (mais detalhado,
+    mas inativo desde o SSO Microsoft da ANTAQ) só é usado se SEI_WEB_SCRAPER=1.
     """
     try:
-        web = _get_web_client(ctx)
-        if web._inbox_url is None:
-            await web.login()
-        result = await web.listar_atividades(processo)
+        if _web_scraper_enabled():
+            web = _get_web_client(ctx)
+            if web._inbox_url is None:
+                await web.login()
+            return _json(await web.listar_atividades(processo))
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.listar_atividades(id_proc, limit=200)
         return _json(result)
     except Exception as e:
         return _error(str(e))
