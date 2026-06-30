@@ -289,10 +289,15 @@ class BrowserClient:
             raise httpx.TransportError(f"Browser fetch falhou: {err}")
         content = base64.b64decode(result.get("b64", "")) if result.get("b64") else b""
         headers = result.get("headers", {}) or {}
+        # O fetch() do browser JÁ descomprime o corpo (gzip/br/deflate) e o
+        # arrayBuffer vem em claro. Remover headers que fariam o httpx tentar
+        # descomprimir de novo (DecodingError) ou conferir um tamanho errado.
+        drop = {"content-encoding", "content-length", "transfer-encoding"}
+        clean = [(k, v) for k, v in headers.items() if k.lower() not in drop]
         request = httpx.Request(method, url)
         return httpx.Response(
             status_code=int(result["status"]),
-            headers=list(headers.items()),
+            headers=clean,
             content=content,
             request=request,
         )

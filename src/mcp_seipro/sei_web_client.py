@@ -155,6 +155,20 @@ class SEIWebClient:
         soup = BeautifulSoup(html, "html.parser")
         usuario_input = soup.find("input", attrs={"name": "txtUsuario"})
         if usuario_input is None:
+            # Pós-migração SEI 5, a ANTAQ trocou o login web por SSO Microsoft
+            # (Entra ID): a página só expõe "Entrar com Microsoft"
+            # (acaoLogin(11,'Microsoft') → login_sso.php) e não tem mais campos
+            # de usuário/senha. O scraper web depende do form local e não
+            # funciona mais. O REST (SEIClient) NÃO é afetado — segue com
+            # login/senha via /autenticar.
+            if "login_sso.php" in html or "acaoLogin(11" in html or "Microsoft" in html:
+                raise RuntimeError(
+                    "Login web agora é exclusivamente SSO Microsoft (Entra ID) — "
+                    "não há mais formulário de usuário/senha local. O scraper web "
+                    "(SEIWebClient) ficou inoperante. Use o SEIClient REST (login/"
+                    "senha via /autenticar segue funcionando), em modo "
+                    "SEI_TRANSPORT=browser se o Cloudflare estiver ativo."
+                )
             raise RuntimeError("Campo txtUsuario não encontrado na página de login.")
         login_form = usuario_input.find_parent("form")
         if login_form is None:
