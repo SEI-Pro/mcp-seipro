@@ -118,8 +118,7 @@ class CompositeBackend(SEIBackend):
         try:
             result = await self._web.trocar_unidade(id_unidade)
         except httpx.RequestError as exc:
-            msg = f"SEI inacessível: {exc}"
-            raise SEIConnectionError(msg) from exc
+            raise SEIConnectionError(_msg_inacessivel(exc)) from exc
         if self._rest is not None:
             # Sincroniza a REST para que tools REST usem a mesma unidade (best-effort).
             try:
@@ -186,6 +185,17 @@ class CompositeBackend(SEIBackend):
         return result
 
 
+def _msg_inacessivel(exc: httpx.RequestError) -> str:
+    """Monta a mensagem de erro incluindo o tipo da exceção.
+
+    ``str(exc)`` em exceções httpx de timeout/conexão (ex.: ``ConnectTimeout``,
+    ``ReadTimeout``) costuma ser vazio — sem o nome do tipo, a mensagem final
+    vira só "SEI inacessível: ", sem nenhuma pista do que realmente falhou.
+    """
+    detalhe = str(exc) or type(exc).__name__
+    return f"SEI inacessível: {detalhe}"
+
+
 # Exceções que significam "este backend não atendeu" → tenta o próximo. Erros
 # definitivos de domínio (permissão, validação, auth) NÃO estão aqui: propagam.
 _FALLBACK_EXCS = (
@@ -249,7 +259,7 @@ async def _dispatch_in_order(
             if ultimo is None or _prioridade_erro(exc) >= _prioridade_erro(ultimo):
                 ultimo = exc
         except httpx.RequestError as exc:
-            conn = SEIConnectionError(f"SEI inacessível: {exc}")
+            conn = SEIConnectionError(_msg_inacessivel(exc))
             conn.__cause__ = exc
             if ultimo is None or _prioridade_erro(conn) >= _prioridade_erro(ultimo):
                 ultimo = conn
