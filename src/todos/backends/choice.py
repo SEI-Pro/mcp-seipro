@@ -20,12 +20,16 @@ from __future__ import annotations
 
 import functools
 import inspect
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastmcp import Context
 from fastmcp.utilities.types import find_kwarg_by_type
 
 from todos.exceptions import SEIError
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+    from types import FunctionType
 
 BackendChoice = Literal["rest", "web"]
 
@@ -52,7 +56,7 @@ async def get_backend_choice(ctx: Context | None) -> BackendChoice:
     return escolha
 
 
-def requires_backend(fn):  # noqa: ANN001, ANN201 — wrapper genérico, ver docstring
+def requires_backend(fn: FunctionType) -> Callable[..., Awaitable[object]]:
     """Adiciona ``backend: Literal["rest", "web"]`` ao schema MCP da tool.
 
     O corpo de *fn* permanece inalterado — nenhuma chamada existente a
@@ -85,6 +89,6 @@ def requires_backend(fn):  # noqa: ANN001, ANN201 — wrapper genérico, ver doc
         await ctx.set_state(_STATE_KEY, backend, serializable=False)
         return await fn(*args, **kwargs)
 
-    wrapper.__signature__ = nova_sig  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    wrapper.__dict__["__signature__"] = nova_sig
     wrapper.__annotations__ = {**fn.__annotations__, "backend": BackendChoice}
     return wrapper

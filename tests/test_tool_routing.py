@@ -647,8 +647,7 @@ _RECORDING_BACKEND_OPS: frozenset[str] = frozenset(
         "criar_processo",  # test_criar_processo_shaped_output_preserves_ids
         "alterar_processo",  # test_alterar_processo_shaped_output
         "criar_documento_externo",  # test_incluir_documento_externo_shaped_output
-        "requer_id_serie",  # test_criar_documento_routes_to_composite + test_criar_documento_shaped_output_preserves_doc_ids
-        "resolver_documento",  # test_criar_documento_routes_to_composite + read/baixar tests
+        "resolver_documento",  # read/baixar tests
     }
 )
 

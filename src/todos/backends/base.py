@@ -360,10 +360,6 @@ class SEIBackend:
         """
         raise NotImplementedError
 
-    async def requer_id_serie(self) -> bool:
-        """Retorna True quando o backend exige id_serie para criar documentos internos."""
-        return False
-
     async def sugestao_assuntos_documento(self, id_serie: str) -> list[dict]:
         """Sugere assuntos para um tipo de documento."""
         raise NotImplementedError

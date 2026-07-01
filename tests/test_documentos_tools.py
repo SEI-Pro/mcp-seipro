@@ -265,9 +265,6 @@ class _RequerIdSerieBackend:
         msg = f"_RequerIdSerieBackend.{op} not implemented"
         raise NotImplementedError(msg)
 
-    async def requer_id_serie(self) -> bool:
-        return True
-
 
 def test_criar_documento_requires_id_serie_in_rest(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(d, "_backend", aconst(_RequerIdSerieBackend()))

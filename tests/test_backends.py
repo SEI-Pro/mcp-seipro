@@ -324,8 +324,11 @@ class TestWebDocumentosBackend:
 # decision (add a comment explaining why a method was removed/moved).
 # ---------------------------------------------------------------------------
 
-_REST_COVERAGE_MIN = 113 / 127  # exact fraction; one drop → 112/127 = 0.882 < 0.890 → fails
-_WEB_COVERAGE_MIN = 88 / 127  # exact fraction; one drop → 87/127 = 0.685 < 0.693 → fails
+# `requer_id_serie` was removed from the SEIBackend contract (dead code — its
+# only caller was replaced by an explicit `get_backend_choice(ctx)` check),
+# shrinking the contract from 127 to 126 ops and both backends' counts by one.
+_REST_COVERAGE_MIN = 112 / 126  # exact fraction; one drop → 111/126 = 0.881 < 0.889 → fails
+_WEB_COVERAGE_MIN = 87 / 126  # exact fraction; one drop → 86/126 = 0.683 < 0.690 → fails
 
 
 def _contract_ops() -> set[str]:
