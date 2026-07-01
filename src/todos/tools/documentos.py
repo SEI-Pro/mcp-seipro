@@ -146,8 +146,37 @@ def _formatar_doc_externo(content: bytes, formato: str, disclaimer: dict | None)
     return _aplicar_disclaimer(pdf_to_text(content), disclaimer, "texto")
 
 
+def _parece_binario(raw: str) -> bool:
+    """Detecta se `raw` é conteúdo binário (ex.: PDF) disfarçado de HTML.
+
+    `_resolver_documento` classifica um documento como interno ("I") sempre
+    que `visualizar_documento_interno` devolve mais de alguns bytes — sem
+    validar que o conteúdo é HTML de fato (ver `_MIN_DOC_CONTENT_LENGTH` em
+    `backends/rest/_session.py`). Quando o mod-wssei não valida tipoDocumento
+    nesse endpoint e o id informado é, na verdade, um documento externo (X),
+    o "HTML" recebido é o PDF bruto — cru ou corrompido por um decode com
+    charset errado (mojibake). Sem esta checagem, esse binário seguiria para
+    `html_to_markdown`/`html_to_text`, que não geram erro (BeautifulSoup trata
+    o lixo como texto) e devolvem o PDF quase intacto como se fosse o teor do
+    documento.
+    """
+    head = raw.lstrip()[:8]
+    if head.startswith("%PDF-"):
+        return True
+    # NUL byte é impossível em HTML/texto legítimo do SEI, mas comum em
+    # binário decodificado byte-a-byte (ex.: latin-1 sobre um PDF).
+    return "\x00" in raw[:2048]
+
+
 def _formatar_doc_interno(raw: str, formato: str, disclaimer: dict | None) -> str:
     """Formata conteúdo de documento interno (HTML) com disclaimer opcional."""
+    if _parece_binario(raw):
+        msg = (
+            "Conteúdo retornado como documento interno parece ser binário "
+            "(provável documento externo classificado incorretamente). "
+            "Tente sei_ler_documento com tipo_documento='X' ou use sei_baixar_anexo."
+        )
+        raise SEIValidationError(msg)
     if formato == "markdown":
         return _aplicar_disclaimer(html_to_markdown(raw), disclaimer, formato)
     if formato == "texto":
