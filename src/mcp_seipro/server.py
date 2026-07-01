@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from mcp_seipro.sei_client import SEIClient
 from mcp_seipro.sei_web_client import SEIWebClient
+from mcp_seipro.shaping import shape_processo_resumido
 from mcp_seipro.html_utils import (
     html_to_text, html_to_markdown,
     pdf_to_text, pdf_to_markdown,
@@ -1134,38 +1135,40 @@ async def sei_listar_processos(
     apenas_meus: str = "",
     tipo: str = "",
     filtro: str = "",
+    limit: int = 50,
+    incluir_detalhe: bool = False,
+    apenas_contar: bool = False,
     ctx: Context = None,
 ) -> str:
-    """Lista processos da caixa da unidade atual no SEI (Controle de Processos).
+    """Lista processos da caixa da unidade atual (Controle de Processos), em
+    formato ENXUTO e tipado, próprio para consumo por agente.
 
-    Por padrão usa a REST mod-wssei (`/processo/listar`). O scraper web (mais
-    rápido, mas inativo desde o SSO Microsoft da ANTAQ) só é usado se
-    SEI_WEB_SCRAPER=1.
+    IMPORTANTE: chame sei_trocar_unidade ANTES para que `atribuido_unidade_atual`
+    seja resolvido corretamente para a unidade consultada (sem isso vem `null`).
 
     Parâmetros:
-    - pagina: número da página (0=primeira, 1=segunda, etc.)
-    - apenas_meus: "S" para apenas processos atribuídos ao usuário logado
-      (filtro server-side via hdnMeusProcessos=M)
-    - tipo: substring (case-insensitive) para filtrar pelo nome do tipo processual
-      (filtro client-side, sobre a coluna "Tipo")
-    - filtro: substring (case-insensitive) aplicada a qualquer campo do processo
-      (protocolo, tipo, especificação, interessados — filtro client-side)
+    - pagina: número da página (0=primeira). Cada página tem `limit` itens.
+    - limit: itens por página (padrão 50).
+    - apenas_meus: "S" para só processos atribuídos ao usuário (server-side).
+    - filtro: busca textual server-side (protocolo, tipo, especificação, etc.).
+    - tipo: substring (case-insensitive) no nome do tipo processual (client-side).
+    - apenas_contar: se True, retorna só {total_itens, paginas} — barato, sem
+      baixar a página pesada.
+    - incluir_detalhe: se True, reanexa `ciencias` e `anotacoes` completas a cada
+      item (fora da list view por padrão, para manter o payload pequeno).
 
-    Campos retornados por processo (visualização Detalhada):
-    - id_procedimento: id interno do SEI
-    - protocolo: número formatado (ex: 50300.007186/2026-69)
-    - Tipo: tipo processual
-    - atribuicao: usuário ao qual está atribuído
-    - Especificação, Interessados, Marcadores, etc. — conforme as colunas
-      configuradas no painel da unidade
+    Cada processo (list view) traz campos derivados e tipados:
+    - id_procedimento, protocolo, tipo, descricao (texto limpo, sem entidades HTML)
+    - acesso: "publico" | "restrito" | "sigiloso"
+    - atribuido_unidade_atual: {id_usuario, nome} resolvido para a unidade da
+      sessão, ou `null` se não houver atribuição nela
+    - gerado_ou_recebido, em_tramitacao, sobrestado, bloqueado, tem_documento_novo,
+      tem_anotacao, tem_ciencia — todos BOOLEAN
+    - marcador: {nome, cor} ou null · prazo: data ISO (aaaa-mm-dd) ou null
+    - aberto_em_unidades: lista de siglas das unidades onde o processo está aberto
 
-    NOTAS:
-    - Processos sobrestados e concluídos não aparecem nesta listagem.
-    - Para agrupamento estatístico (sei_resumo_processos) usa-se a REST API
-      diretamente (que tem flags estruturadas como tramitação, sobrestamento,
-      acesso, etc.).
-    - Login web é executado uma vez por sessão (~3 s); listagens subsequentes
-      custam ~600 ms cada, contra ~14 s da REST API.
+    NOTA: processos sobrestados e concluídos não aparecem. Para agrupamento
+    estatístico use sei_resumo_processos.
     """
     try:
         if _web_scraper_enabled():
@@ -1179,21 +1182,44 @@ async def sei_listar_processos(
                 tipo=tipo,
                 filtro=filtro,
             ))
-        # REST (padrão). `filtro` é server-side; `tipo` (substring no nome do
-        # tipo processual) é aplicado client-side sobre atributos.tipoProcesso.
+
         client = _get_client(ctx)
+
+        # Modo contagem barato (D-6): pega só o total, sem baixar a página cheia.
+        if apenas_contar:
+            head = await client.listar_processos(
+                limit=1, start=0, apenas_meus=apenas_meus, filtro=filtro,
+            )
+            total = int(head.get("total_itens", 0))
+            page_size = max(1, limit)
+            paginas = (total + page_size - 1) // page_size
+            return _json({"total_itens": total, "itens_por_pagina": page_size, "paginas": paginas})
+
         result = await client.listar_processos(
-            limit=50, start=pagina, apenas_meus=apenas_meus, filtro=filtro,
+            limit=limit, start=pagina, apenas_meus=apenas_meus, filtro=filtro,
         )
+        unidade_ativa_id = getattr(client, "_unidade_ativa", None)
+        processos = [
+            shape_processo_resumido(p, unidade_ativa_id, incluir_detalhe=incluir_detalhe)
+            for p in result.get("processos", [])
+        ]
+        # `tipo`: substring client-side sobre o tipo já normalizado.
         if tipo:
             tl = tipo.lower()
-            procs = [
-                p for p in result.get("processos", [])
-                if tl in str((p.get("atributos") or {}).get("tipoProcesso", "")).lower()
-            ]
-            result["processos"] = procs
-            result["itens_pagina"] = len(procs)
-        return _json(result)
+            processos = [p for p in processos if tl in p.get("tipo", "").lower()]
+
+        out = {
+            "processos": processos,
+            "pagina_atual": pagina,
+            "itens_pagina": len(processos),
+            "total_itens": result.get("total_itens"),
+            "tem_proxima": result.get("tem_proxima", False),
+        }
+        if not unidade_ativa_id and processos:
+            out["_nota"] = ("atribuido_unidade_atual veio null: chame "
+                            "sei_trocar_unidade antes para resolver a atribuição "
+                            "na unidade consultada.")
+        return _json(out)
     except Exception as e:
         return _error(str(e))
 
