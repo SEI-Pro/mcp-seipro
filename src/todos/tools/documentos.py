@@ -4,12 +4,13 @@ Reúne leitura (interno HTML / externo PDF, com gates de acesso restrito),
 criação e alteração de documentos internos e externos, edição de seções,
 referências dinâmicas, estilos CSS e consultas auxiliares (assuntos, blocos).
 
-As tools roteiam pelo backend composto (`_backend`) — REST-first com fallback
-web — e o gate de acesso restrito (`_aplicar_gate_documento`) consulta os
-metadados pelo mesmo backend. Os helpers de formatação (`_formatar_doc_externo`,
+Tools cuja operação existe em ambos os backends expõem escolha explícita
+(`@requires_backend` + `_backend(ctx)`); a resolução número SEI → id interno
+usa `resolver_documento`, que também respeita essa escolha. O gate de acesso
+restrito (`_aplicar_gate_documento`) consulta os metadados pelo mesmo backend
+já resolvido. Os helpers de formatação (`_formatar_doc_externo`,
 `_formatar_doc_interno`, `_ler_documento_via_backend`) são usados apenas por
-estas tools e ficam aqui. A resolução número SEI → id interno permanece via
-pesquisa Solr (REST-only), por ser uma capacidade inerente ao mod-wssei.
+estas tools e ficam aqui.
 
 Sem `from __future__ import annotations`: o FastMCP introspecta os type hints em
 tempo de execução para montar o schema de cada tool, então as anotações precisam
@@ -29,6 +30,7 @@ from pydantic import Field
 from todos import access_control
 from todos.backends import NovoDocumentoExterno, NovoDocumentoInterno
 from todos.backends.base import SEIBackend
+from todos.backends.choice import get_backend_choice, requires_backend
 from todos.exceptions import (
     SEIConnectionError,
     SEINotFoundError,
@@ -53,6 +55,7 @@ from todos.mcp_app import (
     _DocumentoRef,
     _http_mode,
     _json,
+    _rest_backend,
     _shape_resposta_escrita,
     mcp,
 )
@@ -225,6 +228,7 @@ async def _ler_documento_via_backend(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_ler_documento(
     id_documento: str,
     tipo_documento: Literal["auto", "I", "X"] = "auto",
@@ -263,8 +267,8 @@ async def sei_ler_documento(
         backend = await _backend(ctx)
         tipo_doc = tipo_documento
         if tipo_documento == "auto":
-            # Tenta resolver número SEI → id interno + tipo via backend composto.
-            # REST-first (Solr, rápido); fallback web quando REST não disponível.
+            # Tenta resolver número SEI → id interno + tipo no backend escolhido
+            # (backend='rest' usa Solr, rápido; backend='web' faz scraping).
             # Quando processo for fornecido, o _ler_documento_via_backend usa
             # id+processo diretamente — resolver ainda é chamado para normalizar o tipo.
             try:
@@ -310,6 +314,7 @@ def _envelopar_anexo(content: bytes, disclaimer: dict | None) -> str:
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_baixar_anexo(
     id_documento: str,
     processo: str | None = None,
@@ -338,7 +343,7 @@ async def sei_baixar_anexo(
     """
     try:
         backend = await _backend(ctx)
-        # Resolve número SEI → id interno via backend composto (REST-first com fallback web).
+        # Resolve número SEI → id interno no backend escolhido pela chamada.
         try:
             id_documento, _ = await backend.resolver_documento(id_documento)
         except (SEINotFoundError, SEINotImplementedError):
@@ -377,6 +382,7 @@ async def sei_baixar_anexo(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_criar_documento(
     processo: str,
     id_serie: str = "",
@@ -402,7 +408,7 @@ async def sei_criar_documento(
     """
     # id_serie é obrigatório no caminho REST; no web vazio retorna os tipos.
     backend = await _backend(ctx)
-    if await backend.requer_id_serie() and not id_serie:
+    if await get_backend_choice(ctx) == "rest" and not id_serie:
         msg = (
             "id_serie é obrigatório no modo REST. "
             "Use sei_pesquisar_tipos_documento para listar os tipos disponíveis."
@@ -420,6 +426,7 @@ async def sei_criar_documento(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_secoes(
     id_documento: str,
     processo: str | None = None,
@@ -439,6 +446,7 @@ async def sei_listar_secoes(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_gerar_referencia(
     numero_sei: str,
     id_documento: str = "",
@@ -542,6 +550,7 @@ async def sei_estilos(categoria: str = "") -> str:
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_editar_secao(
     id_documento: str,
     secoes: list[dict],
@@ -612,6 +621,7 @@ async def sei_editar_secao(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_criar_documento_externo(
     processo: str,
     id_serie: str,
@@ -643,6 +653,7 @@ async def sei_criar_documento_externo(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_consultar_documento_externo(
     id_documento: str,
     processo: str | None = None,
@@ -688,6 +699,7 @@ async def sei_consultar_documento_externo(
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_alterar_documento_interno(
     id_documento: str,
     descricao: str = "",
@@ -743,7 +755,7 @@ async def sei_alterar_documento_externo(
             msg = "Em modo remoto arquivo_path não é permitido."
             raise SEIValidationError(msg)
         _validar_arquivo_path(arquivo_path)
-    result = await (await _backend(ctx)).alterar_documento_externo(
+    result = await (await _rest_backend(ctx)).alterar_documento_externo(
         id_documento=id_documento,
         descricao=descricao,
         nivel_acesso=nivel_acesso,
@@ -754,6 +766,7 @@ async def sei_alterar_documento_externo(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_sugestao_assuntos_documento(
     id_serie: str,
     ctx: Context | None = None,
@@ -774,6 +787,7 @@ async def sei_sugestao_assuntos_documento(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_blocos_documento(
     id_documento: str,
     ctx: Context | None = None,
@@ -793,6 +807,7 @@ async def sei_listar_blocos_documento(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_incluir_documento_externo(
     processo: str,
     arquivo_path: str = "",
@@ -839,6 +854,16 @@ async def sei_incluir_documento_externo(
             except ValueError as e:
                 msg = "arquivo_base64 inválido (não é base64 válido)."
                 raise SEIValidationError(msg) from e
+            if not arquivo_path and await get_backend_choice(ctx) == "rest":
+                # O backend REST cria o upload a partir de um caminho de arquivo
+                # real no disco — não sabe ler arquivo_base64. Sem a antiga
+                # composição automática (que roteava base64 pro web sozinha),
+                # um erro claro aqui evita um "Arquivo não encontrado: " confuso.
+                msg = (
+                    "backend='rest' não suporta upload via arquivo_base64 — "
+                    "use backend='web', ou forneça arquivo_path."
+                )
+                raise SEIValidationError(msg)
         elif arquivo_path:
             # Em modo remoto o caminho apontaria para o filesystem do SERVIDOR,
             # permitindo exfiltrar arquivos do host — exigir base64.
@@ -853,8 +878,6 @@ async def sei_incluir_documento_externo(
             msg = "Informe arquivo_path (local) ou arquivo_base64 (remoto)."
             raise SEIValidationError(msg)
 
-        # O composite roteia web-first quando há base64 (upload nativo do scraper),
-        # e REST-first quando só há caminho de arquivo.
         dados = NovoDocumentoExterno(
             id_serie=id_serie,
             arquivo_path=arquivo_path,

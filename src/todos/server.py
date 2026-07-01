@@ -9,6 +9,7 @@ import typer as _typer
 from fastmcp import Context
 
 from todos.backends import EnvioProcesso
+from todos.backends.choice import requires_backend
 from todos.backends.models import FiltroListagemProcessos, FiltrosPesquisaProcessos
 from todos.exceptions import (
     SEIConnectionError,
@@ -79,6 +80,7 @@ _TOOL_MODULES = (
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_buscar_documento(
     numero_sei: str,
     processo: str = "",
@@ -626,6 +628,7 @@ async def sei_pesquisar_processos(
 
 
 @mcp.tool(annotations=_DEST)
+@requires_backend
 async def sei_enviar_processo(
     numero_processo: str,
     unidades_destino: str,
@@ -669,6 +672,7 @@ async def sei_enviar_processo(
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_atribuir_processo(
     numero_processo: str,
     usuario: str,
@@ -695,6 +699,7 @@ async def sei_atribuir_processo(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_sobrestar_processo(
     processo: str,
     motivo: str,

@@ -11,6 +11,7 @@ ser objetos reais (não strings adiadas).
 
 from fastmcp import Context
 
+from todos.backends.choice import requires_backend
 from todos.mcp_app import (
     _DEST,
     _IDEM,
@@ -20,6 +21,7 @@ from todos.mcp_app import (
     _backend,
     _decode_cursor,
     _json,
+    _rest_backend,
     mcp,
 )
 from todos.responses import AcompanhamentoSEI, NextAction, PaginadoGenerico
@@ -28,6 +30,7 @@ _DEFAULT_LIMIT = 50
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_acompanhar_processo(
     processo: str,
     grupo: str = "",
@@ -55,6 +58,7 @@ async def sei_acompanhar_processo(
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_remover_acompanhamento(
     processo: str,
     ctx: Context | None = None,
@@ -83,7 +87,7 @@ async def sei_criar_grupo_acompanhamento(
     sei_acompanhar_processo com grupo="" (grupo padrão da unidade).
     Retorna {"id": "<id_grupo>", "ok": True}.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.criar_grupo_acompanhamento(nome)
     return _json(result)
 
@@ -94,12 +98,13 @@ async def sei_excluir_grupo_acompanhamento(
     ctx: Context | None = None,
 ) -> str:
     """Exclui grupo(s) de acompanhamento especial. IDs separados por vírgula."""
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.excluir_grupo_acompanhamento(ids_grupos)
     return _json(result)
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_grupos_acompanhamento(
     filtro: str = "",
     ctx: Context | None = None,
@@ -120,6 +125,7 @@ async def sei_listar_grupos_acompanhamento(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_meus_acompanhamentos(
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
@@ -158,6 +164,7 @@ async def sei_listar_meus_acompanhamentos(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_acompanhamentos_unidade(
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
@@ -196,6 +203,7 @@ async def sei_listar_acompanhamentos_unidade(
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_alterar_acompanhamento(
     processo: str,
     grupo: str = "",

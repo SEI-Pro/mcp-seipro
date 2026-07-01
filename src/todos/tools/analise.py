@@ -22,8 +22,8 @@ from fastmcp import Context
 from todos.exceptions import SEIError
 from todos.mcp_app import (
     _READ,
-    _backend,
     _json,
+    _web_backend,
     mcp,
 )
 
@@ -345,7 +345,7 @@ async def sei_analisar_processo(
     if compressao not in _VALID_COMPRESSAO:
         raise SEIError(_ERR_COMPRESSAO_INVALIDA.format(val=compressao))
 
-    backend = await _backend(ctx)
+    backend = await _web_backend(ctx)
 
     if ctx:
         await ctx.report_progress(0, 100, "Gerando PDF do processo…")

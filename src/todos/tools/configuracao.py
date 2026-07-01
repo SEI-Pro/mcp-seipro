@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 from fastmcp import Context
 from pydantic import Field
 
+from todos.backends.choice import requires_backend
 from todos.exceptions import SEIValidationError
 from todos.mcp_app import _IDEM, _backend, _get_web_client, _json, mcp
 from todos.settings import get_settings
@@ -192,6 +193,7 @@ def _inferir_padrao_protocolo(amostras: list[str]) -> tuple[str, int, int]:
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_detectar_formato_protocolo(
     ctx: Context | None = None,
 ) -> str:

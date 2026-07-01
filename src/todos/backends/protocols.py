@@ -5,10 +5,9 @@ what they implement by inheriting from the relevant Protocol(s) — the type
 checker then verifies completeness instead of relying on runtime
 ``NotImplementedError`` stubs.
 
-``CompositeBackend`` only needs to declare the three operations it genuinely
-implements itself (``consultar_processo``, ``trocar_unidade``,
-``criar_documento_externo``); everything else is routed to REST or Web at
-startup.
+Each tool call gets the raw ``SEIRestBackend`` or ``SEIWebBackend`` the caller
+explicitly asked for (``mcp_app._backend``/``_rest_backend``/``_web_backend``)
+— there is no composite/routing layer anymore.
 """
 
 from __future__ import annotations

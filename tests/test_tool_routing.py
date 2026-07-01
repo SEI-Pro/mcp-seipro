@@ -7,10 +7,14 @@ op or dropping/swapping an argument (e.g. `sei_excluir_bloco_interno` calling
 `excluir_blocos_assinatura`, or `sei_historico_atribuicoes` whose op is actually
 `listar_historico_atribuicoes`). None of that is visible to ruff.
 
-Each tool module imports `_backend` into its own namespace, so we monkeypatch
-`<module>._backend` to return a recording fake, invoke the tool on its main path,
-and assert: (1) exactly one backend op was called, (2) it was the expected op,
-(3) every identifying argument was forwarded, and (4) the tool returns a string.
+Each tool module imports whichever backend accessor(s) it needs — `_backend`
+(choice-aware, requires `@requires_backend` + a real `ctx`), `_rest_backend`,
+or `_web_backend` (no choice, `ctx` unused for that purpose). We monkeypatch
+every accessor name the module defines to a recording fake, invoke the tool on
+its main path (passing a minimal `_FakeCtx` + `backend="web"` when the tool
+exposes that parameter), and assert: (1) exactly one backend op was called,
+(2) it was the expected op, (3) every identifying argument was forwarded, and
+(4) the tool returns a string.
 
 No live SEI, no FastMCP server, no network.
 """
@@ -19,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import inspect
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -72,6 +77,27 @@ _LIST_RETURNING_OPS: frozenset[str] = frozenset(
         "listar_unidades_processo",
     }
 )
+
+
+class _FakeCtx:
+    """Fake mínimo de Context para tools decoradas com ``@requires_backend``.
+
+    Cobre ``set_state``/``get_state`` — o wrapper do decorator grava a escolha
+    via ``set_state`` e algumas tools (ex.: ``sei_criar_documento``) também
+    chamam ``get_backend_choice(ctx)`` diretamente no corpo, o que lê de volta
+    via ``get_state``. Sem histórico entre chamadas: cada teste cria sua
+    própria instância.
+    """
+
+    def __init__(self) -> None:
+        self._state: dict[str, object] = {}
+
+    async def set_state(self, key: str, value: object, *, serializable: bool = True) -> None:
+        del serializable
+        self._state[key] = value
+
+    async def get_state(self, key: str) -> object:
+        return self._state.get(key)
 
 
 class RecordingBackend:
@@ -639,10 +665,26 @@ def test_tool_routes_to_expected_op(
     module_suffix, tool_name, call_kwargs, expected_op, sentinels = route
     module = importlib.import_module(f"todos.tools.{module_suffix}")
     fake = RecordingBackend()
-    monkeypatch.setattr(module, "_backend", aconst(fake))
+    # Different tools reach the backend through different accessors
+    # (`_backend` when routing is a real per-call choice, `_rest_backend`/
+    # `_web_backend` when the operation only exists on one side). Patching
+    # whichever of the three names the module actually imports is harmless —
+    # only the one the tool's body calls ever gets exercised.
+    for accessor_name in ("_backend", "_rest_backend", "_web_backend"):
+        if hasattr(module, accessor_name):
+            monkeypatch.setattr(module, accessor_name, aconst(fake))
 
     tool = getattr(module, tool_name)
-    result = asyncio.run(tool(ctx=None, **call_kwargs))
+    tool_kwargs = dict(call_kwargs)
+    if "backend" in inspect.signature(tool).parameters:
+        # Tool is wrapped by @requires_backend: needs a real ctx (to record
+        # the state) and an explicit backend value (arbitrary — `_backend`
+        # is monkeypatched above and ignores the real choice).
+        tool_kwargs["backend"] = "web"
+        ctx = _FakeCtx()
+    else:
+        ctx = None
+    result = asyncio.run(tool(ctx=ctx, **tool_kwargs))
 
     assert len(fake.calls) == 1, f"{tool_name} made {len(fake.calls)} backend calls, expected 1"
     op, args, kwargs = fake.calls[0]
@@ -663,7 +705,9 @@ def test_consultar_processo_routes_and_keeps_public_payload(
     fake = RecordingBackend({"IdProcedimento": "42", "nivelAcesso": "0"})
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_consultar_processo("50300.000123/2025-00", ctx=None))
+    result = asyncio.run(
+        processos.sei_consultar_processo("50300.000123/2025-00", ctx=_FakeCtx(), backend="web")
+    )
     assert fake.calls[0][0] == "consultar_processo"
     assert "50300.000123/2025-00" in _flatten(fake.calls[0][1], fake.calls[0][2])
     assert isinstance(result, ProcessoDetalhe)
@@ -688,7 +732,12 @@ def test_editar_secao_reads_then_writes_via_composite(monkeypatch: pytest.Monkey
     monkeypatch.setattr(documentos, "_backend", aconst(fake))
 
     asyncio.run(
-        documentos.sei_editar_secao("D", [{"idSecaoModelo": "1", "conteudo": "x"}], ctx=None)
+        documentos.sei_editar_secao(
+            "D",
+            [{"idSecaoModelo": "1", "conteudo": "x"}],
+            ctx=_FakeCtx(),
+            backend="web",
+        )
     )
     ops = [c[0] for c in fake.calls]
     assert ops == ["listar_secoes", "alterar_secoes"]
@@ -700,7 +749,11 @@ def test_criar_documento_routes_to_composite(monkeypatch: pytest.MonkeyPatch) ->
     fake = RecordingBackend()
     monkeypatch.setattr(documentos, "_backend", aconst(fake))
 
-    asyncio.run(documentos.sei_criar_documento("PF", id_serie="S", descricao="d", ctx=None))
+    asyncio.run(
+        documentos.sei_criar_documento(
+            "PF", id_serie="S", descricao="d", ctx=_FakeCtx(), backend="web"
+        )
+    )
     op, args, _ = fake.calls[-1]
     assert op == "criar_documento_interno"
     assert args[0] == "PF"
@@ -752,7 +805,9 @@ def test_ler_documento_gates_then_reads_via_composite(monkeypatch: pytest.Monkey
     monkeypatch.setattr(documentos, "_backend", aconst(backend))
 
     out = asyncio.run(
-        documentos.sei_ler_documento("D", tipo_documento="I", processo="PF", ctx=None)
+        documentos.sei_ler_documento(
+            "D", tipo_documento="I", processo="PF", ctx=_FakeCtx(), backend="web"
+        )
     )
     assert backend.calls == ["consultar_documento_interno", "visualizar_documento_interno"]
     assert "OLA MUNDO" in out
@@ -762,7 +817,9 @@ def test_baixar_anexo_gates_then_downloads_via_composite(monkeypatch: pytest.Mon
     backend = _ReadBackend()
     monkeypatch.setattr(documentos, "_backend", aconst(backend))
 
-    out = asyncio.run(documentos.sei_baixar_anexo("D", processo="PF", ctx=None))
+    out = asyncio.run(
+        documentos.sei_baixar_anexo("D", processo="PF", ctx=_FakeCtx(), backend="web")
+    )
     assert backend.calls == ["consultar_documento_externo", "baixar_anexo"]
     assert "base64" in out
 
@@ -878,7 +935,7 @@ def test_criar_processo_shaped_output_preserves_ids(monkeypatch: pytest.MonkeyPa
     )
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_criar_processo("123", ctx=None))
+    result = asyncio.run(processos.sei_criar_processo("123", ctx=_FakeCtx(), backend="web"))
     assert result.acao == "criar_processo"
     assert result.status == "ok"
     assert result.id_procedimento == "99"
@@ -890,7 +947,9 @@ def test_alterar_processo_shaped_output(monkeypatch: pytest.MonkeyPatch) -> None
     fake = RecordingBackend({"ProtocoloFormatado": "50300.000002/2026-02"})
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_alterar_processo("50300.000002/2026-02", ctx=None))
+    result = asyncio.run(
+        processos.sei_alterar_processo("50300.000002/2026-02", ctx=_FakeCtx(), backend="web")
+    )
     assert result.acao == "alterar_processo"
     assert result.protocolo == "50300.000002/2026-02"
 
@@ -900,7 +959,9 @@ def test_criar_documento_shaped_output_preserves_doc_ids(monkeypatch: pytest.Mon
     fake = RecordingBackend({"idDocumento": "D42", "protocoloDocumentoFormatado": "2843449"})
     monkeypatch.setattr(documentos, "_backend", aconst(fake))
 
-    result = asyncio.run(documentos.sei_criar_documento("PF", id_serie="S", ctx=None))
+    result = asyncio.run(
+        documentos.sei_criar_documento("PF", id_serie="S", ctx=_FakeCtx(), backend="web")
+    )
     assert result.acao == "criar_documento"
     assert result.id_documento == "D42"
     assert result.numero_sei == "2843449"
@@ -917,7 +978,8 @@ def test_incluir_documento_externo_shaped_output(monkeypatch: pytest.MonkeyPatch
             arquivo_base64="dGVzdA==",
             nome_arquivo="test.pdf",
             id_serie="5",
-            ctx=None,
+            ctx=_FakeCtx(),
+            backend="web",
         )
     )
     assert result.acao == "incluir_documento_externo"
@@ -946,7 +1008,9 @@ def test_arvore_processo_returns_lista_documentos(monkeypatch: pytest.MonkeyPatc
             "total_documentos": 1,
         }
     )
-    monkeypatch.setattr(processos, "_backend", aconst(fake))
+    # sei_arvore_processo has no @requires_backend: it always reads via
+    # _web_backend(ctx), never through the choice-aware _backend(ctx).
+    monkeypatch.setattr(processos, "_web_backend", aconst(fake))
 
     result = asyncio.run(processos.sei_arvore_processo("50300.000123/2025-00"))
     assert isinstance(result, ListaDocumentos)
@@ -958,7 +1022,7 @@ def test_arvore_processo_returns_lista_documentos(monkeypatch: pytest.MonkeyPatc
 def test_arvore_processo_include_raw_returns_str(monkeypatch: pytest.MonkeyPatch) -> None:
     """sei_arvore_processo (include_raw=True) returns raw JSON string."""
     fake = RecordingBackend({"documentos": [], "total_documentos": 0})
-    monkeypatch.setattr(processos, "_backend", aconst(fake))
+    monkeypatch.setattr(processos, "_web_backend", aconst(fake))
 
     result = asyncio.run(processos.sei_arvore_processo("50300.000123/2025-00", include_raw=True))
     assert isinstance(result, str)
@@ -982,7 +1046,9 @@ def test_listar_documentos_returns_lista_documentos(monkeypatch: pytest.MonkeyPa
     )
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_listar_documentos("50300.000123/2025-00"))
+    result = asyncio.run(
+        processos.sei_listar_documentos("50300.000123/2025-00", ctx=_FakeCtx(), backend="web")
+    )
     assert isinstance(result, ListaDocumentos)
     assert result.processo == "50300.000123/2025-00"
     assert result.total_documentos == 1
@@ -994,7 +1060,11 @@ def test_listar_documentos_include_raw_returns_str(monkeypatch: pytest.MonkeyPat
     fake = RecordingBackend({"documentos": [], "total_documentos": 0})
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_listar_documentos("50300.000123/2025-00", include_raw=True))
+    result = asyncio.run(
+        processos.sei_listar_documentos(
+            "50300.000123/2025-00", ctx=_FakeCtx(), backend="web", include_raw=True
+        )
+    )
     assert isinstance(result, str)
 
 
@@ -1013,7 +1083,9 @@ def test_consultar_processo_returns_processo_detalhe(monkeypatch: pytest.MonkeyP
     )
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_consultar_processo("50300.000123/2025-00", ctx=None))
+    result = asyncio.run(
+        processos.sei_consultar_processo("50300.000123/2025-00", ctx=_FakeCtx(), backend="web")
+    )
     assert isinstance(result, ProcessoDetalhe)
     assert result.protocolo == "50300.000123/2025-00"
     assert result.id_procedimento == "P123"
@@ -1030,7 +1102,9 @@ def test_consultar_processo_include_raw_returns_str(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
     result = asyncio.run(
-        processos.sei_consultar_processo("50300.000123/2025-00", ctx=None, include_raw=True)
+        processos.sei_consultar_processo(
+            "50300.000123/2025-00", ctx=_FakeCtx(), backend="web", include_raw=True
+        )
     )
     assert isinstance(result, str)
 
@@ -1111,7 +1185,9 @@ def test_listar_atividades_returns_lista_atividades(monkeypatch: pytest.MonkeyPa
     )
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
+    result = asyncio.run(
+        processos.sei_listar_atividades("50300.000123/2025-00", ctx=_FakeCtx(), backend="web")
+    )
     assert isinstance(result, ListaAtividades)
     assert result.processo.protocolo == "50300.000123/2025-00"
     assert result.processo.id_procedimento == "P1"
@@ -1132,7 +1208,11 @@ def test_listar_atividades_include_raw_returns_str(monkeypatch: pytest.MonkeyPat
     )
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00", include_raw=True))
+    result = asyncio.run(
+        processos.sei_listar_atividades(
+            "50300.000123/2025-00", ctx=_FakeCtx(), backend="web", include_raw=True
+        )
+    )
     assert isinstance(result, str)
 
 
@@ -1155,7 +1235,9 @@ def test_listar_atividades_truncado_when_over_limit(monkeypatch: pytest.MonkeyPa
     )
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
+    result = asyncio.run(
+        processos.sei_listar_atividades("50300.000123/2025-00", ctx=_FakeCtx(), backend="web")
+    )
     assert isinstance(result, ListaAtividades)
     assert result.truncado
     assert len(result.andamentos) == 50  # capped at _ATIVIDADES_LIMIT
@@ -1185,7 +1267,11 @@ def test_listar_atividades_ordem_asc(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00", ordem="asc"))
+    result = asyncio.run(
+        processos.sei_listar_atividades(
+            "50300.000123/2025-00", ctx=_FakeCtx(), backend="web", ordem="asc"
+        )
+    )
     assert isinstance(result, ListaAtividades)
     # After reverse, A (older) should come first
     assert result.andamentos[0].descricao == "A"
@@ -1211,7 +1297,9 @@ def test_listar_atividades_next_action_when_truncated(monkeypatch: pytest.Monkey
     )
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
+    result = asyncio.run(
+        processos.sei_listar_atividades("50300.000123/2025-00", ctx=_FakeCtx(), backend="web")
+    )
     assert result.truncado
     assert len(result.next_actions) == 1
     action = result.next_actions[0]
@@ -1236,7 +1324,9 @@ def test_listar_atividades_no_next_action_when_fits_in_one_page(
     )
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
-    result = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
+    result = asyncio.run(
+        processos.sei_listar_atividades("50300.000123/2025-00", ctx=_FakeCtx(), backend="web")
+    )
     assert not result.truncado
     assert result.next_actions == []
 
@@ -1262,13 +1352,19 @@ def test_listar_atividades_cursor_fetches_next_page(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(processos, "_backend", aconst(fake))
 
     # First page
-    page1 = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00"))
+    page1 = asyncio.run(
+        processos.sei_listar_atividades("50300.000123/2025-00", ctx=_FakeCtx(), backend="web")
+    )
     assert len(page1.andamentos) == 50
     assert page1.truncado
     cursor = page1.next_actions[0].args["cursor"]
 
     # Second page via cursor
-    page2 = asyncio.run(processos.sei_listar_atividades("50300.000123/2025-00", cursor=cursor))
+    page2 = asyncio.run(
+        processos.sei_listar_atividades(
+            "50300.000123/2025-00", ctx=_FakeCtx(), backend="web", cursor=cursor
+        )
+    )
     assert len(page2.andamentos) == 25
     assert not page2.truncado
     assert page2.next_actions == []
