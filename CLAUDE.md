@@ -65,6 +65,11 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - Labels de documentos parseados via regex: "Despacho GPF 2874369" → tipo=Despacho, sigla=GPF, numero=2874369
 - Tools que tinham caminho web: `sei_listar_processos`, `sei_arvore_processo`, `sei_listar_documentos`, `sei_listar_atividades`, `sei_consultar_processo` (híbrida)
 - **Desde jun/2026 (SSO Microsoft da ANTAQ) o scraper web não loga mais → essas tools rodam por REST por padrão.** O caminho web virou opt-in via `SEI_WEB_SCRAPER=1` (gate `_web_scraper_enabled()` no server.py). Bug corrigido nesse processo: `listar_atividades` REST exige o param `procedimento` (não `protocolo`)
+
+### List view enxuta de `sei_listar_processos` (para consumo por agente)
+- `src/mcp_seipro/shaping.py` (`shape_processo_resumido`) converte o payload bruto da wssei (payload de tela de detalhe, ~28 flags "S"/"N", ciências = 29% dos bytes) numa list view tipada. Reduz ~82% o payload. Spec: `docs/spec_listar_processos.md`, testes: `tests/test_shaping.py`
+- **D-1 (crítico):** `usuarioAtribuido`/`unidade` de topo da wssei NÃO é a atribuição na unidade consultada. `atribuido_unidade_atual` é derivado resolvendo por id contra `dadosAbertura.unidades[i]`↔`lista[i]` (paralelos) + regra "aberto só na unidade" + `atributos.unidade`. **Exige `sei_trocar_unidade` antes**, senão vem `null`
+- Flags viram boolean; textos passam por `html.unescape`; `prazo` extraído em ISO; hex removido do nome do marcador. `incluir_detalhe=true` reanexa ciências/anotações; `apenas_contar=true` dá contagem barata
 - `sei_resumo_processos` mantém REST direto (precisa dos flags estruturados de status para agrupamento)
 - Cache in-memory TTL 1h no SEIClient para: `pesquisar_tipos_processo`, `listar_unidades_usuario`, `pesquisar_marcadores`
 
