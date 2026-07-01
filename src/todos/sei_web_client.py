@@ -2396,7 +2396,17 @@ class SEIWebClient:
             async with self._form_lock:
                 self._form_action = None
                 self._form_hidden = {}
-                self._trabalhar_links.pop(protocolo_formatado, None)
+                # Pop by the same space-insensitive match _find_link() uses —
+                # popping the literal protocolo_formatado is not enough when
+                # the cached key only matches after normalization: login()
+                # repopulates _trabalhar_links via setdefault (never
+                # overwrites), so a stale, differently-spaced key would
+                # survive and _find_link() would keep resolving to the same
+                # expired pre-signed href on the retry.
+                proto_norm = protocolo_formatado.replace(" ", "")
+                for k in list(self._trabalhar_links):
+                    if k == protocolo_formatado or k.replace(" ", "") == proto_norm:
+                        self._trabalhar_links.pop(k, None)
             await self.login()
             return await self._gerar_arquivo_processo(protocolo_formatado, acao, _relogin=False)
 
