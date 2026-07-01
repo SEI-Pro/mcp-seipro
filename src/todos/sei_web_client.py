@@ -253,6 +253,71 @@ def _coletar_estado_form(form: Tag) -> dict[str, str]:
     return estado
 
 
+class _ReauthTransport(httpx.AsyncBaseTransport):
+    """Wraps the real transport to centrally detect and self-heal a dead SEI session.
+
+    Before this, session-expiry detection (``_is_login_page``) was scattered
+    across a handful of ``SEIWebClient`` methods that happened to check for
+    it — most of the file's ~90 GET/POST call sites had no such check at
+    all, so a session expiring mid-flow surfaced as a confusing downstream
+    parse error instead of a clean relogin. Centralizing at the transport
+    covers every call site uniformly, present and future, without each one
+    having to remember to add the check.
+
+    Retries both GET and POST once. This matches the retry assumption
+    already used throughout ``sei_web_client.py`` for POSTs: SEI's session
+    filter rejects the request (redirects to the login page) *before* any
+    business logic runs, so a login-page response means the write was never
+    applied — resending it after a fresh login is safe, not a double-submit.
+    The one known residual risk (accepted, not new: existing per-method
+    retries already carried it) is a session invalidated by something
+    *other* than the request-in-flight (e.g. a concurrent login elsewhere)
+    racing with an in-flight write — vanishingly rare against a single-user
+    session, and the same assumption every prior retry site already made.
+
+    A single retry per request is enough here — this transport only needs
+    to get a *fresh* response back to the caller; if that's still a login
+    page (e.g. genuinely bad credentials), the higher-level per-method
+    ``_relogin`` guards (see ``_gerar_arquivo_processo`` etc.) already turn
+    that into a clear ``SEIAuthError`` instead of retrying forever.
+    """
+
+    def __init__(self, wrapped: httpx.AsyncBaseTransport, client: SEIWebClient) -> None:
+        self._wrapped = wrapped
+        self._client = client
+        self._reauth_lock = asyncio.Lock()
+        # Reentrancy guard: login() sends its own GET/POST through this same
+        # transport — those must never trigger another relogin attempt.
+        self._in_reauth = False
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self._wrapped.handle_async_request(request)
+        if self._in_reauth or request.method not in ("GET", "POST"):
+            return response
+
+        await response.aread()
+        peek = response.content[:_LOGIN_PAGE_PEEK_BYTES].decode("utf-8", errors="replace")
+        if not _is_login_page(peek):
+            return response
+
+        async with self._reauth_lock:
+            logger.info(
+                "SEIWebClient transport: sessão SEI expirou (detectado em %s %s), re-logando",
+                request.method,
+                request.url,
+            )
+            self._in_reauth = True
+            try:
+                await self._client.login()
+            finally:
+                self._in_reauth = False
+
+        return await self._wrapped.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._wrapped.aclose()
+
+
 class SEIWebClient:
     """Cliente HTTP assíncrono para o frontend web do SEI.
 
@@ -349,8 +414,13 @@ class SEIWebClient:
             f"?sigla_orgao_sistema={_sigla_orgao_sistema}&sigla_sistema={self._sigla_sistema}"
         )
 
+        # A custom `transport=` bypasses AsyncClient's own verify/cert/etc.
+        # handling entirely (it only builds its default transport from those
+        # kwargs when no transport is given) — so the inner transport must be
+        # built with `verify=_verify` explicitly to preserve TLS verification.
+        _inner_transport = httpx.AsyncHTTPTransport(verify=_verify)
         self._http = httpx.AsyncClient(
-            verify=_verify,
+            transport=_ReauthTransport(_inner_transport, self),
             follow_redirects=True,
             timeout=httpx.Timeout(60.0, connect=10.0, read=45.0),
             headers={
