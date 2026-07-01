@@ -480,6 +480,21 @@ def test_trocar_unidade_web_connection_error_becomes_sei_connection_error() -> N
         asyncio.run(c.trocar_unidade("42"))
 
 
+class _WebTrocaConnErrNoMessage(SEIBackend):
+    name = "web"
+
+    async def trocar_unidade(self, id_unidade: str) -> dict:
+        del id_unidade
+        msg = ""
+        raise httpx.ConnectError(msg)
+
+
+def test_trocar_unidade_connection_error_message_never_blank() -> None:
+    c = CompositeBackend(_RestRecordsTroca(), _WebTrocaConnErrNoMessage())
+    with pytest.raises(SEIConnectionError, match=r"SEI inacessível: ConnectError"):
+        asyncio.run(c.trocar_unidade("42"))
+
+
 def test_trocar_unidade_suppresses_rest_sync_failure() -> None:
     # REST sync is best-effort: a failure there must not break the web success.
     c = CompositeBackend(_RestTrocaRaises(), _WebTrocaOk())
@@ -517,6 +532,23 @@ def test_dispatcher_transport_error_surfaces_when_no_fallback() -> None:
     # must be what propagates, since it is the more informative error.
     c = CompositeBackend(_RestTransportErr(), _WebRaises())
     with pytest.raises(SEIConnectionError):
+        asyncio.run(c.verificar_acesso("X"))
+
+
+class _RestTransportErrNoMessage(SEIBackend):
+    name = "rest"
+
+    async def verificar_acesso(self, processo: str) -> dict:
+        del processo
+        # An empty message on the underlying httpx exception must not produce
+        # a blank "SEI inacessível: " with no diagnostic info at all.
+        msg = ""
+        raise httpx.ConnectTimeout(msg)
+
+
+def test_dispatcher_transport_error_message_never_blank_even_without_str() -> None:
+    c = CompositeBackend(_RestTransportErrNoMessage(), _WebRaises())
+    with pytest.raises(SEIConnectionError, match=r"SEI inacessível: ConnectTimeout"):
         asyncio.run(c.verificar_acesso("X"))
 
 
