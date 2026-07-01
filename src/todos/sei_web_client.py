@@ -306,10 +306,6 @@ class _ReauthTransport(httpx.AsyncBaseTransport):
         # inside login(), silently handing unrelated in-flight requests a
         # stale login-page response instead of retrying them.
         self._reauth_tasks: set[asyncio.Task[Any]] = set()
-        # Bumped each time a relogin completes; lets a waiter that queued up
-        # behind `_reauth_lock` notice another request already fixed the
-        # session and skip its own redundant login() call.
-        self._reauth_generation = 0
 
     @contextmanager
     def _task_suppressed(self) -> Iterator[None]:
@@ -349,19 +345,27 @@ class _ReauthTransport(httpx.AsyncBaseTransport):
         if not _peek_is_login_page(response.content):
             return response
 
-        generation_seen = self._reauth_generation
         async with self._reauth_lock:
-            if self._reauth_generation == generation_seen:
-                logger.info(
-                    "SEIWebClient transport: sessão SEI expirou (detectado em %s %s), re-logando",
-                    request.method,
-                    request.url,
-                )
-                with self._task_suppressed():
-                    await self._client.login()
-                self._reauth_generation += 1
-            # else: another request already relogged in while we waited for
-            # the lock — reuse that fresh session instead of logging in again.
+            # Re-probe rather than trust the staleness this coroutine
+            # observed before acquiring the lock: another request may have
+            # already relogged in (even before this one got here) — a
+            # generation counter compared against a snapshot taken earlier
+            # can't tell "already fixed" apart from "I'm just late reading a
+            # value that was bumped after my snapshot", since a delayed
+            # response only reads the counter once, right here. Resending
+            # is the only thing that can tell for sure.
+            response = await self._wrapped.handle_async_request(request)
+            await response.aread()
+            if not _peek_is_login_page(response.content):
+                return response
+
+            logger.info(
+                "SEIWebClient transport: sessão SEI expirou (detectado em %s %s), re-logando",
+                request.method,
+                request.url,
+            )
+            with self._task_suppressed():
+                await self._client.login()
 
         return await self._wrapped.handle_async_request(request)
 

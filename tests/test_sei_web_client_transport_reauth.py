@@ -87,10 +87,11 @@ class TestReauthTransportPassthrough:
 class TestReauthTransportSelfHeals:
     def test_get_expiry_triggers_relogin_and_retry(self) -> None:
         calls = {"n": 0}
+        session_valid = {"v": False}
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls["n"] += 1
-            if calls["n"] == 1:
+            if not session_valid["v"]:
                 return httpx.Response(200, text=_LOGIN_PAGE, request=request)
             return httpx.Response(200, text="<html>conteúdo real</html>", request=request)
 
@@ -101,6 +102,7 @@ class TestReauthTransportSelfHeals:
             async def login(self) -> None:
                 nonlocal login_calls
                 login_calls += 1
+                session_valid["v"] = True
 
         transport = _ReauthTransport(wrapped, _FakeClient())  # type: ignore[arg-type]
 
@@ -111,7 +113,8 @@ class TestReauthTransportSelfHeals:
         response = asyncio.run(run())
         assert response.status_code == 200
         assert "conteúdo real" in response.text
-        assert calls["n"] == 2  # first (expired) + retry (fresh)
+        # initial (expired) + re-probe under the lock (still expired) + final retry (fresh)
+        assert calls["n"] == 3
         assert login_calls == 1
 
     def test_post_expiry_triggers_relogin_and_resends_the_body(self) -> None:
@@ -169,7 +172,8 @@ class TestReauthTransportSelfHeals:
 
         response = asyncio.run(run())
         assert "txtUsuario" in response.text
-        assert calls["n"] == 2  # exactly one retry, not unbounded
+        # initial + re-probe under the lock + final retry — still bounded, not unbounded
+        assert calls["n"] == 3
         assert login_calls == 1
 
     def test_login_own_requests_do_not_trigger_nested_reauth(self) -> None:
@@ -242,23 +246,32 @@ class TestReauthTransportPreservesTLSVerification:
 class TestReauthTransportAvoidsRedundantRelogin:
     def test_concurrent_expiry_detections_share_a_single_relogin(self) -> None:
         """Two requests that both observe an expired session concurrently
-        must not each perform their own full login() — the double-checked
-        generation counter lets the second waiter notice the first already
-        fixed the session and skip its own redundant login().
+        must not each perform their own full login() — whichever one queues
+        up behind `_reauth_lock` must re-probe (resend) rather than trust a
+        snapshot taken before it waited, so it notices the session the first
+        request just fixed and skips its own redundant login().
 
-        Ordering is forced deterministically (rather than left to scheduler
-        luck) with two real await-points: the handler yields once per
-        expired-session response, and the fake login() yields once too —
-        together they guarantee request B reaches its own generation_seen
-        snapshot (still 0) while request A is still inside its login()
-        call, before A has bumped the generation counter."""
+        The handler models a real dead-then-fixed session (`session_valid`),
+        not an arbitrary call-count threshold — a request only ever gets a
+        login page while the session is genuinely still dead, and the fake
+        login() is what flips it valid. This is what makes the test able to
+        catch a generation-*counter* implementation that only compares a
+        snapshot against the current value: such a counter can't tell "the
+        session was already fixed before I even asked" apart from "no fix
+        has happened yet", because a coroutine that is scheduled late reads
+        the post-fix counter value on its first (and only) read of it.
+        Only an actual resend can tell the two apart, which is what this
+        test would fail against if the retry logic went back to trusting a
+        cheap in-memory snapshot instead of re-probing under the lock."""
         calls = {"n": 0}
 
         async def run() -> tuple[list[httpx.Response], int]:
+            session_valid = {"v": False}
+
             async def handler(request: httpx.Request) -> httpx.Response:
                 calls["n"] += 1
-                if calls["n"] <= 2:
-                    await asyncio.sleep(0)
+                if not session_valid["v"]:
+                    await asyncio.sleep(0)  # let both requests observe the dead session
                     return httpx.Response(200, text=_LOGIN_PAGE, request=request)
                 return httpx.Response(200, text="<html>conteúdo real</html>", request=request)
 
@@ -270,6 +283,7 @@ class TestReauthTransportAvoidsRedundantRelogin:
                     nonlocal login_calls
                     login_calls += 1
                     await asyncio.sleep(0)
+                    session_valid["v"] = True
 
             transport = _ReauthTransport(wrapped, _FakeClient())  # type: ignore[arg-type]
             async with httpx.AsyncClient(transport=transport) as http:
