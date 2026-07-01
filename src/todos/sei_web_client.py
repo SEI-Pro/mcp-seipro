@@ -23,6 +23,7 @@ import mimetypes
 import re
 import time
 import warnings
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -33,6 +34,7 @@ import httpx
 from bs4 import BeautifulSoup, Tag
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
     from types import ModuleType
 
 from todos.backends.models import (
@@ -151,6 +153,31 @@ def _check(r: httpx.Response) -> None:
         raise SEIValidationError(str(exc)) from exc
 
 
+_LOGIN_PAGE_PEEK_BYTES = 8192  # login forms sit near the top; no need to decode a whole PDF/ZIP
+
+
+def _is_login_page(body: str) -> bool:
+    """Detect whether *body* is the SEI login page instead of the page requested.
+
+    A dead SIP session doesn't fail with 401/403 — the server answers HTTP
+    200 with the login form's HTML. ``_check()`` can't catch this (it only
+    looks at status codes), so every multi-step scrape must inspect the body
+    for this marker to tell "session expired mid-flow" apart from "a normal
+    parse failure".
+    """
+    return 'name="txtUsuario"' in body or 'id="txtUsuario"' in body
+
+
+def _peek_is_login_page(content: bytes) -> bool:
+    """Like ``_is_login_page``, but only decodes a bounded byte prefix.
+
+    Used where decoding the full body would be wasteful (e.g. a large PDF/ZIP
+    download) — the login form's marker always sits near the top when present.
+    """
+    peek = content[:_LOGIN_PAGE_PEEK_BYTES].decode("utf-8", errors="replace")
+    return _is_login_page(peek)
+
+
 def _safe_int(val: str, default: int = 0) -> int:
     """Convert val to int, returning default on ValueError (e.g. server returns 'N/A')."""
     try:
@@ -236,6 +263,123 @@ def _coletar_estado_form(form: Tag) -> dict[str, str]:
         if name:
             estado[name] = ta.get_text()
     return estado
+
+
+class _ReauthTransport(httpx.AsyncBaseTransport):
+    """Wraps the real transport to centrally detect and self-heal a dead SEI session.
+
+    Before this, session-expiry detection (``_is_login_page``) was scattered
+    across a handful of ``SEIWebClient`` methods that happened to check for
+    it — most of the file's ~90 GET/POST call sites had no such check at
+    all, so a session expiring mid-flow surfaced as a confusing downstream
+    parse error instead of a clean relogin. Centralizing at the transport
+    covers every call site uniformly, present and future, without each one
+    having to remember to add the check.
+
+    Retries both GET and POST once. This matches the retry assumption
+    already used throughout ``sei_web_client.py`` for POSTs: SEI's session
+    filter rejects the request (redirects to the login page) *before* any
+    business logic runs, so a login-page response means the write was never
+    applied — resending it after a fresh login is safe, not a double-submit.
+    The one known residual risk (accepted, not new: existing per-method
+    retries already carried it) is a session invalidated by something
+    *other* than the request-in-flight (e.g. a concurrent login elsewhere)
+    racing with an in-flight write — vanishingly rare against a single-user
+    session, and the same assumption every prior retry site already made.
+
+    A single retry per request is enough here — this transport only needs
+    to get a *fresh* response back to the caller; if that's still a login
+    page (e.g. genuinely bad credentials), the higher-level per-method
+    ``_relogin`` guards (see ``_gerar_arquivo_processo`` etc.) already turn
+    that into a clear ``SEIAuthError`` instead of retrying forever.
+    """
+
+    def __init__(self, wrapped: httpx.AsyncBaseTransport, client: SEIWebClient) -> None:
+        self._wrapped = wrapped
+        self._client = client
+        self._reauth_lock = asyncio.Lock()
+        # Reentrancy guard: login() sends its own GET/POST through this same
+        # transport — those must never trigger another relogin attempt (see
+        # `suppressed()`, which SEIWebClient.login() wraps itself in). Scoped
+        # per-asyncio.Task (not a plain bool) — a plain bool would suppress
+        # detection for *every* concurrent request while any one task is
+        # inside login(), silently handing unrelated in-flight requests a
+        # stale login-page response instead of retrying them.
+        self._reauth_tasks: set[asyncio.Task[Any]] = set()
+
+    @contextmanager
+    def _task_suppressed(self) -> Iterator[None]:
+        """Mark the current asyncio task as exempt from reauth interception."""
+        task = asyncio.current_task()
+        added = task is not None and task not in self._reauth_tasks
+        if added:
+            self._reauth_tasks.add(task)
+        try:
+            yield
+        finally:
+            if added and task is not None:
+                self._reauth_tasks.discard(task)
+
+    def _is_suppressed(self) -> bool:
+        task = asyncio.current_task()
+        return task is not None and task in self._reauth_tasks
+
+    @asynccontextmanager
+    async def suppressed(self) -> AsyncIterator[None]:
+        """Suppress reauth interception for the duration of the block.
+
+        SEIWebClient.login() wraps its own body in this: its GET to the login
+        page naturally returns login-page HTML, which would otherwise look
+        identical to a session expiring mid-flow and trigger a redundant
+        nested login() call.
+        """
+        with self._task_suppressed():
+            yield
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self._wrapped.handle_async_request(request)
+        if self._is_suppressed() or request.method not in ("GET", "POST"):
+            return response
+
+        await response.aread()
+        if not _peek_is_login_page(response.content):
+            return response
+
+        async with self._reauth_lock:
+            # Re-probe rather than trust the staleness this coroutine
+            # observed before acquiring the lock: another request may have
+            # already relogged in (even before this one got here) — a
+            # generation counter compared against a snapshot taken earlier
+            # can't tell "already fixed" apart from "I'm just late reading a
+            # value that was bumped after my snapshot", since a delayed
+            # response only reads the counter once, right here. Resending
+            # is the only thing that can tell for sure.
+            #
+            # Refresh the Cookie header before every resend: httpx bakes it
+            # into `request` once, at build time, from the jar as it stood
+            # then — it won't pick up a session cookie an intervening
+            # login() just rotated on its own. Without this, a resend after
+            # someone else's (or our own) relogin can replay the pre-login
+            # cookie and look like the session is still dead.
+            self._client.refresh_request_cookies(request)
+            response = await self._wrapped.handle_async_request(request)
+            await response.aread()
+            if not _peek_is_login_page(response.content):
+                return response
+
+            logger.info(
+                "SEIWebClient transport: sessão SEI expirou (detectado em %s %s), re-logando",
+                request.method,
+                request.url,
+            )
+            with self._task_suppressed():
+                await self._client.login()
+
+        self._client.refresh_request_cookies(request)
+        return await self._wrapped.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._wrapped.aclose()
 
 
 class SEIWebClient:
@@ -334,8 +478,14 @@ class SEIWebClient:
             f"?sigla_orgao_sistema={_sigla_orgao_sistema}&sigla_sistema={self._sigla_sistema}"
         )
 
+        # A custom `transport=` bypasses AsyncClient's own verify/cert/etc.
+        # handling entirely (it only builds its default transport from those
+        # kwargs when no transport is given) — so the inner transport must be
+        # built with `verify=_verify` explicitly to preserve TLS verification.
+        _inner_transport = httpx.AsyncHTTPTransport(verify=_verify)
+        self._reauth_transport = _ReauthTransport(_inner_transport, self)
         self._http = httpx.AsyncClient(
-            verify=_verify,
+            transport=self._reauth_transport,
             follow_redirects=True,
             timeout=httpx.Timeout(60.0, connect=10.0, read=45.0),
             headers={
@@ -398,6 +548,21 @@ class SEIWebClient:
         """True após login bem-sucedido (inbox_url capturada)."""
         return self._inbox_url is not None
 
+    def refresh_request_cookies(self, request: httpx.Request) -> None:
+        """Refresh *request*'s baked-in ``Cookie`` header from the current jar.
+
+        httpx bakes the ``Cookie`` header into a ``Request`` once, at build
+        time, from whatever the jar held then — it does not re-read the jar
+        on resend. Worse, stdlib's ``CookieJar.add_cookie_header`` (which
+        ``httpx.Cookies.set_cookie_header`` delegates to) silently refuses to
+        touch a request that already has a ``Cookie`` header, so the stale
+        header must be cleared first. ``_ReauthTransport`` calls this before
+        resending a previously-built request, so a session cookie rotated by
+        an intervening ``login()`` isn't silently replayed stale.
+        """
+        request.headers.pop("Cookie", None)
+        self._http.cookies.set_cookie_header(request)
+
     def _reset_session_state(self) -> None:
         """Limpa todo o estado de sessão para garantir retry limpo."""
         self._inbox_url = None
@@ -455,6 +620,16 @@ class SEIWebClient:
         ter sido atualizada externamente) e refaz o login uma vez — sem precisar
         reiniciar o processo.
         """
+        # Suppresses _ReauthTransport's own session-expiry detection for the
+        # duration of the whole flow below: this method's own GET to the
+        # login page naturally returns login-page HTML, which would otherwise
+        # look identical to a session expiring mid-flow and trigger a
+        # redundant nested login() call on every single login.
+        async with self._reauth_transport.suppressed():
+            await self._login_impl(_retry_keyring=_retry_keyring)
+
+    async def _login_impl(self, *, _retry_keyring: bool = True) -> None:
+        """Corpo do fluxo de login; ver ``login()`` (que suprime reauth ao redor deste método)."""
         _senha_source = self._senha_source_hint
         if not self._senha and self._keyring_user:
             keyring_user = self._keyring_user
@@ -595,7 +770,7 @@ class SEIWebClient:
         )
         if qs.get("acao") != "procedimento_controlar" or "infra_hash" not in qs:
             body = post_resp.text
-            if 'name="txtUsuario"' in body or 'id="txtUsuario"' in body:
+            if _is_login_page(body):
                 # Senha cacheada rejeitada: se a fonte é o keyring, relê (pode ter
                 # sido trocada externamente) e refaz o login uma vez — sem restart.
                 if _retry_keyring and self._keyring_user_persist:
@@ -963,7 +1138,7 @@ class SEIWebClient:
 
         # detecta sessão expirada
         body = resp.text
-        if 'name="txtUsuario"' in body or 'id="txtUsuario"' in body:
+        if _is_login_page(body):
             logger.info("Sessão SEI expirou, re-logando")
             async with self._form_lock:
                 self._form_action = None
@@ -1012,7 +1187,7 @@ class SEIWebClient:
 
         # detecta sessão expirada — a pesquisa rápida pode retornar o login
         # quando _pesquisa_rapida_action estava cacheado mas a sessão expirou
-        if 'name="txtUsuario"' in r.text or 'id="txtUsuario"' in r.text:
+        if _is_login_page(r.text):
             if not _relogin:
                 msg = "Sessão SEI expirou após re-login na pesquisa rápida — falha de autenticação."
                 raise SEIError(msg)
@@ -1356,7 +1531,7 @@ class SEIWebClient:
 
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
         _check(r1)
-        if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
+        if _is_login_page(r1.text):
             async with self._form_lock:
                 self._form_action = None
                 self._form_hidden = {}
@@ -2207,7 +2382,9 @@ class SEIWebClient:
             raise SEIConnectionError(msg)
         return _parse_procedimento_consultar(html, protocolo)
 
-    async def _gerar_arquivo_processo(self, protocolo_formatado: str, acao: str) -> bytes:
+    async def _gerar_arquivo_processo(
+        self, protocolo_formatado: str, acao: str, *, _relogin: bool = True
+    ) -> bytes:
         """Generate a PDF or ZIP archive for a process (shared by gerar_pdf/zip_processo).
 
         Five-step flow (identical for PDF and ZIP):
@@ -2216,6 +2393,13 @@ class SEIWebClient:
         3. GET form de opções
         4. POST com hdnFlagGerar=1 → HTML com ifrDownload.src
         5. GET exibir_arquivo → bytes do arquivo
+
+        A geração de PDF/ZIP de um processo grande pode levar minutos (o POST
+        do passo 4 usa timeout de 180s) — tempo de sobra para a sessão SIP
+        expirar no meio do fluxo. Cada GET/POST intermediário é checado com
+        ``_is_login_page`` (não só o passo 1, como antes); ao detectar,
+        reloga e reinicia o fluxo do zero uma única vez (``_relogin=False``
+        na retentativa evita loop infinito se o login não resolver).
         """
 
         def _find_link(proto: str) -> str | None:
@@ -2224,6 +2408,35 @@ class SEIWebClient:
                 if k == proto or k.replace(" ", "") == proto_norm:
                     return v
             return None
+
+        async def _reauth_and_retry() -> bytes:
+            if not _relogin:
+                msg = (
+                    f"Sessão SEI expirou após re-login ao gerar {acao} "
+                    f"para {protocolo_formatado} — falha de autenticação."
+                )
+                raise SEIAuthError(msg)
+            logger.info(
+                "_gerar_arquivo_processo(%s, %s): sessão SEI expirou, re-logando",
+                protocolo_formatado,
+                acao,
+            )
+            async with self._form_lock:
+                self._form_action = None
+                self._form_hidden = {}
+                # Pop by the same space-insensitive match _find_link() uses —
+                # popping the literal protocolo_formatado is not enough when
+                # the cached key only matches after normalization: login()
+                # repopulates _trabalhar_links via setdefault (never
+                # overwrites), so a stale, differently-spaced key would
+                # survive and _find_link() would keep resolving to the same
+                # expired pre-signed href on the retry.
+                proto_norm = protocolo_formatado.replace(" ", "")
+                for k in list(self._trabalhar_links):
+                    if k == protocolo_formatado or k.replace(" ", "") == proto_norm:
+                        self._trabalhar_links.pop(k, None)
+            await self.login()
+            return await self._gerar_arquivo_processo(protocolo_formatado, acao, _relogin=False)
 
         async with self._form_lock:
             _trab_href = _find_link(protocolo_formatado)
@@ -2241,12 +2454,8 @@ class SEIWebClient:
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
         _check(r1)
 
-        if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
-            async with self._form_lock:
-                self._form_action = None
-                self._form_hidden = {}
-            await self.login()
-            return await self._gerar_arquivo_processo(protocolo_formatado, acao)
+        if _is_login_page(r1.text):
+            return await _reauth_and_retry()
 
         soup_fs = BeautifulSoup(r1.text, "html.parser")
         ifr = soup_fs.find("iframe", id="ifrArvore")
@@ -2257,6 +2466,9 @@ class SEIWebClient:
 
         r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
         _check(r2)
+
+        if _is_login_page(r2.text):
+            return await _reauth_and_retry()
 
         m_link = re.search(
             rf"(controlador\.php\?acao={re.escape(acao)}[^\"'\s]*infra_hash=[a-f0-9]+)",
@@ -2272,9 +2484,11 @@ class SEIWebClient:
         r3 = await self._http.get(form_url, headers={"Referer": str(r2.url)})
         _check(r3)
 
-        soup3 = BeautifulSoup(
-            _decode_response(r3.content, r3.headers.get("content-type", "")), "html.parser"
-        )
+        body3 = _decode_response(r3.content, r3.headers.get("content-type", ""))
+        if _is_login_page(body3):
+            return await _reauth_and_retry()
+
+        soup3 = BeautifulSoup(body3, "html.parser")
         form = soup3.find("form", id=re.compile(r"(?i)frmProcedimento(Pdf|Zip)"))
         if not form:
             msg = "Formulário frmProcedimento(Pdf|Zip) não encontrado"
@@ -2299,6 +2513,9 @@ class SEIWebClient:
         _check(r4)
 
         body4 = _decode_response(r4.content, r4.headers.get("content-type", ""))
+        if _is_login_page(body4):
+            return await _reauth_and_retry()
+
         m_dl = re.search(
             r"getElementById\(['\"]ifrDownload['\"]\)\.src\s*=\s*'([^']+)'",
             body4,
@@ -2314,6 +2531,11 @@ class SEIWebClient:
 
         r5 = await self._http.get(download_url, headers={"Referer": str(r4.url)})
         _check(r5)
+
+        # Peek at a bounded prefix rather than trust the server's Content-Type
+        # header (unreliable) or decode a potentially huge PDF/ZIP body in full.
+        if _peek_is_login_page(r5.content):
+            return await _reauth_and_retry()
 
         return r5.content
 
@@ -3938,7 +4160,7 @@ class SEIWebClient:
         # --- Step 1: trabalhar → frameset ---
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
         _check(r1)
-        if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
+        if _is_login_page(r1.text):
             async with self._form_lock:
                 self._form_action = None
             await self.login()
