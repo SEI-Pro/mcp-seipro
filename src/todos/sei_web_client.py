@@ -151,6 +151,21 @@ def _check(r: httpx.Response) -> None:
         raise SEIValidationError(str(exc)) from exc
 
 
+_LOGIN_PAGE_PEEK_BYTES = 8192  # login forms sit near the top; no need to decode a whole PDF/ZIP
+
+
+def _is_login_page(body: str) -> bool:
+    """Detect whether *body* is the SEI login page instead of the page requested.
+
+    A dead SIP session doesn't fail with 401/403 — the server answers HTTP
+    200 with the login form's HTML. ``_check()`` can't catch this (it only
+    looks at status codes), so every multi-step scrape must inspect the body
+    for this marker to tell "session expired mid-flow" apart from "a normal
+    parse failure".
+    """
+    return 'name="txtUsuario"' in body or 'id="txtUsuario"' in body
+
+
 def _safe_int(val: str, default: int = 0) -> int:
     """Convert val to int, returning default on ValueError (e.g. server returns 'N/A')."""
     try:
@@ -595,7 +610,7 @@ class SEIWebClient:
         )
         if qs.get("acao") != "procedimento_controlar" or "infra_hash" not in qs:
             body = post_resp.text
-            if 'name="txtUsuario"' in body or 'id="txtUsuario"' in body:
+            if _is_login_page(body):
                 # Senha cacheada rejeitada: se a fonte é o keyring, relê (pode ter
                 # sido trocada externamente) e refaz o login uma vez — sem restart.
                 if _retry_keyring and self._keyring_user_persist:
@@ -963,7 +978,7 @@ class SEIWebClient:
 
         # detecta sessão expirada
         body = resp.text
-        if 'name="txtUsuario"' in body or 'id="txtUsuario"' in body:
+        if _is_login_page(body):
             logger.info("Sessão SEI expirou, re-logando")
             async with self._form_lock:
                 self._form_action = None
@@ -1012,7 +1027,7 @@ class SEIWebClient:
 
         # detecta sessão expirada — a pesquisa rápida pode retornar o login
         # quando _pesquisa_rapida_action estava cacheado mas a sessão expirou
-        if 'name="txtUsuario"' in r.text or 'id="txtUsuario"' in r.text:
+        if _is_login_page(r.text):
             if not _relogin:
                 msg = "Sessão SEI expirou após re-login na pesquisa rápida — falha de autenticação."
                 raise SEIError(msg)
@@ -1356,7 +1371,7 @@ class SEIWebClient:
 
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
         _check(r1)
-        if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
+        if _is_login_page(r1.text):
             async with self._form_lock:
                 self._form_action = None
                 self._form_hidden = {}
@@ -2207,7 +2222,9 @@ class SEIWebClient:
             raise SEIConnectionError(msg)
         return _parse_procedimento_consultar(html, protocolo)
 
-    async def _gerar_arquivo_processo(self, protocolo_formatado: str, acao: str) -> bytes:
+    async def _gerar_arquivo_processo(
+        self, protocolo_formatado: str, acao: str, *, _relogin: bool = True
+    ) -> bytes:
         """Generate a PDF or ZIP archive for a process (shared by gerar_pdf/zip_processo).
 
         Five-step flow (identical for PDF and ZIP):
@@ -2216,6 +2233,13 @@ class SEIWebClient:
         3. GET form de opções
         4. POST com hdnFlagGerar=1 → HTML com ifrDownload.src
         5. GET exibir_arquivo → bytes do arquivo
+
+        A geração de PDF/ZIP de um processo grande pode levar minutos (o POST
+        do passo 4 usa timeout de 180s) — tempo de sobra para a sessão SIP
+        expirar no meio do fluxo. Cada GET/POST intermediário é checado com
+        ``_is_login_page`` (não só o passo 1, como antes); ao detectar,
+        reloga e reinicia o fluxo do zero uma única vez (``_relogin=False``
+        na retentativa evita loop infinito se o login não resolver).
         """
 
         def _find_link(proto: str) -> str | None:
@@ -2224,6 +2248,25 @@ class SEIWebClient:
                 if k == proto or k.replace(" ", "") == proto_norm:
                     return v
             return None
+
+        async def _reauth_and_retry() -> bytes:
+            if not _relogin:
+                msg = (
+                    f"Sessão SEI expirou após re-login ao gerar {acao} "
+                    f"para {protocolo_formatado} — falha de autenticação."
+                )
+                raise SEIAuthError(msg)
+            logger.info(
+                "_gerar_arquivo_processo(%s, %s): sessão SEI expirou, re-logando",
+                protocolo_formatado,
+                acao,
+            )
+            async with self._form_lock:
+                self._form_action = None
+                self._form_hidden = {}
+                self._trabalhar_links.pop(protocolo_formatado, None)
+            await self.login()
+            return await self._gerar_arquivo_processo(protocolo_formatado, acao, _relogin=False)
 
         async with self._form_lock:
             _trab_href = _find_link(protocolo_formatado)
@@ -2241,12 +2284,8 @@ class SEIWebClient:
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
         _check(r1)
 
-        if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
-            async with self._form_lock:
-                self._form_action = None
-                self._form_hidden = {}
-            await self.login()
-            return await self._gerar_arquivo_processo(protocolo_formatado, acao)
+        if _is_login_page(r1.text):
+            return await _reauth_and_retry()
 
         soup_fs = BeautifulSoup(r1.text, "html.parser")
         ifr = soup_fs.find("iframe", id="ifrArvore")
@@ -2257,6 +2296,9 @@ class SEIWebClient:
 
         r2 = await self._http.get(arvore_url, headers={"Referer": trab_url})
         _check(r2)
+
+        if _is_login_page(r2.text):
+            return await _reauth_and_retry()
 
         m_link = re.search(
             rf"(controlador\.php\?acao={re.escape(acao)}[^\"'\s]*infra_hash=[a-f0-9]+)",
@@ -2272,9 +2314,11 @@ class SEIWebClient:
         r3 = await self._http.get(form_url, headers={"Referer": str(r2.url)})
         _check(r3)
 
-        soup3 = BeautifulSoup(
-            _decode_response(r3.content, r3.headers.get("content-type", "")), "html.parser"
-        )
+        body3 = _decode_response(r3.content, r3.headers.get("content-type", ""))
+        if _is_login_page(body3):
+            return await _reauth_and_retry()
+
+        soup3 = BeautifulSoup(body3, "html.parser")
         form = soup3.find("form", id=re.compile(r"(?i)frmProcedimento(Pdf|Zip)"))
         if not form:
             msg = "Formulário frmProcedimento(Pdf|Zip) não encontrado"
@@ -2299,6 +2343,9 @@ class SEIWebClient:
         _check(r4)
 
         body4 = _decode_response(r4.content, r4.headers.get("content-type", ""))
+        if _is_login_page(body4):
+            return await _reauth_and_retry()
+
         m_dl = re.search(
             r"getElementById\(['\"]ifrDownload['\"]\)\.src\s*=\s*'([^']+)'",
             body4,
@@ -2314,6 +2361,12 @@ class SEIWebClient:
 
         r5 = await self._http.get(download_url, headers={"Referer": str(r4.url)})
         _check(r5)
+
+        # Peek at a bounded prefix rather than trust the server's Content-Type
+        # header (unreliable) or decode a potentially huge PDF/ZIP body in full.
+        # A real login page's txtUsuario marker always sits near the top.
+        if _is_login_page(r5.content[:_LOGIN_PAGE_PEEK_BYTES].decode("utf-8", errors="replace")):
+            return await _reauth_and_retry()
 
         return r5.content
 
@@ -3938,7 +3991,7 @@ class SEIWebClient:
         # --- Step 1: trabalhar → frameset ---
         r1 = await self._http.get(trab_url, headers={"Referer": str(self._inbox_url)})
         _check(r1)
-        if 'name="txtUsuario"' in r1.text or 'id="txtUsuario"' in r1.text:
+        if _is_login_page(r1.text):
             async with self._form_lock:
                 self._form_action = None
             await self.login()

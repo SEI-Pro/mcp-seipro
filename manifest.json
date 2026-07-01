@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "todos",
   "display_name": "todos",
-  "version": "0.5.65",
+  "version": "0.5.66",
   "description": "TOdos Domina O Sei — 127 ferramentas para o SEI, scraper web-first, funciona em qualquer instância (com ou sem mod-wssei).",
   "long_description": "TOdos Domina O Sei: servidor MCP para o SEI (Sistema Eletrônico de Informações) com arquitetura web-first. Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. Funciona em qualquer instância SEI 4.0+ — inclusive sem mod-wssei instalado. Cobre processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais. Operações de leitura críticas usam scraper web (23× mais rápido que REST). Metadados estáticos em cache TTL 1h.",
   "author": {
