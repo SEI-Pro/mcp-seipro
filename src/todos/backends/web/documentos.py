@@ -221,10 +221,6 @@ class DocumentosWeb(_WebMixin):
         tipo = raw_tipo if raw_tipo in ("I", "X") else "auto"
         return doc["id"], tipo
 
-    async def requer_id_serie(self) -> bool:
-        """Web não exige id_serie para criar documentos internos."""
-        return False
-
     async def listar_assinaturas(
         self, id_documento: str, processo: str | None = None
     ) -> list[dict]:

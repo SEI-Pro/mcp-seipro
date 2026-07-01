@@ -51,6 +51,17 @@ def _safe_int(val: str | int | None, default: int = 0) -> int:
         return default
 
 
+def _msg_inacessivel(exc: httpx.TransportError, prefixo: str = "SEI inacessível") -> str:
+    """Monta a mensagem de erro incluindo o tipo da exceção.
+
+    ``str(exc)`` em exceções httpx de timeout/conexão (ex.: ``ConnectTimeout``,
+    ``ReadTimeout``) costuma ser vazio — sem o nome do tipo, a mensagem final
+    viraria só "SEI inacessível: ", sem nenhuma pista do que realmente falhou.
+    """
+    detalhe = str(exc) or type(exc).__name__
+    return f"{prefixo}: {detalhe}"
+
+
 _CAMPOS_PESQUISA_PROCESSO: dict[str, str] = {
     "palavras_chave": "palavrasChave",
     "descricao": "descricao",
@@ -243,8 +254,7 @@ class SEIClient:
                 raise SEINotFoundError(msg)
             resp.raise_for_status()
         except httpx.TransportError as e:
-            msg = f"SEI inacessível: {e}"
-            raise SEIConnectionError(msg) from e
+            raise SEIConnectionError(_msg_inacessivel(e)) from e
         except SEIError:
             raise
         except httpx.HTTPStatusError as e:
@@ -289,8 +299,9 @@ class SEIClient:
             )
             resp.raise_for_status()
         except httpx.TransportError as e:
-            msg = f"SEI inacessível durante autenticação: {e}"
-            raise SEIConnectionError(msg) from e
+            raise SEIConnectionError(
+                _msg_inacessivel(e, "SEI inacessível durante autenticação")
+            ) from e
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (401, 403):
                 msg = "Credenciais rejeitadas pelo SEI REST (401/403)."

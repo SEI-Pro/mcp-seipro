@@ -10,7 +10,7 @@ ser objetos reais (não strings adiadas).
 
 from fastmcp import Context
 
-from todos.mcp_app import _DEST, _READ, _backend, _json, mcp
+from todos.mcp_app import _DEST, _READ, _json, _rest_backend, mcp
 from todos.responses import CredenciamentoSEI, NextAction, PaginadoGenerico
 
 
@@ -24,7 +24,7 @@ async def sei_listar_credenciamentos(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     raw = await backend.listar_credenciamentos(processo)
     itens = [CredenciamentoSEI.model_validate(c) for c in raw]
     if itens:
@@ -62,7 +62,7 @@ async def sei_conceder_credenciamento(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.conceder_credenciamento(processo, id_usuario)
     return _json(result)
 
@@ -78,7 +78,7 @@ async def sei_renunciar_credenciamento(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.renunciar_credenciamento(processo)
     return _json(result)
 
@@ -94,6 +94,6 @@ async def sei_cassar_credenciamento(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.cassar_credenciamento(processo, id_usuario)
     return _json(result)

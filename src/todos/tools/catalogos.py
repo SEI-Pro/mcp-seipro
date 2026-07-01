@@ -12,7 +12,17 @@ ser objetos reais (não strings adiadas).
 
 from fastmcp import Context
 
-from todos.mcp_app import _READ, _WRITE, _add_cursor, _backend, _decode_cursor, _json, mcp
+from todos.backends.choice import requires_backend
+from todos.mcp_app import (
+    _READ,
+    _WRITE,
+    _add_cursor,
+    _backend,
+    _decode_cursor,
+    _json,
+    _rest_backend,
+    mcp,
+)
 from todos.responses import (
     AssuntoSEI,
     ContatoSEI,
@@ -29,6 +39,7 @@ _DEFAULT_LIMIT = 50
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_pesquisar_hipoteses_legais(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
@@ -81,6 +92,7 @@ async def sei_pesquisar_hipoteses_legais(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_pesquisar_tipos_processo(
     filtro: str = "",
     favoritos: str = "",
@@ -137,6 +149,7 @@ async def sei_pesquisar_tipos_processo(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_pesquisar_tipos_documento(
     filtro: str = "",
     favoritos: str = "",
@@ -200,6 +213,7 @@ async def sei_pesquisar_tipos_documento(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_pesquisar_tipos_documento_externo(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
@@ -244,6 +258,7 @@ async def sei_pesquisar_tipos_documento_externo(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_pesquisar_tipos_conferencia(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
@@ -294,6 +309,7 @@ async def sei_pesquisar_tipos_conferencia(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_pesquisar_assuntos(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
@@ -337,6 +353,7 @@ async def sei_pesquisar_assuntos(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_pesquisar_contatos(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
@@ -394,12 +411,13 @@ async def sei_criar_contato(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.criar_contato(nome, tipo=tipo, email=email, telefone=telefone)
     return _json(result)
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_pesquisar_textos_padrao(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
@@ -444,6 +462,7 @@ async def sei_pesquisar_textos_padrao(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_grupos_modelos(
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
@@ -478,6 +497,7 @@ async def sei_listar_grupos_modelos(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_modelos(
     id_grupo: str = "",
     filtro: str = "",
@@ -533,6 +553,6 @@ async def sei_sugestao_assuntos_processo(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.sugestao_assuntos_processo(id_tipo_processo)
     return _json(result)

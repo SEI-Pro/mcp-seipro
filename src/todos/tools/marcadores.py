@@ -12,6 +12,7 @@ ser objetos reais (não strings adiadas).
 
 from fastmcp import Context
 
+from todos.backends.choice import requires_backend
 from todos.exceptions import SEIValidationError
 from todos.mcp_app import (
     _DEST,
@@ -20,6 +21,8 @@ from todos.mcp_app import (
     _WRITE,
     _backend,
     _json,
+    _rest_backend,
+    _web_backend,
     mcp,
 )
 
@@ -38,7 +41,7 @@ async def sei_criar_marcador(
     - id_cor: ID da cor (use sei_listar_cores_marcador para ver opções).
       Se omitido, lista as cores disponíveis para escolha.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     if not id_cor:
         cores = await backend.listar_cores_marcador()
         disponiveis = ", ".join(str(c) for c in cores) if cores else "(nenhuma retornada)"
@@ -59,12 +62,13 @@ async def sei_excluir_marcador(
     o marcador mas manter o histórico — excluir remove o marcador de TODOS os
     processos que o tinham aplicado sem possibilidade de recuperação.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.excluir_marcadores(ids_marcadores)
     return _json(result)
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_marcar_processo(
     processo: str,
     marcador: str,
@@ -105,12 +109,13 @@ async def sei_desmarcar_processo(
       os marcadores aplicados no processo
 
     """
-    backend = await _backend(ctx)
+    backend = await _web_backend(ctx)
     result = await backend.desmarcar_processo(processo, marcador)
     return _json(result)
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_pesquisar_marcadores(
     filtro: str = "",
     limit: int = _DEFAULT_LIMIT,
@@ -127,6 +132,7 @@ async def sei_pesquisar_marcadores(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_consultar_marcador_processo(
     processo: str,
     ctx: Context | None = None,
@@ -148,7 +154,7 @@ async def sei_historico_marcador_processo(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.historico_marcador_processo(processo)
     return _json(result)
 
@@ -163,7 +169,7 @@ async def sei_desativar_marcador(
     Marcadores desativados deixam de aparecer nas pesquisas mas
     mantêm o histórico. Use sei_reativar_marcador para reativar.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.desativar_marcadores(ids_marcadores)
     return _json(result)
 
@@ -174,6 +180,6 @@ async def sei_reativar_marcador(
     ctx: Context | None = None,
 ) -> str:
     """Reativa marcador(es) desativados. IDs separados por vírgula."""
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.reativar_marcadores(ids_marcadores)
     return _json(result)

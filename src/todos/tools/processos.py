@@ -5,8 +5,10 @@ documentos, interessados, sobrestamentos, atividades, relacionamentos),
 escrita/tramitação (criar, alterar, concluir, reabrir, receber, registrar
 andamento, anotar/observar) e geração de PDF/ZIP consolidados.
 
-Todas as tools roteiam pelo backend composto (`_backend`) — REST-first com
-fallback web — usando o protocolo formatado direto, sem resolução prévia de id.
+Tools cuja operação existe em ambos os backends expõem escolha explícita
+(`@requires_backend` + `_backend(ctx)`); as demais usam `_rest_backend`/
+`_web_backend` diretamente, sem escolha — não há fallback automático entre
+REST e web em nenhum caso.
 
 Sem `from __future__ import annotations`: o FastMCP introspecta os type hints em
 tempo de execução para montar o schema de cada tool, então as anotações precisam
@@ -23,6 +25,7 @@ from fastmcp import Context
 from pydantic import Field
 
 from todos.backends import EnvioProcesso, NovoProcesso
+from todos.backends.choice import requires_backend
 from todos.exceptions import SEIValidationError
 from todos.hints import get_hints
 from todos.mcp_app import (
@@ -37,7 +40,9 @@ from todos.mcp_app import (
     _decode_cursor,
     _encode_cursor,
     _json,
+    _rest_backend,
     _shape_resposta_escrita,
+    _web_backend,
     access_control,
     mcp,
 )
@@ -212,6 +217,7 @@ def _shape_consultar_processo(merged: dict, protocolo: str) -> ProcessoDetalhe:
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_consultar_processo(
     protocolo_formatado: _ProtocoloFormatado,
     ctx: Context,
@@ -222,16 +228,21 @@ async def sei_consultar_processo(
 
     Exemplo de protocolo: 50300.000123/2025-00
 
-    Implementação híbrida: combina REST mod-wssei (campos estruturados) com
-    scraper web (árvore de documentos), ambos em paralelo.
+    Consulta o backend escolhido em `backend` — sem composição entre REST e
+    web. `backend='rest'` traz campos estruturados (assuntos, hipotese_legal,
+    grau_sigilo, observacoes) mas nenhum documento (`total_documentos` fica 0
+    e `next_actions` não sugere sei_arvore_processo mesmo havendo documentos).
+    `backend='web'` traz a árvore de documentos e relacionados, mas nenhum
+    desses campos estruturados. Para os dois conjuntos, use
+    sei_arvore_processo (documentos) em complemento.
 
     Campos retornados (include_raw=false, padrão):
     - protocolo, tipo, especificacao, situacao, nivel_acesso
     - interessados[], unidades_abertas[], total_documentos
-    - next_actions: sugere sei_arvore_processo quando há documentos
+    - next_actions: sugere sei_arvore_processo quando há documentos (só com backend='web')
 
-    Use include_raw=true para o payload bruto completo com todos os campos
-    (assuntos, hipotese_legal, grau_sigilo, observacoes, relacionados, documentos[]).
+    Use include_raw=true para o payload bruto completo com os campos
+    disponíveis no backend escolhido (ver acima).
 
     Quando o processo é restrito ou sigiloso (nivel_acesso 1 ou 2), a resposta
     inclui `_aviso_acesso` — aviso informativo, não erro de permissão.
@@ -275,7 +286,7 @@ async def sei_arvore_processo(
     Para ler o conteúdo de um documento, use sei_ler_documento com o id.
     """
     await _validar_protocolo(protocolo_formatado, ctx)
-    backend = await _backend(ctx)
+    backend = await _web_backend(ctx)
     if ctx:
         await ctx.report_progress(0, 100, "Buscando árvore do processo…")
     result = await backend.arvore_processo(protocolo_formatado)
@@ -287,6 +298,7 @@ async def sei_arvore_processo(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_documentos(
     protocolo_formatado: _ProtocoloFormatado,
     ctx: Context | None = None,
@@ -337,6 +349,7 @@ async def sei_listar_documentos(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_unidades_processo(
     processo: str,
     ctx: Context | None = None,
@@ -355,6 +368,7 @@ async def sei_listar_unidades_processo(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_interessados(
     processo: str,
     ctx: Context | None = None,
@@ -375,6 +389,7 @@ async def sei_listar_interessados(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_sobrestamentos(
     processo: str,
     ctx: Context | None = None,
@@ -396,6 +411,7 @@ async def sei_listar_sobrestamentos(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_consultar_atribuicao(
     processo: str,
     ctx: Context | None = None,
@@ -426,12 +442,13 @@ async def sei_historico_atribuicoes(
     Útil para fluxos de trabalho (devolver ao responsável anterior).
 
     """
-    backend = await _backend(ctx)
+    backend = await _web_backend(ctx)
     result = await backend.listar_historico_atribuicoes(processo)
     return _json(result)
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_verificar_acesso(
     processo: str,
     ctx: Context | None = None,
@@ -449,6 +466,7 @@ async def sei_verificar_acesso(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_relacionamentos(
     processo: str,
     ctx: Context | None = None,
@@ -464,6 +482,7 @@ async def sei_listar_relacionamentos(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_atividades(
     processo: str,
     ctx: Context | None = None,
@@ -505,6 +524,7 @@ async def sei_listar_atividades(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_processos(
     pagina: int = 0,
     apenas_meus: str = "",
@@ -587,6 +607,7 @@ async def sei_listar_processos(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_criar_processo(
     tipo_processo: str,
     especificacao: str = "",
@@ -636,6 +657,7 @@ async def sei_criar_processo(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_alterar_processo(
     processo: str,
     especificacao: str = "",
@@ -672,6 +694,7 @@ async def sei_alterar_processo(
 
 
 @mcp.tool(annotations=_DEST)
+@requires_backend
 async def sei_concluir_processo(numero_processo: str, ctx: Context | None = None) -> str:
     """Conclui um processo na unidade atual do SEI.
 
@@ -687,6 +710,7 @@ async def sei_concluir_processo(numero_processo: str, ctx: Context | None = None
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_reabrir_processo(processo: str, ctx: Context | None = None) -> str:
     """Reabre um processo que foi concluído na unidade.
 
@@ -700,6 +724,7 @@ async def sei_reabrir_processo(processo: str, ctx: Context | None = None) -> str
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_receber_processo(
     processo: str,
     ctx: Context | None = None,
@@ -714,6 +739,7 @@ async def sei_receber_processo(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_remover_atribuicao(
     processo: str,
     ctx: Context | None = None,
@@ -728,6 +754,7 @@ async def sei_remover_atribuicao(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_remover_sobrestamento(
     processo: str,
     ctx: Context | None = None,
@@ -743,6 +770,7 @@ async def sei_remover_sobrestamento(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_registrar_andamento(
     processo: str,
     descricao: str,
@@ -760,6 +788,7 @@ async def sei_registrar_andamento(
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_criar_anotacao(
     processo: str,
     descricao: str,
@@ -790,7 +819,7 @@ async def sei_remover_anotacao(
     - processo: protocolo formatado (ex: 50300.018905/2018-67) ou IdProcedimento
 
     """
-    backend = await _backend(ctx)
+    backend = await _web_backend(ctx)
     result = await backend.remover_anotacao(processo)
     return _json(result)
 
@@ -808,12 +837,13 @@ async def sei_criar_observacao(
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.criar_observacao(processo, descricao)
     return _json(result)
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_marcar_nao_lido(
     numero_processo: str,
     ctx: Context | None = None,
@@ -826,8 +856,9 @@ async def sei_marcar_nao_lido(
 
     - numero_processo: protocolo formatado (ex: 50300.012639/2023-26)
     """
-    backend = await _backend(ctx)
-    unidade = await backend.unidade_atual()
+    # unidade_atual é web-only (sem escolha real); enviar_processo é a
+    # operação que de fato honra o `backend` escolhido pela chamada.
+    unidade = await (await _web_backend(ctx)).unidade_atual()
     id_unidade = unidade.get("id_unidade")
     if not id_unidade:
         msg = (
@@ -835,6 +866,7 @@ async def sei_marcar_nao_lido(
             f"(sigla={unidade.get('sigla', '?')}); necessário para marcar como não lido."
         )
         raise SEIValidationError(msg)
+    backend = await _backend(ctx)
     result = await backend.enviar_processo(
         numero_processo,
         EnvioProcesso(unidades_destino=id_unidade, manter_aberto="S"),
@@ -883,7 +915,7 @@ async def sei_executar_acao(
                 "acao": acao,
             }
         )
-    backend = await _backend(ctx)
+    backend = await _web_backend(ctx)
     result = await backend.executar_acao(processo, acao)
     return _json(result)
 
@@ -978,7 +1010,7 @@ async def sei_gerar_pdf_processo(
     Nota: o processo precisa estar aberto na caixa da unidade atual.
     Para processos de outras unidades, use sei_trocar_unidade primeiro.
     """
-    backend = await _backend(ctx)
+    backend = await _web_backend(ctx)
 
     if ctx:
         await ctx.report_progress(0, 100, "Gerando PDF do processo…")
@@ -1015,7 +1047,7 @@ async def sei_gerar_zip_processo(
     Retorna tamanho e caminho do arquivo salvo em disco (e base64 apenas se
     ``incluir_base64=True`` e o arquivo for pequeno o suficiente).
     """
-    backend = await _backend(ctx)
+    backend = await _web_backend(ctx)
 
     if ctx:
         await ctx.report_progress(0, 100, "Gerando ZIP do processo…")

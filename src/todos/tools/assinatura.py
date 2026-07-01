@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Literal
 import httpx
 from fastmcp import Context
 
+from todos.backends.choice import requires_backend
 from todos.exceptions import SEIConnectionError, SEIError, SEIValidationError
 from todos.html_utils import sanitize_iso8859
 from todos.mcp_app import (
@@ -25,6 +26,7 @@ from todos.mcp_app import (
     _WRITE,
     _backend,
     _json,
+    _rest_backend,
     mcp,
 )
 from todos.responses import AssinaturaSEI, NextAction, PaginadoGenerico
@@ -63,6 +65,7 @@ async def _validar_cargo(backend: "SEIBackend", cargo: str) -> None:
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_cancelar_assinatura(
     id_documento: str,
     processo: str | None = None,
@@ -151,13 +154,14 @@ async def sei_assinar_documento(
       OBRIGATÓRIO. Se omitido, retorna a lista de cargos disponíveis.
     - orgao: código do órgão (usa o padrão se omitido)
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     await _validar_cargo(backend, cargo)
     result = await backend.assinar_documento(id_documento, cargo=cargo, orgao=orgao)
     return _json(result)
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_assinaturas(
     id_documento: str,
     processo: str | None = None,
@@ -209,7 +213,7 @@ async def sei_assinar_bloco(
     - id_bloco: ID do bloco
     - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     await _validar_cargo(backend, cargo)
     result = await backend.assinar_bloco(id_bloco, cargo=cargo)
     return _json(result)
@@ -232,13 +236,14 @@ async def sei_assinar_documentos_bloco(
     - documentos: ID(s) de documento(s) separados por vírgula
     - cargo: cargo/função — OBRIGATÓRIO (se omitido, lista opções disponíveis)
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     await _validar_cargo(backend, cargo)
     result = await backend.assinar_documentos_bloco(documentos, cargo=cargo)
     return _json(result)
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_dar_ciencia(
     referencia: str,
     tipo: Literal["documento", "processo"] = "documento",
@@ -263,6 +268,7 @@ async def sei_dar_ciencia(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_ciencias(
     referencia: str,
     tipo: Literal["documento", "processo"] = "documento",

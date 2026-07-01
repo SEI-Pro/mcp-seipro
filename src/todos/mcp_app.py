@@ -19,10 +19,10 @@ from pydantic import BaseModel, Field
 from todos import access_control
 from todos.auth import get_sei_credentials_from_token
 from todos.backends import SEIBackend as _SEIBackendV2
-from todos.backends import (
-    build_backend,
-)
+from todos.backends.choice import get_backend_choice
 from todos.backends.models import FiltrosPesquisaProcessos, SEIClientConfig, SEIWebClientConfig
+from todos.backends.rest import SEIRestBackend
+from todos.backends.web import SEIWebBackend as _SEIWebBackendV2
 from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import (
     SEIAuthError,
@@ -220,23 +220,55 @@ async def _has_rest(ctx: Context | None) -> bool:
     return bool((await _get_client(ctx)).base_url)
 
 
-async def _backend(ctx: Context | None) -> _SEIBackendV2:
-    """Retorna o backend composto (REST-first com fallback web) do contrato unificado.
+async def _rest_backend(ctx: Context | None) -> _SEIBackendV2:
+    """Retorna o backend REST cru — para tools intrinsecamente REST-only.
 
-    É o único acessor de backend: as tools chamam operações planas
-    (`backend.consultar_processo(...)`) e o roteamento REST/web fica no composite.
-    `_has_rest`/`_get_client`/`_get_web_client` continuam para as poucas tools de
-    orquestração REST-only que compõem primitivas do cliente diretamente.
+    Levanta erro claro se REST não estiver configurado nesta instância do SEI
+    (sem `SEI_URL`/mod-wssei). Sem fallback para web: se a operação só existe
+    no REST (ex.: assinatura PKI, credenciamento), não há "outro lado" para
+    tentar.
     """
     rest = await _get_client(ctx)
+    if not rest.base_url:
+        msg = (
+            "Backend REST não está configurado para esta instância do SEI (sem SEI_URL/mod-wssei)."
+        )
+        raise SEIError(msg)
+    return SEIRestBackend(rest)
+
+
+async def _web_backend(ctx: Context | None) -> _SEIBackendV2:
+    """Retorna o backend web cru — para tools intrinsecamente web-only."""
     try:
         web = await _get_web_client(ctx)
     except SEIError as exc:
         if _http_mode:
             raise
-        logger.debug("_backend: usando fallback SEIWebClient (stdio) — %s", exc)
+        logger.debug("_web_backend: usando fallback SEIWebClient (stdio) — %s", exc)
         web = SEIWebClient()  # stdio fallback: web client not configured
-    return build_backend(rest, web)
+    return _SEIWebBackendV2(web)
+
+
+async def _backend(ctx: Context | None) -> _SEIBackendV2:
+    """Retorna o backend escolhido explicitamente pela chamada — sem fallback.
+
+    Tools decoradas com ``@requires_backend`` (ver ``todos.backends.choice``)
+    expõem um parâmetro ``backend: Literal["rest", "web"]`` obrigatório no
+    schema MCP; a escolha feita pelo chamador é gravada no próprio ``ctx``
+    (``ctx.set_state``, request-scoped) e lida aqui via
+    ``get_backend_choice(ctx)``, que determina qual backend é devolvido via
+    ``_rest_backend``/``_web_backend`` — o outro nunca é tentado. Tools que
+    ainda não foram convertidas (sem o decorator) levantam ``SEIError`` claro
+    em vez de silenciosamente escolher um lado.
+
+    Use ``_rest_backend``/``_web_backend`` diretamente (sem este acessor) para
+    tools intrinsecamente de um só backend — não faz sentido pedir escolha
+    onde só existe uma opção real.
+    """
+    escolha = await get_backend_choice(ctx)
+    if escolha == "rest":
+        return await _rest_backend(ctx)
+    return await _web_backend(ctx)
 
 
 mcp = FastMCP(
@@ -535,7 +567,7 @@ async def _consultar_meta_documento(
     tipo_documento: str,
     processo: str | None,
 ) -> dict:
-    """Consulta metadados de um documento pelo backend composto (REST-first)."""
+    """Consulta metadados de um documento no backend escolhido pela chamada."""
     if tipo_documento == "X":
         return await backend.consultar_documento_externo(id_documento, processo)
     return await backend.consultar_documento_interno(id_documento, processo)
@@ -556,11 +588,11 @@ async def _aplicar_gate_documento(
     *,
     confirmou: bool,
 ) -> dict | None:
-    """Resolve metadados pelo backend composto e aplica o gate de acesso.
+    """Resolve metadados pelo backend escolhido e aplica o gate de acesso.
 
-    Roteia a consulta de metadados pelo composite (REST-first com fallback web),
-    extraindo o nível tanto da forma REST (`nivelAcesso`) quanto da forma web
-    (texto "Restrito"/"Sigiloso").
+    Consulta os metadados no backend que a chamada escolheu (`backend` no
+    schema da tool), extraindo o nível tanto da forma REST (`nivelAcesso`)
+    quanto da forma web (texto "Restrito"/"Sigiloso").
 
     Falha FECHADA por propagação: se a consulta de metadados falhar, o SEIError
     propaga e a leitura nunca acontece — conteúdo potencialmente restrito não é

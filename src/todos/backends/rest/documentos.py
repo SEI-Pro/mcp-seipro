@@ -160,10 +160,6 @@ class DocumentosRest(_RestMixin):
         """Resolve referência de documento via pesquisa Solr (REST)."""
         return await self._resolver_documento(referencia)
 
-    async def requer_id_serie(self) -> bool:
-        """REST exige id_serie para criar documentos internos."""
-        return True
-
     async def sugestao_assuntos_documento(self, id_serie: str) -> list[dict]:
         """Sugere assuntos para um tipo de documento."""
         return await self._rest.sugestao_assuntos_documento(id_serie)

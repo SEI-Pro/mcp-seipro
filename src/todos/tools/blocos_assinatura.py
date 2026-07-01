@@ -12,6 +12,7 @@ ser objetos reais (não strings adiadas).
 
 from fastmcp import Context
 
+from todos.backends.choice import requires_backend
 from todos.mcp_app import (
     _DEST,
     _IDEM,
@@ -21,12 +22,14 @@ from todos.mcp_app import (
     _backend,
     _decode_cursor,
     _json,
+    _rest_backend,
     mcp,
 )
 from todos.responses import BlocoAssinatura, DocumentoBloco, NextAction, PaginadoGenerico
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_criar_bloco_assinatura(
     descricao: str,
     unidades: str = "",
@@ -57,12 +60,13 @@ async def sei_incluir_documento_bloco_assinatura(
     - id_bloco: ID do bloco de assinatura
     - documentos: ID(s) de documento(s) separados por vírgula
     """
-    backend = await _backend(ctx)
+    backend = await _rest_backend(ctx)
     result = await backend.incluir_documento_bloco_assinatura(id_bloco, documentos)
     return _json(result)
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_disponibilizar_bloco_assinatura(
     id_bloco: str,
     ctx: Context | None = None,
@@ -78,6 +82,7 @@ async def sei_disponibilizar_bloco_assinatura(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_cancelar_disponibilizacao_bloco(
     id_bloco: str,
     ctx: Context | None = None,
@@ -93,6 +98,7 @@ async def sei_cancelar_disponibilizacao_bloco(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_pesquisar_blocos_assinatura(
     filtro: str = "",
     limit: int = 50,
@@ -138,6 +144,7 @@ async def sei_pesquisar_blocos_assinatura(
 
 
 @mcp.tool(annotations=_READ)
+@requires_backend
 async def sei_listar_documentos_bloco_assinatura(
     id_bloco: str,
     limit: int = 50,
@@ -183,6 +190,7 @@ async def sei_listar_documentos_bloco_assinatura(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_retirar_documentos_bloco_assinatura(
     id_bloco: str,
     documentos: str,
@@ -199,6 +207,7 @@ async def sei_retirar_documentos_bloco_assinatura(
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_alterar_bloco_assinatura(
     id_bloco: str,
     descricao: str,
@@ -216,6 +225,7 @@ async def sei_alterar_bloco_assinatura(
 
 
 @mcp.tool(annotations=_DEST)
+@requires_backend
 async def sei_excluir_bloco_assinatura(
     ids_blocos: str,
     ctx: Context | None = None,
@@ -232,6 +242,7 @@ async def sei_excluir_bloco_assinatura(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_concluir_bloco_assinatura(
     ids_blocos: str,
     ctx: Context | None = None,
@@ -248,6 +259,7 @@ async def sei_concluir_bloco_assinatura(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_reabrir_bloco_assinatura(
     id_bloco: str,
     ctx: Context | None = None,
@@ -264,6 +276,7 @@ async def sei_reabrir_bloco_assinatura(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_retornar_bloco_assinatura(
     id_bloco: str,
     ctx: Context | None = None,
@@ -280,6 +293,7 @@ async def sei_retornar_bloco_assinatura(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_anotar_documento_bloco_assinatura(
     id_bloco: str,
     documento: str,
@@ -298,6 +312,7 @@ async def sei_anotar_documento_bloco_assinatura(
 
 
 @mcp.tool(annotations=_IDEM)
+@requires_backend
 async def sei_alterar_anotacao_bloco_assinatura(
     id_bloco: str,
     documento: str,

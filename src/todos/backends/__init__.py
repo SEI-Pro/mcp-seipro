@@ -6,8 +6,10 @@
 - `SEIRestBackend` (rest.py): operações via mod-wssei REST.
 - `SEIWebBackend` (web.py): operações via scraper do frontend web.
 
-O roteamento REST-first-com-fallback-web vive no factory/composite, não em cada
-tool — graças ao contrato compartilhado, a composição é genérica.
+Não há roteamento automático REST/web: cada tool MCP recebe o backend cru
+que o chamador escolheu explicitamente (ver `todos.backends.choice` e
+`mcp_app._backend`/`_rest_backend`/`_web_backend`). Nenhum backend tenta o
+outro silenciosamente em caso de falha.
 """
 
 from __future__ import annotations
@@ -20,12 +22,10 @@ from todos.backends.base import (
     NovoProcesso,
     SEIBackend,
 )
-from todos.backends.composite import CompositeBackend, build_backend
 from todos.backends.rest import SEIRestBackend
 from todos.backends.web import SEIWebBackend
 
 __all__ = [
-    "CompositeBackend",
     "EnvioProcesso",
     "FiltrosPesquisaProcessos",
     "NovoDocumentoExterno",
@@ -34,5 +34,4 @@ __all__ = [
     "SEIBackend",
     "SEIRestBackend",
     "SEIWebBackend",
-    "build_backend",
 ]

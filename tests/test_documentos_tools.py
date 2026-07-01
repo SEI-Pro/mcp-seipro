@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from helpers import aconst
+from helpers import FakeCtx, aconst
 
 from todos import access_control
 from todos.exceptions import SEIError, SEINotImplementedError, SEIValidationError
@@ -183,7 +183,12 @@ def test_editar_secao_builds_full_payload(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(d, "_backend", aconst(backend))
 
     asyncio.run(
-        d.sei_editar_secao("D", [{"idSecaoModelo": "1", "conteudo": "<p>novo</p>"}], ctx=None)
+        d.sei_editar_secao(
+            "D",
+            [{"idSecaoModelo": "1", "conteudo": "<p>novo</p>"}],
+            ctx=FakeCtx(),
+            backend="web",
+        )
     )
     assert backend.sent is not None
     secoes, versao = backend.sent
@@ -201,26 +206,56 @@ def test_editar_secao_builds_full_payload(monkeypatch: pytest.MonkeyPatch) -> No
 class TestIncluirValidation:
     def test_base64_without_nome_arquivo(self) -> None:
         with pytest.raises(SEIValidationError, match="nome_arquivo é obrigatório"):
-            asyncio.run(d.sei_incluir_documento_externo("PF", arquivo_base64="eA==", ctx=None))
+            asyncio.run(
+                d.sei_incluir_documento_externo(
+                    "PF", arquivo_base64="eA==", ctx=FakeCtx(), backend="web"
+                )
+            )
 
     def test_invalid_base64(self) -> None:
         with pytest.raises(SEIValidationError, match="inválido"):
             asyncio.run(
                 d.sei_incluir_documento_externo(
-                    "PF", arquivo_base64="!!!", nome_arquivo="x.pdf", ctx=None
+                    "PF",
+                    arquivo_base64="!!!",
+                    nome_arquivo="x.pdf",
+                    ctx=FakeCtx(),
+                    backend="web",
                 )
             )
 
     def test_id_serie_without_file_raises(self) -> None:
         with pytest.raises(SEIValidationError, match="Informe arquivo_path"):
-            asyncio.run(d.sei_incluir_documento_externo("PF", id_serie="S", ctx=None))
+            asyncio.run(
+                d.sei_incluir_documento_externo("PF", id_serie="S", ctx=FakeCtx(), backend="web")
+            )
 
     def test_remote_mode_blocks_server_file_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Security guard: in HTTP/remote mode a local path would point at the
         # server's filesystem, so arquivo_path must be rejected in favor of base64.
         monkeypatch.setattr(d, "_http_mode", True)
         with pytest.raises(SEIValidationError, match="modo remoto"):
-            asyncio.run(d.sei_incluir_documento_externo("PF", arquivo_path="/etc/passwd", ctx=None))
+            asyncio.run(
+                d.sei_incluir_documento_externo(
+                    "PF", arquivo_path="/etc/passwd", ctx=FakeCtx(), backend="web"
+                )
+            )
+
+    def test_base64_with_backend_rest_raises_clear_error(self) -> None:
+        # REST's criar_documento_externo reads a real file path off disk — it
+        # has no concept of arquivo_base64. Without the old auto-routing (which
+        # used to send base64 uploads to web silently), this must fail with an
+        # actionable message instead of a confusing "Arquivo não encontrado".
+        with pytest.raises(SEIValidationError, match="backend='rest' não suporta"):
+            asyncio.run(
+                d.sei_incluir_documento_externo(
+                    "PF",
+                    arquivo_base64="eA==",
+                    nome_arquivo="x.pdf",
+                    ctx=FakeCtx(),
+                    backend="rest",
+                )
+            )
 
 
 class _RequerIdSerieBackend:
@@ -230,14 +265,11 @@ class _RequerIdSerieBackend:
         msg = f"_RequerIdSerieBackend.{op} not implemented"
         raise NotImplementedError(msg)
 
-    async def requer_id_serie(self) -> bool:
-        return True
-
 
 def test_criar_documento_requires_id_serie_in_rest(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(d, "_backend", aconst(_RequerIdSerieBackend()))
     with pytest.raises(SEIValidationError, match="id_serie é obrigatório"):
-        asyncio.run(d.sei_criar_documento("PF", id_serie="", ctx=None))
+        asyncio.run(d.sei_criar_documento("PF", id_serie="", ctx=FakeCtx(), backend="rest"))
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +297,11 @@ class _WebOnlyBackend:
 def test_ler_documento_web_only_requires_processo(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(d, "_backend", aconst(_WebOnlyBackend()))
     with pytest.raises(Exception, match="forneça o parâmetro 'processo'"):
-        asyncio.run(d.sei_ler_documento("D", tipo_documento="I", processo=None, ctx=None))
+        asyncio.run(
+            d.sei_ler_documento(
+                "D", tipo_documento="I", processo=None, ctx=FakeCtx(), backend="web"
+            )
+        )
 
 
 class _GateErroBackend:
@@ -290,7 +326,11 @@ def test_ler_documento_propagates_consult_error(monkeypatch: pytest.MonkeyPatch)
     # Fail-closed by propagation: the gate's consult error propagates (the read
     # never runs); no tailored hint, no envelope.
     with pytest.raises(SEIError, match="não autorizado"):
-        asyncio.run(d.sei_ler_documento("D", tipo_documento="I", processo="PF", ctx=None))
+        asyncio.run(
+            d.sei_ler_documento(
+                "D", tipo_documento="I", processo="PF", ctx=FakeCtx(), backend="web"
+            )
+        )
 
 
 class _AnexoBackend:
@@ -318,7 +358,7 @@ def test_baixar_anexo_too_large_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(d, "_backend", aconst(_AnexoBackend()))
     monkeypatch.setattr(d, "MAX_BINARY_SIZE", 10)
     with pytest.raises(SEIValidationError, match="muito grande"):
-        asyncio.run(d.sei_baixar_anexo("D", processo="PF", ctx=None))
+        asyncio.run(d.sei_baixar_anexo("D", processo="PF", ctx=FakeCtx(), backend="web"))
 
 
 class _RestritoBackend:
@@ -339,7 +379,9 @@ def test_consultar_documento_externo_attaches_aviso_for_restricted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(d, "_backend", aconst(_RestritoBackend()))
-    out = asyncio.run(d.sei_consultar_documento_externo("D", processo="PF", ctx=None))
+    out = asyncio.run(
+        d.sei_consultar_documento_externo("D", processo="PF", ctx=FakeCtx(), backend="web")
+    )
     assert "_aviso_acesso" in out
 
 
@@ -365,7 +407,9 @@ def test_consultar_documento_externo_propagates_original_error(
     # with the SEI's own message.
     monkeypatch.setattr(d, "_backend", aconst(_ConsultaErroBackend()))
     with pytest.raises(SEIError, match="não autorizado"):
-        asyncio.run(d.sei_consultar_documento_externo("D", processo="PF", ctx=None))
+        asyncio.run(
+            d.sei_consultar_documento_externo("D", processo="PF", ctx=FakeCtx(), backend="web")
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -413,10 +457,10 @@ def test_cancelar_assinatura_propagates_lock_error(monkeypatch: pytest.MonkeyPat
     # message — no JSON envelope, no translation.
     _patch_cancelar(monkeypatch, _CancelarBackend(locked=True))
     with pytest.raises(SEIError, match="assinado"):
-        asyncio.run(a.sei_cancelar_assinatura("D", ctx=None))
+        asyncio.run(a.sei_cancelar_assinatura("D", ctx=FakeCtx(), backend="web"))
 
 
 def test_cancelar_assinatura_success(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_cancelar(monkeypatch, _CancelarBackend(locked=False))
-    out = asyncio.run(a.sei_cancelar_assinatura("D", ctx=None))
+    out = asyncio.run(a.sei_cancelar_assinatura("D", ctx=FakeCtx(), backend="web"))
     assert "sucesso" in out
