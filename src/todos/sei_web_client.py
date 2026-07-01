@@ -50,6 +50,7 @@ from todos.exceptions import (
     SEICredenciaisError,
     SEIError,
     SEINotFoundError,
+    SEINotImplementedError,
     SEIParseError,
     SEIValidationError,
 )
@@ -2146,14 +2147,33 @@ class SEIWebClient:
         return data.get("ciencias") or []
 
     async def visualizar_documento_interno_web(self, protocolo: str, id_documento: str) -> str:
-        """Retorna HTML de um documento interno via documento_visualizar."""
+        r"""Retorna HTML de um documento interno via documento_visualizar.
+
+        Alguns anexos externos (ex.: um mandado do PJe, um acórdão de outro
+        órgão importado como PDF) são servidos por esta mesma ação como o
+        binário bruto do PDF — o navegador o exibe inline — em vez de uma
+        página HTML wrapper. Detectar isso aqui e recusar como não-interno é
+        essencial: se os bytes seguissem para ``_extrair_erro_sei``/
+        ``html_to_markdown`` (parsers HTML), a normalização de quebra de
+        linha do parser (``\r\n``/``\r`` → ``\n``) apaga irreversivelmente
+        todo byte ``\r`` dentro dos streams FlateDecode comprimidos do PDF,
+        corrompendo o documento a partir do primeiro ``\r`` de cada stream
+        (bug real, reproduzido 2026-07-01 com dois documentos distintos).
+        """
         await self.ensure_authenticated()
         url, referer = await self._get_doc_signed_url(
             protocolo, id_documento, "documento_visualizar"
         )
         r = await self._http.get(url, headers={"Referer": referer})
         _check(r)
-        html = _decode_response(r.content, r.headers.get("content-type", ""))
+        content_type = r.headers.get("content-type", "").lower()
+        if r.content[:5] == b"%PDF-" or ("html" not in content_type and "text" not in content_type):
+            msg = (
+                f"documento_visualizar retornou conteúdo binário (content-type "
+                f"{content_type!r}) para {id_documento} — não é um documento interno"
+            )
+            raise SEINotImplementedError(msg)
+        html = _decode_response(r.content, content_type)
         erro = _extrair_erro_sei(html)
         if erro:
             # SEI retorna 200 com página de erro; sem este check o erro seria
@@ -2164,11 +2184,24 @@ class SEIWebClient:
         return html
 
     async def baixar_documento_externo_web(self, protocolo: str, id_documento: str) -> bytes:
-        """Baixa bytes de um documento externo via documento_download_anexo."""
+        """Baixa bytes de um documento externo via documento_download_anexo.
+
+        Alguns anexos externos não têm o link ``documento_download_anexo`` na
+        árvore — só ``documento_visualizar``, que para esses documentos
+        específicos já serve o binário bruto diretamente (ver
+        ``visualizar_documento_interno_web``). Cai para essa ação quando a
+        primeira não existe, em vez de propagar "ação não encontrada" para um
+        documento que na verdade é perfeitamente baixável.
+        """
         await self.ensure_authenticated()
-        url, referer = await self._get_doc_signed_url(
-            protocolo, id_documento, "documento_download_anexo"
-        )
+        try:
+            url, referer = await self._get_doc_signed_url(
+                protocolo, id_documento, "documento_download_anexo"
+            )
+        except SEIParseError:
+            url, referer = await self._get_doc_signed_url(
+                protocolo, id_documento, "documento_visualizar"
+            )
         r = await self._http.get(url, headers={"Referer": referer})
         _check(r)
         if "text/html" in r.headers.get("content-type", "").lower():
