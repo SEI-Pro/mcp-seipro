@@ -85,7 +85,7 @@ Adicione ao `.mcp.json` do projeto ou `~/.claude.json` (global):
       "env": {
         "SEI_URL": "https://sei.orgao.gov.br/sei/modulos/wssei/controlador_ws.php/api/v2",
         "SEI_USUARIO": "seu.usuario",
-        "SEI_SENHA": "sua-senha",
+        "SEI_SENHA": "",
         "SEI_ORGAO": "0"
       }
     }
@@ -93,7 +93,12 @@ Adicione ao `.mcp.json` do projeto ou `~/.claude.json` (global):
 }
 ```
 
-> **Dica:** se você configurou o `todos setup`, deixe `SEI_SENHA` vazio (`""`) — a senha fica no Keyring do sistema.
+> **Preferencial: `SEI_SENHA` vazio + `todos setup`.** Rode `todos setup` uma
+> vez para gravar a senha no Keyring do sistema (serviço `todos-mcp`); o
+> `SEI_SENHA` acima fica vazio (`""`) de propósito — é o que `todos setup`
+> grava no `.mcp.json`/`claude.json` automaticamente. Só preencha
+> `SEI_SENHA` em texto puro se não puder usar o Keyring (ex.: container
+> efêmero) — quando definido, ele tem prioridade sobre o Keyring.
 
 ### Registro no Claude Desktop (manual)
 
@@ -107,7 +112,7 @@ Edite `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
       "env": {
         "SEI_URL": "https://sei.orgao.gov.br/sei/modulos/wssei/controlador_ws.php/api/v2",
         "SEI_USUARIO": "seu.usuario",
-        "SEI_SENHA": "sua-senha",
+        "SEI_SENHA": "",
         "SEI_ORGAO": "0"
       }
     }

@@ -893,13 +893,29 @@ async def sei_executar_acao(
 # ---------------------------------------------------------------------------
 
 
+# Payload inline (base64 embutido na resposta da tool) grande o bastante já
+# derrubou a conexão MCP em produção — um PDF de 14.7 MB (~19.6 MB em base64)
+# fechou a conexão com "Connection closed" em vez de um erro tratável. Mantém
+# o teto do opt-in bem abaixo disso; acima, o caminho em disco (`arquivo`) é a
+# única forma segura de acesso.
+_MAX_INLINE_BASE64_MB = 5.0
+
+
 def _salvar_arquivo_temp(
     protocolo: str,
     conteudo: bytes,
     extensao: str,
     max_mb: float,
+    *,
+    incluir_base64: bool,
 ) -> dict[str, object]:
-    """Verifica tamanho, salva em temp e retorna dict com path e metadados."""
+    """Verifica tamanho, salva em temp e retorna dict com path e metadados.
+
+    ``base64`` só entra no dict quando ``incluir_base64=True`` — e mesmo
+    assim, só até ``_MAX_INLINE_BASE64_MB``. O padrão é omitir: arquivos SEI
+    consolidados costumam passar de alguns MB, e o arquivo já está salvo em
+    disco (``arquivo``) de qualquer forma.
+    """
     tamanho_mb = len(conteudo) / 1024 / 1024
     if tamanho_mb > max_mb:
         msg = f"{extensao.upper()} muito grande ({tamanho_mb:.1f} MB). Baixe manualmente pelo SEI."
@@ -915,18 +931,29 @@ def _salvar_arquivo_temp(
         msg = f"Erro ao salvar {extensao.upper()} em disco: {exc}"
         raise SEIValidationError(msg) from exc
 
-    return {
+    resultado: dict[str, object] = {
         "arquivo": str(caminho),
         "tamanho_mb": round(tamanho_mb, 2),
         "tamanho_bytes": len(conteudo),
-        "base64": base64.b64encode(conteudo).decode(),
     }
+    if incluir_base64:
+        if tamanho_mb > _MAX_INLINE_BASE64_MB:
+            msg = (
+                f"{extensao.upper()} tem {tamanho_mb:.1f} MB — grande demais para "
+                f"incluir inline (limite {_MAX_INLINE_BASE64_MB:.0f} MB; risco de "
+                "estourar a conexão MCP). Leia o arquivo salvo em 'arquivo'."
+            )
+            raise SEIValidationError(msg)
+        resultado["base64"] = base64.b64encode(conteudo).decode()
+    return resultado
 
 
 @mcp.tool(annotations=_READ)
 async def sei_gerar_pdf_processo(
     processo: str,
     ctx: Context | None = None,
+    *,
+    incluir_base64: bool = False,
 ) -> str:
     """Gera e baixa o PDF consolidado de um processo SEI.
 
@@ -937,8 +964,16 @@ async def sei_gerar_pdf_processo(
 
     Parâmetros:
     - processo: protocolo formatado (ex: 0029.000123/2024-00)
+    - incluir_base64: inclui o conteúdo em base64 na resposta (padrão: False).
+      PDFs consolidados de processos com muitos documentos passam facilmente
+      de dezenas de MB — devolver isso em base64 embutido na resposta já
+      fechou a conexão MCP em produção ("Connection closed", não um erro
+      tratável). O arquivo já fica salvo em disco (`arquivo`) independente
+      desta flag; leia de lá. Só funciona (levanta erro caso contrário) para
+      arquivos até 5 MB.
 
-    Retorna base64 do PDF, tamanho e caminho do arquivo salvo em disco.
+    Retorna tamanho e caminho do arquivo salvo em disco (e base64 apenas se
+    ``incluir_base64=True`` e o arquivo for pequeno o suficiente).
 
     Nota: o processo precisa estar aberto na caixa da unidade atual.
     Para processos de outras unidades, use sei_trocar_unidade primeiro.
@@ -951,13 +986,17 @@ async def sei_gerar_pdf_processo(
     if ctx:
         await ctx.report_progress(100, 100)
 
-    return _json(_salvar_arquivo_temp(processo, pdf_bytes, "pdf", _MAX_PDF_MB))
+    return _json(
+        _salvar_arquivo_temp(processo, pdf_bytes, "pdf", _MAX_PDF_MB, incluir_base64=incluir_base64)
+    )
 
 
 @mcp.tool(annotations=_READ)
 async def sei_gerar_zip_processo(
     processo: str,
     ctx: Context | None = None,
+    *,
+    incluir_base64: bool = False,
 ) -> str:
     """Gera e baixa o ZIP com todos os documentos de um processo SEI.
 
@@ -968,8 +1007,13 @@ async def sei_gerar_zip_processo(
 
     Parâmetros:
     - processo: protocolo formatado (ex: 0029.000123/2024-00)
+    - incluir_base64: inclui o conteúdo em base64 na resposta (padrão: False).
+      Ver sei_gerar_pdf_processo — mesmo risco de estourar a conexão MCP em
+      arquivos grandes; o ZIP já fica salvo em disco (`arquivo`) de qualquer
+      forma. Só funciona (levanta erro caso contrário) para arquivos até 5 MB.
 
-    Retorna base64 do ZIP, tamanho e caminho do arquivo salvo em disco.
+    Retorna tamanho e caminho do arquivo salvo em disco (e base64 apenas se
+    ``incluir_base64=True`` e o arquivo for pequeno o suficiente).
     """
     backend = await _backend(ctx)
 
@@ -979,4 +1023,6 @@ async def sei_gerar_zip_processo(
     if ctx:
         await ctx.report_progress(100, 100)
 
-    return _json(_salvar_arquivo_temp(processo, zip_bytes, "zip", _MAX_ZIP_MB))
+    return _json(
+        _salvar_arquivo_temp(processo, zip_bytes, "zip", _MAX_ZIP_MB, incluir_base64=incluir_base64)
+    )

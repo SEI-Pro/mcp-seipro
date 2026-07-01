@@ -51,11 +51,15 @@ O pink é o MCP do sistema de gestão processual. Para usar ambos no mesmo host 
 ```json
 {
   "mcpServers": {
-    "seipro": { "command": "uv", "args": ["run", "--directory", "/caminho/para/todos", "todos"], "env": { "SEI_USUARIO": "...", "SEI_SENHA": "..." } },
-    "pink":   { "command": "uv", "args": ["run", "--directory", "/caminho/para/pink",  "pink-mcp"],  "env": { "METABASE_USUARIO": "...", "METABASE_SENHA": "..." } }
+    "todos": { "command": "uv", "args": ["run", "--directory", "/caminho/para/todos", "todos"], "env": { "SEI_USUARIO": "...", "SEI_SENHA": "..." } },
+    "pink":  { "command": "uv", "args": ["run", "--directory", "/caminho/para/pink",  "pink", "mcp"], "env": { "METABASE_USUARIO": "...", "METABASE_SENHA": "..." } }
   }
 }
 ```
+
+Credenciais de ambos: preferencialmente no keyring do OS (`todos setup` /
+`pink setup`), com a env var como fallback apenas quando vazia — não
+precisam ir no `env` do host nesse caso. Ver "Credenciais" abaixo.
 
 Quando ambos estão ativos, é possível ler um expediente do Kanoê que referencia um NUP do SEI, ler o processo no SEI e comentar de volta no expediente com a análise — tudo em uma conversa.
 
@@ -77,13 +81,23 @@ Quando o expediente do Kanoê referencia um NUP (`\d{4}\.\d{6}/\d{4}-\d{2}`), us
 | Var de ambiente | Obrigatória | Para quê |
 |-----------------|-------------|----------|
 | `SEI_USUARIO` | sim | Login do usuário no SEI |
-| `SEI_SENHA` | sim | Senha do SEI |
+| `SEI_SENHA` | preferencialmente via keyring | Senha do SEI — deixe vazia se rodou `todos setup` |
 | `SEI_ORGAO` | sim | Sigla do órgão (ex.: `RO`) |
 | `SEI_URL` | não | URL do mod-wssei v2; sem ela → modo web-only |
 | `SEI_WEB_URL` | não | URL base do SEI web (padrão: inferido de SEI_URL) |
 | `TODOS_LOG_LEVEL` | não | Nível de log `todos.*` (padrão: `INFO`) |
 
-Secrets nunca são persistidos pelo servidor. Configure no shell, `.env` ou direnv.
+**Senha: preferencialmente via keyring, nunca via arquivo `.env`.** `todos
+setup` grava a senha no keyring do OS (serviço `todos-mcp`, chave
+`<SEI_USUARIO>@<host resolvido de SEI_URL/SEI_WEB_URL>`) — veja
+`setup_wizard.py:_save_password_to_keyring`. Em runtime, `SEIClient` e
+`SEIWebClient` (`sei_client.py`/`sei_web_client.py`) só caem para o keyring
+quando `SEI_SENHA` está vazia/ausente; se `SEI_SENHA` vier definida no `env`
+do host, ela tem prioridade sobre o keyring — para usar o keyring, **deixe
+`SEI_SENHA="" `** no `.mcp.json`/`claude_desktop_config.json`. `TodosSettings`
+**não carrega arquivo `.env` automaticamente** — não crie um `.env` no
+diretório do projeto esperando que ele seja lido; configure via `env:` do
+host MCP, shell, ou (preferencialmente) `todos setup` + keyring.
 
 ## Operações de escrita — confirmação humana
 
@@ -164,7 +178,7 @@ Hosts MCP recebem `ToolError` com a mensagem equivalente — nunca exit codes.
 
 | Tool pink | Uso típico junto ao todos |
 |-----------|--------------------------|
-| `pasta_show` | Lê resumo estratégico antes de consultar o SEI (`sei_enrich=True` adiciona `_sei_refs`) |
+| `pasta_show` | Lê resumo estratégico antes de consultar o SEI manualmente (pink não tem enriquecimento SEI automático) |
 | `expediente_comentar` | Posta análise/ação após `sei_consultar_processo` |
 | `expediente_criar` | Cria controle de prazo (ED: 5 dias úteis Juizado/TR, 10 demais) |
 | `inbox` | Lista processos não-recebidos; `full=True` traz teor dos expedientes |
