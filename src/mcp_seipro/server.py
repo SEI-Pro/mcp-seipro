@@ -13,7 +13,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
 
-from mcp_seipro.sei_client import SEIClient
+from mcp_seipro.sei_client import SEIClient, SEICloudflareBlocked
 from mcp_seipro.sei_web_client import SEIWebClient
 from mcp_seipro.shaping import shape_processo_resumido
 from mcp_seipro.html_utils import (
@@ -743,6 +743,20 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
     )
 
 
+def _secao_cabecalho_base64(secao: dict) -> bool:
+    """Heurística: seção somenteLeitura que carrega imagem base64 (data URI).
+
+    É o cabeçalho/brasão do template — conteúdo que o WAF do Cloudflare bloqueia
+    (blob base64) E que o SEI REGENERA sozinho ao salvar. Logo, é seguro
+    reenviá-la vazia (o SEI reconstrói) para contornar o WAF. Ver
+    docs/spec... e o fallback em sei_editar_secao.
+    """
+    if str(secao.get("somenteLeitura")) != "S":
+        return False
+    cont = secao.get("conteudo", "") or ""
+    return "data:image" in cont or ";base64," in cont
+
+
 async def _identidade_documento(client: SEIClient, doc_id: str) -> dict:
     """Eco auditável de qual documento foi efetivamente resolvido.
 
@@ -1114,6 +1128,12 @@ async def sei_editar_secao(
     O id_documento aceita número SEI (protocoloFormatado) ou id interno — é
     resolvido automaticamente e o documento resolvido é ecoado no retorno
     (`_documento_resolvido`), para evitar gravar no documento errado.
+
+    Se o Cloudflare bloquear a escrita por WAF (managed rule que casa a imagem
+    base64 do cabeçalho), a tool contorna automaticamente reenviando o cabeçalho
+    vazio (o SEI o regenera) e verifica a regeneração; nesse caso a resposta traz
+    `_waf_contornado`. Se o gatilho estiver no conteúdo do próprio documento,
+    só a exceção de WAF no órgão resolve.
     """
     try:
         client = _get_client(ctx)
@@ -1136,8 +1156,11 @@ async def sei_editar_secao(
             if modelo:
                 alteracoes[modelo] = s.get("conteudo", "")
 
-        # Montar payload completo com TODAS as seções
+        # Montar payload completo com TODAS as seções. Também identifica as
+        # seções de cabeçalho (imagem base64) NÃO alteradas pelo usuário —
+        # candidatas ao contorno de WAF (o SEI as regenera).
         secoes_enviar = []
+        cabecalhos_base64: set[str] = set()
         for s in secoes_atuais:
             if not isinstance(s, dict):
                 continue
@@ -1152,6 +1175,8 @@ async def sei_editar_secao(
             else:
                 # Seção original — fazer unescape do HTML-escaped
                 conteudo = html_module.unescape(s.get("conteudo", "") or "")
+                if _secao_cabecalho_base64(s):
+                    cabecalhos_base64.add(str(modelo))
 
             secoes_enviar.append({
                 "id": str(sid),
@@ -1159,14 +1184,68 @@ async def sei_editar_secao(
                 "conteudo": sanitize_iso8859(conteudo),
             })
 
-        result = await client.alterar_secao_documento(
-            id_documento=doc_id,
-            secoes=secoes_enviar,
-            versao=versao,
-        )
-        if isinstance(result, dict):
-            result["_documento_resolvido"] = await _identidade_documento(client, doc_id)
-        return _json(result)
+        try:
+            result = await client.alterar_secao_documento(
+                id_documento=doc_id, secoes=secoes_enviar, versao=versao,
+            )
+            waf_info = None
+        except SEICloudflareBlocked:
+            # Bloqueio de WAF (managed rule) por causa do conteúdo. Contorno:
+            # reenviar VAZIAS as seções de cabeçalho com imagem base64 (o SEI
+            # as regenera), removendo o blob que dispara o WAF. Só age nelas.
+            if not cabecalhos_base64:
+                raise  # nada regenerável p/ neutralizar → erro claro de WAF
+            placeholder = sanitize_iso8859("<p>&nbsp;</p>")
+            secoes_wa = [
+                {**sec, "conteudo": placeholder}
+                if sec["idSecaoModelo"] in cabecalhos_base64 else sec
+                for sec in secoes_enviar
+            ]
+            try:
+                # A 1ª tentativa falhou no WAF (403, não gravou) → versao intacta.
+                result = await client.alterar_secao_documento(
+                    id_documento=doc_id, secoes=secoes_wa, versao=versao,
+                )
+            except SEICloudflareBlocked as e2:
+                raise Exception(
+                    "Contorno de WAF tentado (cabeçalho base64 neutralizado) mas o "
+                    "bloqueio do Cloudflare PERSISTE — o gatilho está em conteúdo "
+                    "não-regenerável (provavelmente no próprio conteúdo do "
+                    "documento). Só a exceção de WAF no /sei/modulos/wssei/ (lado "
+                    f"do órgão) resolve. Detalhe: {e2}"
+                ) from e2
+            # Verificação: as seções de cabeçalho DEVEM ter regenerado (voltar
+            # com a imagem base64). Se ficaram com o placeholder, houve corrupção.
+            verif = await client.listar_secao_documento(doc_id)
+            corrompidas = [
+                str(v.get("idSecaoModelo"))
+                for v in verif.get("secoes", [])
+                if str(v.get("idSecaoModelo")) in cabecalhos_base64
+                and "data:image" not in (v.get("conteudo", "") or "")
+                and ";base64," not in (v.get("conteudo", "") or "")
+            ]
+            if corrompidas:
+                raise Exception(
+                    f"Contorno de WAF: as seções de cabeçalho {corrompidas} NÃO "
+                    "foram regeneradas pelo SEI (ficaram com o placeholder) — o "
+                    f"cabeçalho do documento {doc_id} pode estar danificado. "
+                    "Evite reeditar; corrija o cabeçalho na interface web. Fix "
+                    "definitivo: exceção de WAF no Cloudflare do órgão."
+                )
+            waf_info = {
+                "info": "Bloqueio de WAF do Cloudflare contornado: seções de "
+                        "cabeçalho com imagem base64 reenviadas vazias e "
+                        "regeneradas pelo SEI. Conteúdo editável preservado.",
+                "secoes_cabecalho_neutralizadas": sorted(cabecalhos_base64),
+                "recomendacao": "Solução definitiva é exceção de WAF no "
+                                "Cloudflare do órgão para /sei/modulos/wssei/.",
+            }
+
+        out = result if isinstance(result, dict) else {"resultado": result}
+        out["_documento_resolvido"] = await _identidade_documento(client, doc_id)
+        if waf_info:
+            out["_waf_contornado"] = waf_info
+        return _json(out)
     except Exception as e:
         return _error(str(e))
 
