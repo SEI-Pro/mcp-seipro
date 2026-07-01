@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 class SEICloudflareBlocked(Exception):
     """A requisição foi barrada por um desafio do Cloudflare na borda.
 
-    Significa que o tráfego NÃO chegou ao módulo wssei: o 403 vem do WAF do
-    Cloudflare (Managed Challenge / JS challenge), não do SEI nem do MCP. Por
-    isso ocorre com qualquer credencial. Correção fica do lado da ANTAQ/infra
-    (regra de bypass no Cloudflare), não no código.
+    O tráfego NÃO chegou ao módulo wssei: o 403 vem do WAF (Managed Challenge /
+    JS challenge), não do SEI nem do MCP — por isso ocorre com qualquer
+    credencial. No transporte 'auto' (padrão), o MCP tenta contornar sozinho via
+    browser (Playwright); este erro só sobe se o bypass não estiver disponível.
     """
 
 
@@ -72,21 +72,31 @@ class SEIClient:
         if cf_clearance:
             cookies = {"cf_clearance": cf_clearance}
 
-        # Seleção de transporte. SEI_TRANSPORT=browser roteia tudo por um
-        # Chromium real (Playwright) — contorna o desafio do Cloudflare quando
-        # não há regra de bypass no WAF. Pesado; use como contingência.
-        transport = kwargs.get("sei_transport", os.environ.get("SEI_TRANSPORT", "httpx")).lower()
-        if transport == "browser":
+        # Transporte (genérico / multi-órgão):
+        #   auto (padrão) — começa em httpx; se detectar um desafio do Cloudflare
+        #     na borda, escala AUTOMATICAMENTE para o browser (Playwright), se
+        #     disponível. Órgãos sem WAF nunca escalam — funciona como sempre.
+        #   httpx   — força httpx (nunca escala).
+        #   browser — força o transporte via browser desde o início.
+        self._verify_ssl = verify_ssl
+        self._default_headers = default_headers
+        self._extra_headers = self._parse_extra_headers(
+            kwargs.get("sei_extra_headers", os.environ.get("SEI_EXTRA_HEADERS", ""))
+        )
+        self._transport_mode = kwargs.get(
+            "sei_transport", os.environ.get("SEI_TRANSPORT", "auto")
+        ).lower()
+        self._old_httpx = None  # httpx anterior, guardado p/ fechar após escalar
+
+        if self._transport_mode == "browser":
             from .browser_transport import BrowserClient
             self._client = BrowserClient(
                 self.base_url,
                 user_agent=default_headers["User-Agent"],
                 verify=verify_ssl,
-                extra_headers=self._parse_extra_headers(
-                    kwargs.get("sei_extra_headers", os.environ.get("SEI_EXTRA_HEADERS", ""))
-                ),
+                extra_headers=self._extra_headers,
             )
-            logger.info("SEIClient usando transporte via browser (Playwright/Chromium)")
+            logger.info("SEIClient: transporte via browser (forçado por SEI_TRANSPORT=browser)")
         else:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(120.0, connect=10.0, read=90.0),
@@ -132,21 +142,72 @@ class SEIClient:
             )
         return False
 
-    def _raise_if_cloudflare(self, resp: httpx.Response) -> None:
-        """Se a resposta for um desafio do Cloudflare, levanta erro claro."""
+    def _is_browser_client(self) -> bool:
+        return type(self._client).__name__ == "BrowserClient"
+
+    def _escalate_to_browser(self) -> bool:
+        """Troca o transporte httpx pelo browser (Playwright) em runtime.
+
+        Retorna False se o Playwright não estiver instalado (não há como escalar).
+        """
+        try:
+            import playwright  # noqa: F401
+            from .browser_transport import BrowserClient
+        except ImportError:
+            return False
+        self._old_httpx = self._client  # fechado em close()
+        self._client = BrowserClient(
+            self.base_url,
+            user_agent=self._default_headers.get("User-Agent", ""),
+            verify=self._verify_ssl,
+            extra_headers=self._extra_headers,
+        )
+        self._token = None  # sessão nova → re-autentica pelo browser
+        logger.warning(
+            "Cloudflare detectado — escalando automaticamente para transporte "
+            "via browser (Playwright)."
+        )
+        return True
+
+    async def _handle_cloudflare(self, resp: httpx.Response) -> bool:
+        """Trata uma resposta que pode ser um desafio do Cloudflare.
+
+        - Não é desafio → retorna False.
+        - É desafio e conseguiu escalar p/ browser (modo auto/browser) → retorna
+          True (o chamador deve refazer a requisição).
+        - É desafio e não há como escalar → levanta SEICloudflareBlocked.
+        """
         if not self._is_cloudflare_challenge(resp):
-            return
+            return False
+        if (
+            self._transport_mode != "httpx"
+            and not self._is_browser_client()
+            and self._escalate_to_browser()
+        ):
+            return True
+        self._raise_cloudflare(resp)
+        return False  # inalcançável (acima levanta)
+
+    def _raise_cloudflare(self, resp: httpx.Response) -> None:
+        """Levanta um erro claro de bloqueio pelo Cloudflare (genérico)."""
+        ray = resp.headers.get("cf-ray", "?")
+        if self._is_browser_client():
+            raise SEICloudflareBlocked(
+                "O desafio do Cloudflare barrou até o transporte via browser "
+                "(Playwright). O desafio pode ter endurecido — tente "
+                "SEI_BROWSER_HEADLESS=false, ou peça ao órgão uma regra de bypass "
+                f"no WAF para /sei/modulos/wssei/. (cf-ray={ray})"
+            )
         raise SEICloudflareBlocked(
-            "O domínio do SEI está protegido por um desafio do Cloudflare "
-            "(Managed Challenge). A requisição foi bloqueada na BORDA, antes de "
-            "chegar ao módulo wssei — por isso o 403 ocorre com qualquer "
-            "credencial. Não é erro de login, de versão do wssei nem do MCP.\n"
-            "Correção (lado ANTAQ/infra): criar uma regra de bypass no Cloudflare "
-            "para o caminho /sei/modulos/wssei/ (e /sip/login.php se usar o "
-            "scraper web), de preferência combinada com um header secreto. "
-            "Configure então esse header em SEI_EXTRA_HEADERS. Alternativa "
-            "temporária: cookie cf_clearance em SEI_CF_CLEARANCE. "
-            f"(cf-ray={resp.headers.get('cf-ray', '?')})"
+            "Requisição barrada por um desafio do Cloudflare (Managed Challenge) "
+            "na borda, antes de chegar ao wssei — ocorre com qualquer credencial "
+            "e não é erro de login nem do MCP.\n"
+            "O bypass automático via browser não está disponível: instale o extra "
+            "'playwright' (pip install '.[browser]' && playwright install "
+            "chromium) e o MCP contorna o desafio sozinho (modo auto). "
+            "Alternativas: regra de bypass no WAF do órgão para /sei/modulos/wssei/ "
+            "(+ header em SEI_EXTRA_HEADERS), ou cookie em SEI_CF_CLEARANCE. "
+            f"(cf-ray={ray})"
         )
 
     def _cache_get(self, key: str) -> Any:
@@ -173,28 +234,33 @@ class SEIClient:
         headers = await self._get_headers()
         kwargs.setdefault("headers", {}).update(headers)
         resp = await self._client.request(method, f"{self.base_url}{path}", **kwargs)
-        self._raise_if_cloudflare(resp)
+        if await self._handle_cloudflare(resp):
+            # escalou p/ browser: re-autentica e refaz a requisição
+            kwargs["headers"].update(await self._get_headers())
+            resp = await self._client.request(method, f"{self.base_url}{path}", **kwargs)
+            await self._handle_cloudflare(resp)
         if resp.status_code in (401, 403):
             logger.info("Token expirado, re-autenticando...")
             await self.autenticar()
             kwargs["headers"].update({"token": self._token})
             resp = await self._client.request(method, f"{self.base_url}{path}", **kwargs)
-            self._raise_if_cloudflare(resp)
+            await self._handle_cloudflare(resp)
         resp.raise_for_status()
         return resp
 
     async def autenticar(self) -> str:
         """Autentica no SEI e obtém token."""
-        resp = await self._client.post(
-            f"{self.base_url}/autenticar",
-            data={
-                "usuario": self._usuario,
-                "senha": self._senha,
-                "orgao": self._orgao,
-                "contexto": self._contexto,
-            },
-        )
-        self._raise_if_cloudflare(resp)
+        data_login = {
+            "usuario": self._usuario,
+            "senha": self._senha,
+            "orgao": self._orgao,
+            "contexto": self._contexto,
+        }
+        resp = await self._client.post(f"{self.base_url}/autenticar", data=data_login)
+        if await self._handle_cloudflare(resp):
+            # escalou p/ browser: refaz o login pelo novo transporte
+            resp = await self._client.post(f"{self.base_url}/autenticar", data=data_login)
+            await self._handle_cloudflare(resp)
         resp.raise_for_status()
         data = resp.json()
         if not data.get("sucesso"):
@@ -2158,3 +2224,9 @@ class SEIClient:
 
     async def close(self):
         await self._client.aclose()
+        if self._old_httpx is not None:
+            try:
+                await self._old_httpx.aclose()
+            except Exception:
+                pass
+            self._old_httpx = None
