@@ -69,6 +69,24 @@ class TestFormatarDocInterno:
     def test_markdown_without_disclaimer(self) -> None:
         assert "T" in d._formatar_doc_interno("<h1>T</h1>", "markdown", None)
 
+    def test_pdf_bytes_misclassified_as_interno_raises(self) -> None:
+        """Reproduz o bug: `_resolver_documento` classifica um documento externo (X)
+        como interno ("I") sempre que `visualizar_documento_interno` devolve mais de
+        alguns bytes, sem checar se o conteúdo é HTML de fato. Sem o guard de
+        `_parece_binario`, o PDF bruto (ou corrompido por um decode com charset
+        errado) seguiria intacto para `html_to_markdown` e vazaria como se fosse
+        o teor do documento — em vez de um erro acionável.
+        """
+        pdf_like_raw = "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\n"
+        with pytest.raises(SEIValidationError, match="binário"):
+            d._formatar_doc_interno(pdf_like_raw, "markdown", None)
+
+    def test_nul_byte_content_raises(self) -> None:
+        """Bytes decodificados 1:1 (ex.: latin-1) preservam NUL — impossível em
+        HTML/texto legítimo do SEI, então também deve disparar o guard."""
+        with pytest.raises(SEIValidationError, match="binário"):
+            d._formatar_doc_interno("lixo\x00binario\x00aqui", "markdown", None)
+
 
 # ---------------------------------------------------------------------------
 # _formatar_doc_externo (size/type guards; PDF extraction stubbed)
