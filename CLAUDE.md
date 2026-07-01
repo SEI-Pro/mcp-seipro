@@ -87,6 +87,16 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
   - `httpx` — força httpx (nunca escala). `browser` — força o Chromium desde o início (pula a 1ª tentativa httpx; útil em deploy dedicado a um órgão sabidamente atrás de CF).
   - `browser_transport.py` roteia o REST por um Chromium real que resolve o desafio; serializa chamadas, pesado. Extra `playwright` + `playwright install chromium`; no Railway `--build-arg INSTALL_BROWSER=true`. Testes: `tests/test_transport.py`. Cobre só o SEIClient REST — o SEIWebClient (scraper, opt-in) ainda cai no CF.
 
+### WAF do Cloudflare bloqueia ESCRITA por conteúdo (distinto do desafio)
+- Além do Managed Challenge, o Cloudflare da ANTAQ tem **managed rules (WAF) que inspecionam o CORPO do POST**. O `POST /documento/secao/alterar` leva **403 "Attention Required"** quando o HTML das seções casa um padrão do ruleset — ex.: o conteúdo real de um template de Despacho. Payload benigno (mesmo grande, 22KB) passa; por isso "alguns docs editam, outros dão 403"
+- É **bloqueio DURO** (`server: cloudflare`, 403, sem `cf-mitigated: challenge`) → o **browser-transport NÃO contorna** (ele passa o *challenge*, não o *managed-rule block*). Detectado por `_is_cloudflare_waf_block` → levanta `SEICloudflareBlocked` com mensagem específica de WAF; não re-autentica à toa
+- **Correção (lado ANTAQ/infra):** exceção de WAF para `/sei/modulos/wssei/` (ou desabilitar as managed rules nesse path). Verificado ao vivo 01/07/2026 no proc de teste 50300.018905/2018-67
+- `_request` agora inclui o **corpo da resposta** no erro HTTP (`_raise_http_with_body`) — antes o `raise_for_status` engolia o `mensagem`/`exception` do wssei (ex.: "Conteúdo do documento incompleto")
+
+### Resolução de id nas tools de seção (número SEI ≠ id interno)
+- `sei_listar_secoes` e `sei_editar_secao` agora resolvem via `_resolver_documento` (igual `sei_ler_documento`) — antes tratavam o argumento como id interno cru → passar um `protocoloFormatado` retornava **outro documento silenciosamente** (colisão de namespace: ambos são inteiros de magnitude parecida)
+- Ambas ecoam `_documento_resolvido` ({id_documento, nome, protocoloFormatado, idProcedimento}) — `nomeDocumento` (ex.: "Despacho 2949729") é o rótulo mais inequívoco. No `consultar_documento_interno`, o campo `protocolo` é o **idProcedimento** (não o nº do doc), e o nº SEI do doc sai do fim de `nomeDocumento`
+
 ### Estado verificado (atualização) — SEI 5.0.4 / wssei 3.0.2
 - **REST login/senha via `/autenticar` VOLTOU A FUNCIONAR.** O bug `ConfiguracaoMdWSSEI not found` (abaixo) foi corrigido pela TI da ANTAQ. No transporte `auto` (padrão) o MCP detecta o CF e escala p/ browser sozinho — validado: token + `versao` {sei:5.0.4, wssei:3.0.2} + 258 unidades
 - **O Cloudflare CONTINUA ativo na borda** → httpx puro leva 403, e o modo `auto` escala automaticamente (ou regra de bypass no WAF, ainda pendente)

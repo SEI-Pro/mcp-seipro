@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -742,6 +743,34 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
     )
 
 
+async def _identidade_documento(client: SEIClient, doc_id: str) -> dict:
+    """Eco auditável de qual documento foi efetivamente resolvido.
+
+    Best-effort: retorna {id_documento, protocoloFormatado, idProcedimento}.
+    Serve para deixar óbvia uma eventual divergência entre o número passado e
+    o documento que a tool de fato acessou (colisão id interno x protocoloFormatado).
+    """
+    ident: dict = {"id_documento": str(doc_id)}
+    try:
+        meta = await client.consultar_documento_interno(doc_id)
+        if isinstance(meta, dict):
+            # nomeDocumento (ex.: "Despacho 2949729") é o rótulo mais inequívoco
+            # para o agente conferir que caiu no documento certo.
+            nome = meta.get("nomeDocumento") or ""
+            if nome:
+                ident["nome"] = nome
+                m = re.search(r"(\d{3,})\s*$", nome)  # nº SEI ao final do nome
+                if m:
+                    ident["protocoloFormatado"] = m.group(1)
+            # No consultar interno, o campo 'protocolo' guarda o idProcedimento
+            # (id do processo), não o número do documento.
+            if meta.get("protocolo"):
+                ident["idProcedimento"] = str(meta.get("protocolo"))
+    except Exception:
+        pass
+    return ident
+
+
 @mcp.tool()
 async def sei_ler_documento(
     id_documento: str,
@@ -956,13 +985,21 @@ async def sei_criar_documento(
 async def sei_listar_secoes(id_documento: str, ctx: Context = None) -> str:
     """Lista as seções editáveis de um documento interno SEI.
 
-    Retorna as seções com seus IDs, conteúdo atual (HTML),
-    e a versão do documento (campo ultimaVersaoDocumento),
-    necessária para usar sei_editar_secao.
+    Aceita o número SEI (protocoloFormatado, ex: 2943731) OU o id interno — a
+    tool resolve automaticamente (igual sei_ler_documento). O número que o
+    usuário vê (protocoloFormatado) É DIFERENTE do id interno; a resposta inclui
+    `_documento_resolvido` (protocoloFormatado + idProcedimento) para você
+    conferir que caiu no documento certo antes de editar.
+
+    Retorna as seções com IDs, conteúdo atual (HTML) e a versão do documento
+    (campo ultimaVersaoDocumento), necessária para usar sei_editar_secao.
     """
     try:
         client = _get_client(ctx)
-        result = await client.listar_secao_documento(id_documento)
+        doc_id, _ = await _resolver_documento(client, id_documento)
+        result = await client.listar_secao_documento(doc_id)
+        if isinstance(result, dict):
+            result["_documento_resolvido"] = await _identidade_documento(client, doc_id)
         return _json(result)
     except Exception as e:
         return _error(str(e))
@@ -1073,13 +1110,21 @@ async def sei_editar_secao(
 
     IMPORTANTE: O SEI exige que TODAS as seções sejam enviadas. Esta tool
     faz isso automaticamente — basta informar as seções que deseja alterar.
+
+    O id_documento aceita número SEI (protocoloFormatado) ou id interno — é
+    resolvido automaticamente e o documento resolvido é ecoado no retorno
+    (`_documento_resolvido`), para evitar gravar no documento errado.
     """
     try:
         client = _get_client(ctx)
         import html as html_module
 
+        # Resolve o identificador (número SEI ou id interno) de forma consistente
+        # com sei_listar_secoes — assim listar e editar sempre atingem o MESMO doc.
+        doc_id, _ = await _resolver_documento(client, id_documento)
+
         # Buscar todas as seções atuais do documento
-        secoes_data = await client.listar_secao_documento(id_documento)
+        secoes_data = await client.listar_secao_documento(doc_id)
         secoes_atuais = secoes_data.get("secoes", [])
         if not versao:
             versao = str(secoes_data.get("ultimaVersaoDocumento", "1"))
@@ -1115,10 +1160,12 @@ async def sei_editar_secao(
             })
 
         result = await client.alterar_secao_documento(
-            id_documento=id_documento,
+            id_documento=doc_id,
             secoes=secoes_enviar,
             versao=versao,
         )
+        if isinstance(result, dict):
+            result["_documento_resolvido"] = await _identidade_documento(client, doc_id)
         return _json(result)
     except Exception as e:
         return _error(str(e))

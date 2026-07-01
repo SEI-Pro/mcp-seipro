@@ -210,6 +210,61 @@ class SEIClient:
             f"(cf-ray={ray})"
         )
 
+    @staticmethod
+    def _is_cloudflare_waf_block(resp: httpx.Response) -> bool:
+        """Detecta um BLOQUEIO de regra de WAF (managed rule) do Cloudflare.
+
+        Diferente do desafio JS: é um bloqueio DURO ("Attention Required" /
+        "you have been blocked") que inspeciona o corpo e NÃO é contornável por
+        browser. Tipicamente disparado pelo conteúdo de um POST (ex.: HTML de
+        seções de documento que casa o ruleset de segurança).
+        """
+        if "cloudflare" not in resp.headers.get("server", "").lower():
+            return False
+        if resp.status_code != 403:
+            return False
+        if resp.headers.get("cf-mitigated", "").lower() == "challenge":
+            return False  # isso é desafio, tratado por _handle_cloudflare
+        snippet = (resp.text or "")[:2000].lower()
+        return (
+            "attention required" in snippet
+            or "you have been blocked" in snippet
+            or "/cdn-cgi/styles/cf" in snippet
+        )
+
+    def _raise_if_waf_block(self, resp: httpx.Response) -> None:
+        """Se for bloqueio de WAF do Cloudflare, levanta erro claro e específico."""
+        if not self._is_cloudflare_waf_block(resp):
+            return
+        raise SEICloudflareBlocked(
+            "O Cloudflare bloqueou a requisição por uma REGRA DE WAF (managed "
+            "rule) que inspeciona o CORPO do POST — NÃO é o desafio JS, então o "
+            "transporte via browser não contorna. Ocorre quando o conteúdo HTML "
+            "enviado (ex.: seções de documento) casa um padrão do ruleset de "
+            "segurança do Cloudflare; por isso alguns documentos editam e outros "
+            "dão 403. Correção (lado do órgão/infra): exceção de WAF para o path "
+            "/sei/modulos/wssei/ (ou desabilitar as managed rules nesse path). "
+            f"(cf-ray={resp.headers.get('cf-ray', '?')})"
+        )
+
+    @staticmethod
+    def _raise_http_with_body(resp: httpx.Response) -> None:
+        """Como raise_for_status, mas inclui o CORPO da resposta na mensagem.
+
+        O wssei devolve JSON com `mensagem`/`exception` no corpo de erros HTTP;
+        o raise_for_status padrão os descarta e mostra só o status.
+        """
+        if resp.status_code < 400:
+            return
+        body = (resp.text or "").strip()
+        if len(body) > 900:
+            body = body[:900] + "…"
+        raise httpx.HTTPStatusError(
+            f"{resp.status_code} {resp.reason_phrase} em {resp.request.url} :: {body}",
+            request=resp.request,
+            response=resp,
+        )
+
     def _cache_get(self, key: str) -> Any:
         """Retorna valor cacheado se TTL não expirou, senão None."""
         entry = self._cache.get(key)
@@ -239,13 +294,17 @@ class SEIClient:
             kwargs["headers"].update(await self._get_headers())
             resp = await self._client.request(method, f"{self.base_url}{path}", **kwargs)
             await self._handle_cloudflare(resp)
+        # Bloqueio de WAF (managed rule) NÃO é expiração de token — erro claro,
+        # sem re-autenticar à toa (o retry daria 403 de novo).
+        self._raise_if_waf_block(resp)
         if resp.status_code in (401, 403):
             logger.info("Token expirado, re-autenticando...")
             await self.autenticar()
             kwargs["headers"].update({"token": self._token})
             resp = await self._client.request(method, f"{self.base_url}{path}", **kwargs)
             await self._handle_cloudflare(resp)
-        resp.raise_for_status()
+            self._raise_if_waf_block(resp)
+        self._raise_http_with_body(resp)  # inclui o corpo do wssei no erro
         return resp
 
     async def autenticar(self) -> str:
