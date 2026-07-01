@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import anyio
 import pytest
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 
 import todos.server as server_module
 from todos.cli_call import CliArgumentError
+
+
+def test_fixed_commands_matches_registered_typer_commands() -> None:
+    """`_FIXED_COMMANDS` deve ser derivado de `_app.registered_commands`, não hardcoded.
+
+    Regressão: um `@_app.command(...)` futuro sem entrada equivalente aqui
+    seria despachado como nome de tool por engano — ver RFC 0018 §6.1.
+    """
+    registered = {cmd.name for cmd in server_module._app.registered_commands}
+    assert registered == server_module._FIXED_COMMANDS
+    assert registered == {"setup", "set-password"}
 
 
 @pytest.mark.parametrize(
@@ -64,6 +76,11 @@ def test_dispatch_tool_reports_cli_argument_error(monkeypatch, capsys) -> None:
 
 
 def test_dispatch_tool_reports_mcp_error(monkeypatch, capsys) -> None:
+    """Cobre falhas reais de protocolo/transporte MCP (não o caso de tool desconhecida:
+    a FastMCP devolve isso como `CallToolResult(isError=True)`, tratado no caminho
+    normal de `cli_call.run` — ver RFC 0018 §6.1).
+    """
+
     async def fake_run(tool_name: str, args: list[str], *, as_json: bool) -> int:
         del tool_name, args, as_json
         raise McpError(ErrorData(code=-32602, message="tool desconhecida"))
@@ -74,6 +91,29 @@ def test_dispatch_tool_reports_mcp_error(monkeypatch, capsys) -> None:
 
     assert exit_code == 1
     assert "tool desconhecida" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OSError("subprocesso não iniciou"),
+        anyio.BrokenResourceError(),
+        anyio.ClosedResourceError(),
+    ],
+)
+def test_dispatch_tool_reports_transport_failure(monkeypatch, capsys, exc: Exception) -> None:
+    """Falha ao spawnar/negociar o subprocesso stdio deve virar erro claro, não traceback cru."""
+
+    async def fake_run(tool_name: str, args: list[str], *, as_json: bool) -> int:
+        del tool_name, args, as_json
+        raise exc
+
+    monkeypatch.setattr(server_module.cli_call, "run", fake_run)
+
+    exit_code = server_module._dispatch_tool(["sei_estilos"])
+
+    assert exit_code == 1
+    assert "sei_estilos" in capsys.readouterr().err
 
 
 def test_main_dispatches_tool_invocation_without_starting_typer_app(monkeypatch) -> None:

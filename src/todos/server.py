@@ -6,6 +6,7 @@ import sys
 from collections.abc import Callable
 from typing import Annotated, TypeAlias, TypedDict, TypeGuard
 
+import anyio
 import httpx
 import typer as _typer
 from fastmcp import Context
@@ -772,7 +773,10 @@ def _cmd_default(ctx: _typer.Context) -> None:
         mcp.run(transport="stdio", show_banner=False)
 
 
-_FIXED_COMMANDS = frozenset({"setup", "set-password"})
+# Derivado de `_app.registered_commands` (não hardcoded) para nunca desalinhar
+# de um novo `@_app.command(...)` — sem isso, um comando fixo futuro sem
+# entrada aqui seria despachado como nome de tool por engano.
+_FIXED_COMMANDS = frozenset(cmd.name for cmd in _app.registered_commands if cmd.name)
 
 
 def _is_tool_invocation(argv: list[str]) -> bool:
@@ -793,6 +797,9 @@ def _dispatch_tool(argv: list[str]) -> int:
         return 1
     except McpError as exc:
         sys.stderr.write(f"Erro ao chamar '{tool_name}': {exc}\n")
+        return 1
+    except (OSError, anyio.BrokenResourceError, anyio.ClosedResourceError) as exc:
+        sys.stderr.write(f"Erro ao conectar ao servidor '{tool_name}': {exc}\n")
         return 1
 
 

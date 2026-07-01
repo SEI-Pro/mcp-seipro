@@ -23,6 +23,18 @@ class CliArgumentError(ValueError):
     """Argumento de linha de comando malformado (não é `chave=valor`)."""
 
 
+def validate_tool_name(tool_name: str) -> None:
+    """Rejeita um nome de tool vazio ou que pareça um argumento `chave=valor` esquecido.
+
+    Sem isso, `todos foo=bar` (tool name omitido por engano) ou `todos ""`
+    chegariam ao MCP como um nome de tool literal e produziriam um erro
+    genérico "Unknown tool" em vez de um erro de uso claro.
+    """
+    if not tool_name or "=" in tool_name:
+        msg = f"Nome de tool inválido: {tool_name!r} — esperado 'todos <tool> chave=valor'"
+        raise CliArgumentError(msg)
+
+
 def parse_kwargs(pairs: list[str]) -> dict[str, str]:
     """Parseia argumentos posicionais `chave=valor` e devolve os kwargs de uma tool."""
     kwargs: dict[str, str] = {}
@@ -61,7 +73,10 @@ def format_result(result: CallToolResult, *, as_json: bool) -> str:
     lines: list[str] = []
     for item in result.content:
         if not isinstance(item, TextContent):
-            lines.append(str(item))
+            # Conteúdo não-textual (ex.: ImageContent) não tem representação
+            # textual óbvia; em modo --json ainda assim devolve JSON válido
+            # (model_dump_json), nunca o repr Python de str().
+            lines.append(item.model_dump_json() if as_json else str(item))
             continue
         if as_json:
             lines.append(item.text)
@@ -82,6 +97,7 @@ async def run(tool_name: str, args: list[str], *, as_json: bool = False) -> int:
     respondeu com erro (`CallToolResult.isError`). Levanta `CliArgumentError`
     para argumentos malformados — o chamador decide como reportar.
     """
+    validate_tool_name(tool_name)
     kwargs = parse_kwargs(args)
     result = await call_tool(tool_name, kwargs)
     sys.stdout.write(format_result(result, as_json=as_json) + "\n")

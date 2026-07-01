@@ -183,5 +183,29 @@ Passos 1–3 concluídos:
   sem subprocesso real) e `tests/test_cli_dispatch.py` (decisão de dispatch e
   `main()`, com `cli_call.run`/`_app` mockados). Validado ao vivo nesta sessão:
   `uv run todos sei_estilos` (chamada e formatação padrão), `--json` (saída
-  crua), nome de tool inexistente (exit code 1) e `todos --help`/`todos setup`
+  crua), nome de tool inexistente (exit code 1 — a FastMCP devolve
+  `CallToolResult(isError=True)` para tool desconhecida, não uma exceção
+  `McpError`; o exit code 1 vem de `cli_call.run`'s `1 if result.isError else
+  0`, não do `except McpError` de `_dispatch_tool`, que fica reservado para
+  falhas reais de protocolo/transporte) e `todos --help`/`todos setup`
   (fluxo Typer intacto).
+
+### 6.1 Revisão de código (2026-07-01)
+
+Correções aplicadas após revisão adversarial do PR:
+
+- `_FIXED_COMMANDS` deixou de ser um `frozenset` hardcoded e passou a ser
+  derivado de `_app.registered_commands` — evita desalinhar de um futuro
+  `@_app.command(...)` esquecido na lista manual.
+- `_dispatch_tool` agora também captura `(OSError, anyio.BrokenResourceError,
+  anyio.ClosedResourceError)` — falha ao spawnar/negociar o subprocesso
+  stdio (ex.: interpretador quebrado, subprocesso morre no meio do handshake)
+  antes só produzia um traceback cru.
+- `cli_call.run` valida o `tool_name` (`validate_tool_name`) antes de
+  despachar: `todos foo=bar` (nome da tool esquecido) ou `todos ""` agora
+  falham com um erro de uso claro em vez de um "Unknown tool" confuso vindo
+  do MCP.
+- `cli_call.format_result` usa `model_dump_json()` (não `str()`) para
+  conteúdo não-textual quando `--json` está ativo — mantém a saída
+  parseável mesmo nesse caso hoje inatingível (nenhuma das 127 tools
+  devolve algo além de `TextContent`).
