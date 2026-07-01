@@ -94,6 +94,40 @@ def test_deteccao_por_corpo_just_a_moment():
     assert SEIClient._is_cloudflare_challenge(r) is True
 
 
+def test_waf_block_e_detectado_e_distinto_do_challenge():
+    # Bloqueio duro de WAF: server=cloudflare, 403, "Attention Required", SEM cf-mitigated
+    waf = httpx.Response(
+        403, headers={"server": "cloudflare", "cf-ray": "z9"},
+        content=b"<title>Attention Required! | Cloudflare</title> ... /cdn-cgi/styles/cf.errors.css",
+        request=httpx.Request("POST", URL + "/documento/secao/alterar"),
+    )
+    assert SEIClient._is_cloudflare_waf_block(waf) is True
+    # não deve ser confundido com o desafio JS
+    assert SEIClient._is_cloudflare_challenge(waf) is False
+    c = _client("auto")
+    try:
+        c._raise_if_waf_block(waf)
+        assert False, "deveria levantar SEICloudflareBlocked"
+    except SEICloudflareBlocked as e:
+        assert "waf" in str(e).lower() and "managed rule" in str(e).lower()
+
+
+def test_challenge_nao_e_waf_block():
+    ch = httpx.Response(403, headers={"server": "cloudflare", "cf-mitigated": "challenge"},
+                        request=httpx.Request("GET", URL))
+    assert SEIClient._is_cloudflare_waf_block(ch) is False
+
+
+def test_raise_http_with_body_inclui_corpo():
+    r = httpx.Response(500, json={"sucesso": False, "mensagem": "Conteúdo do documento incompleto."},
+                       request=httpx.Request("POST", URL + "/documento/secao/alterar"))
+    try:
+        SEIClient._raise_http_with_body(r)
+        assert False, "deveria levantar"
+    except httpx.HTTPStatusError as e:
+        assert "documento incompleto" in str(e), str(e)
+
+
 def test_default_mode_e_auto():
     old = os.environ.pop("SEI_TRANSPORT", None)
     try:
