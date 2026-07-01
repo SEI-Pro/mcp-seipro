@@ -1,3 +1,3 @@
 """todos — TOdos DOmina O SEI: MCP server for SEI (Sistema Eletrônico de Informações)."""
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
