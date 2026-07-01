@@ -221,6 +221,54 @@ class TestGerarArquivoProcessoSessionExpiry:
         assert calls["download"] == 2
 
 
+class TestGerarArquivoProcessoStaleCacheKeyRetry:
+    def test_retry_clears_a_space_mismatched_cached_link(self) -> None:
+        """_find_link() matches cached keys space-insensitively, so a cached
+        key that only differs from protocolo_formatado by whitespace can
+        still be selected. The retry path used to pop only the literal
+        protocolo_formatado key — leaving that mismatched cached entry (and
+        its now-dead pre-signed href) in place, since login() repopulates
+        _trabalhar_links via setdefault (never overwrites). _find_link()
+        would then keep resolving to the same dead href forever, failing
+        with SEIAuthError even though a fresh href is available under the
+        exact key. The retry must clear the cached entry by the same
+        space-insensitive match it was found with."""
+        stale_key = _PROTOCOLO[:4] + " " + _PROTOCOLO[4:]  # differs only by whitespace
+        stale_href = "http://sei.test/sei/controlador.php?acao=procedimento_trabalhar&id=stale"
+
+        client = make_client()
+        client._inbox_url = httpx.URL(
+            "http://sei.test/sei/controlador.php?acao=procedimento_controlar"
+        )
+        client._trabalhar_links[stale_key] = stale_href
+
+        async def fake_get(url: str, **_kw: Any) -> httpx.Response:
+            if url == stale_href:
+                return _resp(stale_href, text=_LOGIN_PAGE)  # this href is permanently dead
+            if url == _TRAB_URL:
+                return _resp(_TRAB_URL, text=_R1_OK)
+            if url == _ARVORE_URL:
+                return _resp(_ARVORE_URL, text=_R2_OK)
+            if url == _FORM_URL:
+                return _resp(_FORM_URL, text=_R3_OK)
+            if url == _DOWNLOAD_URL:
+                return _resp(_DOWNLOAD_URL, content=_R5_OK)
+            msg = f"unexpected GET {url}"
+            raise AssertionError(msg)
+
+        async def fake_post(url: str, **_kw: Any) -> httpx.Response:
+            assert url == _POST_URL
+            return _resp(_POST_URL, text=_R4_OK)
+
+        client._http.get = AsyncMock(side_effect=fake_get)  # type: ignore[method-assign]
+        client._http.post = AsyncMock(side_effect=fake_post)  # type: ignore[method-assign]
+        client.login = _fake_login(client)  # type: ignore[method-assign]
+
+        content = asyncio.run(client._gerar_arquivo_processo(_PROTOCOLO, "procedimento_gerar_pdf"))
+        assert content == _R5_OK
+        assert stale_key not in client._trabalhar_links
+
+
 class TestGerarArquivoProcessoStillRaisesOnGenuineParseFailures:
     def test_missing_iframe_raises_parse_error_not_auth_error(self) -> None:
         """A page that's neither the expected frameset nor a login page is a
