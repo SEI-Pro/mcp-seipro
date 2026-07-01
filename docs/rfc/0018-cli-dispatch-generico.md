@@ -1,6 +1,6 @@
 # RFC 0018 — Dispatch genérico de tools via `todos <tool> chave=valor`
 
-**Status:** Proposta
+**Status:** ✅ Implementado (Opção B)
 **Data:** 2026-07-01
 **Motivação:** gap real encontrado em campo durante uma sessão de triagem — sem
 forma confiável de chamar uma tool via terminal, uma verificação simples (SEI
@@ -154,3 +154,34 @@ Esta RFC cobre **só** o dispatcher de CLI. Não inclui:
    removido ou rebaixado a nota de rodapé.
 4. (Opcional, follow-up) Medir custo por chamada da Opção B; considerar
    migrar para a Opção A (in-process) se o custo for sensível em uso real.
+
+## 6. Nota de implementação (2026-07-01)
+
+Passos 1–3 concluídos:
+
+- `src/todos/cli_call.py` — promove `scripts/call_tool.py` (removido) para
+  dentro do pacote, dividido em funções puras testáveis (`parse_kwargs`,
+  `format_result`) e uma função de I/O (`call_tool`, subprocesso stdio) +
+  orquestração (`run`). `--json` foi adicionado (§2.2) para saída JSON crua
+  linha-a-linha, útil para pipe/script; sem a flag, JSON é reindentado para
+  leitura humana.
+- Dispatch por nome (§2.1, Opção B) implementado **antes** do Typer resolver
+  o comando, não como um comando Typer dinâmico: `todos.server.main` inspeciona
+  `sys.argv` e, se o primeiro argumento não for `setup`/`set-password` nem
+  começar com `-`, despacha direto para `cli_call.run` sem invocar `_app()`.
+  Mais simples que ensinar o `click.Group` do Typer a resolver comandos
+  arbitrários, e não interfere em `todos --help`/`todos setup --help`
+  (continuam passando pelo Typer normalmente).
+- `CLAUDE.md` atualizado — `todos <tool> chave=valor` é o caminho recomendado;
+  as armadilhas do `fastmcp call` continuam documentadas (ainda podem confundir
+  quem tentar esse atalho por conta própria), mas como nota secundária.
+  `README.md` não citava `scripts/call_tool.py`, então não precisou de mudança.
+- Passo 4 (medir custo por chamada / considerar Opção A) fica como follow-up
+  não bloqueante — nenhum problema de performance relatado em uso real até
+  agora.
+- Testes: `tests/test_cli_call.py` (parsing/formatação/orquestração,
+  sem subprocesso real) e `tests/test_cli_dispatch.py` (decisão de dispatch e
+  `main()`, com `cli_call.run`/`_app` mockados). Validado ao vivo nesta sessão:
+  `uv run todos sei_estilos` (chamada e formatação padrão), `--json` (saída
+  crua), nome de tool inexistente (exit code 1) e `todos --help`/`todos setup`
+  (fluxo Typer intacto).

@@ -1,13 +1,17 @@
 """MCP Server genérico para o SEI (Sistema Eletrônico de Informações)."""
 
+import asyncio
 import re
+import sys
 from collections.abc import Callable
 from typing import Annotated, TypeAlias, TypedDict, TypeGuard
 
 import httpx
 import typer as _typer
 from fastmcp import Context
+from mcp.shared.exceptions import McpError
 
+from todos import cli_call
 from todos.backends import EnvioProcesso
 from todos.backends.choice import requires_backend
 from todos.backends.models import FiltroListagemProcessos, FiltrosPesquisaProcessos
@@ -752,7 +756,14 @@ def _cmd_set_password() -> None:
 
 @_app.callback(invoke_without_command=True)
 def _cmd_default(ctx: _typer.Context) -> None:
-    """MCP Server para o SEI — 127 tools, scraper HTTP + REST híbrido."""
+    """MCP Server para o SEI — 127 tools, scraper HTTP + REST híbrido.
+
+    Sem subcomando, sobe o servidor MCP (stdio ou HTTP conforme $PORT).
+    Além de `setup`/`set-password`, qualquer outro nome vira uma chamada de
+    tool: `todos sei_consultar_processo protocolo_formatado="..." backend=web`
+    (RFC 0018) — veja `sei_pesquisar_tipos_documento`/`sei_estilos` etc. no
+    catálogo completo em CLAUDE.md.
+    """
     if ctx.invoked_subcommand is not None:
         return
     if _http_mode:
@@ -761,6 +772,33 @@ def _cmd_default(ctx: _typer.Context) -> None:
         mcp.run(transport="stdio", show_banner=False)
 
 
+_FIXED_COMMANDS = frozenset({"setup", "set-password"})
+
+
+def _is_tool_invocation(argv: list[str]) -> bool:
+    """Indica se `argv` é `todos <tool> chave=valor` (nem comando fixo, nem opção)."""
+    return bool(argv) and argv[0] not in _FIXED_COMMANDS and not argv[0].startswith("-")
+
+
+def _dispatch_tool(argv: list[str]) -> int:
+    """Despacha `todos <tool> chave=valor... [--json]` para `cli_call.run`."""
+    tool_name, *rest = argv
+    as_json = "--json" in rest
+    if as_json:
+        rest = [arg for arg in rest if arg != "--json"]
+    try:
+        return asyncio.run(cli_call.run(tool_name, rest, as_json=as_json))
+    except cli_call.CliArgumentError as exc:
+        sys.stderr.write(f"Erro: {exc}\n")
+        return 1
+    except McpError as exc:
+        sys.stderr.write(f"Erro ao chamar '{tool_name}': {exc}\n")
+        return 1
+
+
 def main() -> None:
     """Entry point do console script `todos`."""
+    argv = sys.argv[1:]
+    if _is_tool_invocation(argv):
+        raise SystemExit(_dispatch_tool(argv))
     _app()
