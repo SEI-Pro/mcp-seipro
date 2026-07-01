@@ -42,6 +42,9 @@ class TestReauthTransportPassthrough:
         login_calls = 0
 
         class _FakeClient:
+            def refresh_request_cookies(self, request: httpx.Request) -> None:
+                pass
+
             async def login(self) -> None:
                 nonlocal login_calls
                 login_calls += 1
@@ -69,6 +72,9 @@ class TestReauthTransportPassthrough:
         wrapped = httpx.MockTransport(handler)
 
         class _FakeClient:
+            def refresh_request_cookies(self, request: httpx.Request) -> None:
+                pass
+
             async def login(self) -> None:
                 msg = "login() must not be called for a DELETE request"
                 raise AssertionError(msg)
@@ -99,6 +105,9 @@ class TestReauthTransportSelfHeals:
         login_calls = 0
 
         class _FakeClient:
+            def refresh_request_cookies(self, request: httpx.Request) -> None:
+                pass
+
             async def login(self) -> None:
                 nonlocal login_calls
                 login_calls += 1
@@ -131,6 +140,9 @@ class TestReauthTransportSelfHeals:
         wrapped = httpx.MockTransport(handler)
 
         class _FakeClient:
+            def refresh_request_cookies(self, request: httpx.Request) -> None:
+                pass
+
             async def login(self) -> None:
                 pass
 
@@ -160,6 +172,9 @@ class TestReauthTransportSelfHeals:
         login_calls = 0
 
         class _FakeClient:
+            def refresh_request_cookies(self, request: httpx.Request) -> None:
+                pass
+
             async def login(self) -> None:
                 nonlocal login_calls
                 login_calls += 1
@@ -192,6 +207,9 @@ class TestReauthTransportSelfHeals:
         login_invocations = 0
 
         class _FakeClient:
+            def refresh_request_cookies(self, request: httpx.Request) -> None:
+                pass
+
             async def login(self) -> None:
                 nonlocal login_invocations
                 login_invocations += 1
@@ -279,6 +297,9 @@ class TestReauthTransportAvoidsRedundantRelogin:
             login_calls = 0
 
             class _FakeClient:
+                def refresh_request_cookies(self, request: httpx.Request) -> None:
+                    pass
+
                 async def login(self) -> None:
                     nonlocal login_calls
                     login_calls += 1
@@ -296,6 +317,46 @@ class TestReauthTransportAvoidsRedundantRelogin:
         assert all(r.status_code == 200 for r in responses)
         assert all("conteúdo real" in r.text for r in responses)
         assert login_calls == 1
+
+
+class TestReauthTransportRefreshesCookiesBeforeResend:
+    def test_resend_uses_the_session_cookie_login_just_rotated(self) -> None:
+        """httpx bakes a Request's Cookie header once, at build time, from
+        whatever the client's jar held then — resending the same Request
+        object later does not re-read the jar. If login() rotates the
+        session cookie (a fresh session id after reauth, not unusual for a
+        server that regenerates it on login), resending without refreshing
+        the header would silently replay the pre-login cookie and look like
+        the session is still dead, forever."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "sessid=fresh" not in request.headers.get("Cookie", ""):
+                return httpx.Response(200, text=_LOGIN_PAGE, request=request)
+            return httpx.Response(200, text="<html>conteúdo real</html>", request=request)
+
+        wrapped = httpx.MockTransport(handler)
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self._cookies = httpx.Cookies()
+                self._cookies.set("sessid", "stale")
+
+            async def login(self) -> None:
+                # Simulates the server issuing a new session id on relogin.
+                self._cookies.set("sessid", "fresh")
+
+            def refresh_request_cookies(self, request: httpx.Request) -> None:
+                request.headers.pop("Cookie", None)
+                self._cookies.set_cookie_header(request)
+
+        transport = _ReauthTransport(wrapped, _FakeClient())  # type: ignore[arg-type]
+
+        async def run() -> httpx.Response:
+            async with httpx.AsyncClient(transport=transport, cookies={"sessid": "stale"}) as http:
+                return await http.get("http://sei.test/x")
+
+        response = asyncio.run(run())
+        assert "conteúdo real" in response.text
 
 
 class TestReauthTransportSuppressedDuringLogin:

@@ -354,6 +354,14 @@ class _ReauthTransport(httpx.AsyncBaseTransport):
             # value that was bumped after my snapshot", since a delayed
             # response only reads the counter once, right here. Resending
             # is the only thing that can tell for sure.
+            #
+            # Refresh the Cookie header before every resend: httpx bakes it
+            # into `request` once, at build time, from the jar as it stood
+            # then — it won't pick up a session cookie an intervening
+            # login() just rotated on its own. Without this, a resend after
+            # someone else's (or our own) relogin can replay the pre-login
+            # cookie and look like the session is still dead.
+            self._client.refresh_request_cookies(request)
             response = await self._wrapped.handle_async_request(request)
             await response.aread()
             if not _peek_is_login_page(response.content):
@@ -367,6 +375,7 @@ class _ReauthTransport(httpx.AsyncBaseTransport):
             with self._task_suppressed():
                 await self._client.login()
 
+        self._client.refresh_request_cookies(request)
         return await self._wrapped.handle_async_request(request)
 
     async def aclose(self) -> None:
@@ -538,6 +547,21 @@ class SEIWebClient:
     def is_authenticated(self) -> bool:
         """True após login bem-sucedido (inbox_url capturada)."""
         return self._inbox_url is not None
+
+    def refresh_request_cookies(self, request: httpx.Request) -> None:
+        """Refresh *request*'s baked-in ``Cookie`` header from the current jar.
+
+        httpx bakes the ``Cookie`` header into a ``Request`` once, at build
+        time, from whatever the jar held then — it does not re-read the jar
+        on resend. Worse, stdlib's ``CookieJar.add_cookie_header`` (which
+        ``httpx.Cookies.set_cookie_header`` delegates to) silently refuses to
+        touch a request that already has a ``Cookie`` header, so the stale
+        header must be cleared first. ``_ReauthTransport`` calls this before
+        resending a previously-built request, so a session cookie rotated by
+        an intervening ``login()`` isn't silently replayed stale.
+        """
+        request.headers.pop("Cookie", None)
+        self._http.cookies.set_cookie_header(request)
 
     def _reset_session_state(self) -> None:
         """Limpa todo o estado de sessão para garantir retry limpo."""
