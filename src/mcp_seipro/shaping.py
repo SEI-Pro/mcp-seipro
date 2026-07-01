@@ -77,7 +77,7 @@ def atribuido_unidade_atual(att: dict, unidade_ativa_id: Optional[str]) -> Optio
     # Regra 1: unidade da sessão presente em dadosAbertura com sufixo (atribuído a X)
     sessao_em_abertura = False
     for i, u in enumerate(unidades):
-        if str(u.get("id")) == uid:
+        if isinstance(u, dict) and str(u.get("id")) == uid:
             sessao_em_abertura = True
             sigla = ""
             if i < len(lista) and isinstance(lista[i], dict):
@@ -92,7 +92,10 @@ def atribuido_unidade_atual(att: dict, unidade_ativa_id: Optional[str]) -> Optio
         return {"id_usuario": ua.get("idUsuario"), "nome": _decode(ua.get("nome"))}
 
     # Regra 3: processo aberto somente na unidade da sessão
-    if ua and len(unidades) == 1 and str((unidades[0] or {}).get("id")) == uid:
+    if (
+        ua and len(unidades) == 1 and isinstance(unidades[0], dict)
+        and str(unidades[0].get("id")) == uid
+    ):
         return {"id_usuario": ua.get("idUsuario"), "nome": _decode(ua.get("nome"))}
 
     # (sessao_em_abertura sem sufixo e sem casar regra 2/3 → sem atribuição)
@@ -103,7 +106,9 @@ def _marcador(att: dict) -> Optional[dict]:
     marc = att.get("marcador") or []
     if not isinstance(marc, list) or not marc:
         return None
-    m0 = marc[0] or {}
+    m0 = marc[0]
+    if not isinstance(m0, dict):
+        return None
     nome = _limpar_marcador_nome(m0.get("nome"))
     if not nome:
         return None
