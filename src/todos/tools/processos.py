@@ -228,16 +228,21 @@ async def sei_consultar_processo(
 
     Exemplo de protocolo: 50300.000123/2025-00
 
-    Implementação híbrida: combina REST mod-wssei (campos estruturados) com
-    scraper web (árvore de documentos), ambos em paralelo.
+    Consulta o backend escolhido em `backend` — sem composição entre REST e
+    web. `backend='rest'` traz campos estruturados (assuntos, hipotese_legal,
+    grau_sigilo, observacoes) mas nenhum documento (`total_documentos` fica 0
+    e `next_actions` não sugere sei_arvore_processo mesmo havendo documentos).
+    `backend='web'` traz a árvore de documentos e relacionados, mas nenhum
+    desses campos estruturados. Para os dois conjuntos, use
+    sei_arvore_processo (documentos) em complemento.
 
     Campos retornados (include_raw=false, padrão):
     - protocolo, tipo, especificacao, situacao, nivel_acesso
     - interessados[], unidades_abertas[], total_documentos
-    - next_actions: sugere sei_arvore_processo quando há documentos
+    - next_actions: sugere sei_arvore_processo quando há documentos (só com backend='web')
 
-    Use include_raw=true para o payload bruto completo com todos os campos
-    (assuntos, hipotese_legal, grau_sigilo, observacoes, relacionados, documentos[]).
+    Use include_raw=true para o payload bruto completo com os campos
+    disponíveis no backend escolhido (ver acima).
 
     Quando o processo é restrito ou sigiloso (nivel_acesso 1 ou 2), a resposta
     inclui `_aviso_acesso` — aviso informativo, não erro de permissão.
