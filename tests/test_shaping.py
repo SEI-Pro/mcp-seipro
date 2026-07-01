@@ -171,6 +171,23 @@ def test_schema_aberto_em_unidades_e_protocolo():
     assert out["protocolo"] == "50300.015295/2026-50"
 
 
+# ---------------------------------------------------------------- robustez
+def test_entrada_malformada_nao_estoura():
+    """Itens não-dict em unidades/lista/marcador não podem derrubar a listagem."""
+    att = _att(
+        usuarioAtribuido={"idUsuario": "1", "nome": "X"},
+        marcador=[None, {"nome": "ok", "descricaoCor": "Azul"}],
+        dadosAbertura={"unidades": [None, "lixo", {"id": GPF, "nome": "GPF"}],
+                       "lista": [None, {"sigla": "GPF"}]},
+    )
+    out = shape_processo_resumido(att_wrap(att), GPF)  # não deve levantar
+    assert out["marcador"] is None  # 1º marcador é None → ignora item ruim
+    # unidade da sessão existe (3ª), sem sufixo; topo != sessão; >1 unidade → null
+    assert out["atribuido_unidade_atual"] is None
+    # marcador não-dict em 1ª posição → _marcador retorna None sem crashar
+    assert atribuido_unidade_atual(_att(dadosAbertura={"unidades": [None], "lista": []}), GPF) is None
+
+
 def att_wrap(att):
     """Envolve `atributos` num item de listagem (com id/status de topo)."""
     return {"id": att.get("idProcedimento", "1"), "status": "P",
