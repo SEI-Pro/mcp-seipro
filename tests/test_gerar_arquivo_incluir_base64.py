@@ -79,7 +79,7 @@ class TestSalvarArquivoTempBase64Default:
 class TestSeiGerarPdfProcessoTool:
     def test_default_response_has_no_base64_field(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _FakeBackend(b"%PDF-1.4 conteudo de teste")
-        monkeypatch.setattr(processos, "_backend", _aconst(fake))
+        monkeypatch.setattr(processos, "_web_backend", _aconst(fake))
 
         raw = asyncio.run(processos.sei_gerar_pdf_processo("50300.000123/2025-00", ctx=None))
         payload = json.loads(raw)
@@ -91,7 +91,7 @@ class TestSeiGerarPdfProcessoTool:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         fake = _FakeBackend(b"%PDF-1.4 pequeno")
-        monkeypatch.setattr(processos, "_backend", _aconst(fake))
+        monkeypatch.setattr(processos, "_web_backend", _aconst(fake))
 
         raw = asyncio.run(
             processos.sei_gerar_pdf_processo("50300.000123/2025-00", ctx=None, incluir_base64=True)
@@ -103,7 +103,7 @@ class TestSeiGerarPdfProcessoTool:
 class TestSeiGerarZipProcessoTool:
     def test_default_response_has_no_base64_field(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _FakeBackend(b"PK\x03\x04 conteudo de teste")
-        monkeypatch.setattr(processos, "_backend", _aconst(fake))
+        monkeypatch.setattr(processos, "_web_backend", _aconst(fake))
 
         raw = asyncio.run(processos.sei_gerar_zip_processo("50300.000123/2025-00", ctx=None))
         payload = json.loads(raw)
@@ -114,7 +114,7 @@ class TestSeiGerarZipProcessoTool:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         fake = _FakeBackend(b"PK\x03\x04 pequeno")
-        monkeypatch.setattr(processos, "_backend", _aconst(fake))
+        monkeypatch.setattr(processos, "_web_backend", _aconst(fake))
 
         raw = asyncio.run(
             processos.sei_gerar_zip_processo("50300.000123/2025-00", ctx=None, incluir_base64=True)
