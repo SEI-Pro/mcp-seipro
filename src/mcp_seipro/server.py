@@ -4012,6 +4012,51 @@ async def sei_alterar_anotacao_bloco_assinatura(
         return _error(str(e))
 
 
+# ---------------------------------------------------------------------------
+# Tool annotations (hints MCP) — ajudam o CLIENTE a decidir sobre auto-aprovação.
+# A confirmação "No approval received" é gate do cliente (ex.: Claude.ai), NÃO do
+# código nem do SEI; o servidor não tem flag de "requires confirmation" — só pode
+# sinalizar via annotations. Leitura pura (readOnlyHint) costuma ser auto-aprovada.
+# Classificado por convenção de nome (sei_<verbo>_...) para cobrir as ~116 tools
+# de forma consistente, sem anotar 116 decorators à mão.
+# ---------------------------------------------------------------------------
+_ANNOT_VERBOS_LEITURA = {
+    "listar", "pesquisar", "consultar", "buscar", "ler", "arvore", "gerar",
+    "estilos", "resumo", "versao", "parametros", "verificar", "historico", "sugestao",
+}
+_ANNOT_VERBOS_DESTRUTIVOS = {"excluir"}          # exclusão irreversível
+_ANNOT_VERBOS_IDEMPOTENTES = {"alterar", "editar"}  # reaplicar o mesmo conteúdo converge
+
+
+def _aplicar_tool_annotations() -> None:
+    """Aplica ToolAnnotations às tools registradas, por convenção de nome.
+
+    Respeita annotations já declaradas explicitamente no decorator (não sobrescreve).
+    """
+    try:
+        from mcp.types import ToolAnnotations
+        tools = getattr(getattr(mcp, "_tool_manager", None), "_tools", None) or {}
+        for nome, tool in tools.items():
+            if getattr(tool, "annotations", None) is not None:
+                continue
+            partes = nome.split("_")
+            verbo = partes[1] if len(partes) > 1 else ""
+            if verbo in _ANNOT_VERBOS_LEITURA:
+                tool.annotations = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+            else:
+                tool.annotations = ToolAnnotations(
+                    readOnlyHint=False,
+                    destructiveHint=verbo in _ANNOT_VERBOS_DESTRUTIVOS,
+                    idempotentHint=True if verbo in _ANNOT_VERBOS_IDEMPOTENTES else None,
+                    openWorldHint=True,
+                )
+    except Exception as e:  # nunca deixar a annotation quebrar o boot
+        logger.warning("Falha ao aplicar tool annotations: %s", e)
+
+
+_aplicar_tool_annotations()
+
+
 def main():
     if _http_mode:
         import uvicorn
