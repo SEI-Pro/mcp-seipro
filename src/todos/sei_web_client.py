@@ -3023,8 +3023,53 @@ class SEIWebClient:
         return urljoin(sei_base, m.group(1).replace("&amp;", "&"))
 
     async def pesquisar_tipos_processo_web(self, filtro: str = "") -> dict:
-        """Extrai tipos de processo do select selTipoProcedimento em procedimento_cadastrar."""
+        """Extrai tipos de processo disponíveis para iniciar um novo processo.
+
+        Lida com os dois fluxos do SEI (mesma dualidade de `_abrir_form_cadastro_processo`):
+        - `procedimento_escolher_tipo` (SEI moderno): os tipos vêm em
+          `#tblTipoProcedimento`, uma linha por tipo com `<a onclick="escolher(ID)">Nome</a>`
+          — POST com `hdnFiltroTipoProcedimento='T'` mostra todos, não só os favoritos;
+        - `procedimento_cadastrar` (instâncias antigas): os tipos vêm num
+          `<select name="selTipoProcedimento">` direto no form.
+        """
         await self.ensure_authenticated()
+
+        try:
+            escolher_url = await self._obter_link_toolbar("procedimento_escolher_tipo")
+        except SEINotFoundError:
+            escolher_url = None
+
+        tipos: list[dict[str, str]] = []
+        if escolher_url is not None:
+            r = await self._http.get(escolher_url, headers={"Referer": str(self._inbox_url)})
+            _check(r)
+            soup = BeautifulSoup(
+                _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
+            )
+            form = soup.find("form", id="frmProcedimentoEscolherTipo")
+            if form is None:
+                msg = "Form procedimento_escolher_tipo não encontrado."
+                raise SEIParseError(msg)
+            r2 = await self._post_form_preservando(
+                form,
+                str(r.url),
+                {_FIELD_FILTRO_TIPO_PROC: "T", _FIELD_ID_TIPO_PROC: ""},
+                str(r.url),
+            )
+            soup2 = BeautifulSoup(
+                _decode_response(r2.content, r2.headers.get("content-type", "")), "html.parser"
+            )
+            table = soup2.find(id="tblTipoProcedimento")
+            for a in table.find_all("a", onclick=True) if table else []:
+                m = re.match(r"escolher\((\d+)\)", _tag_str(a, "onclick"))
+                if not m:
+                    continue
+                nome = a.get_text(strip=True)
+                if filtro and filtro.lower() not in nome.lower():
+                    continue
+                tipos.append({"id": m.group(1), "nome": nome})
+            return {"tipos": tipos, "total_itens": len(tipos)}
+
         cadastrar_url = await self._obter_link_toolbar("procedimento_cadastrar")
         r = await self._http.get(cadastrar_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
@@ -3033,7 +3078,6 @@ class SEIWebClient:
         sel = soup.find("select", {"name": re.compile(r"selTipoProcedimento", re.IGNORECASE)})
         if sel is None:
             sel = soup.find("select", id=re.compile(r"selTipoProcedimento", re.IGNORECASE))
-        tipos: list[dict[str, str]] = []
         if sel is not None:
             for opt in sel.find_all("option"):
                 v = _tag_str(opt, "value")
@@ -3542,7 +3586,16 @@ class SEIWebClient:
         }
 
     async def pesquisar_hipoteses_legais_web(self, filtro: str = "") -> dict:
-        """Extrai hipóteses legais do select selHipoteseLegal em procedimento_cadastrar."""
+        """Extrai hipóteses legais do select selHipoteseLegal em procedimento_cadastrar.
+
+        LIMITAÇÃO CONHECIDA: em instâncias modernas do SEI (fluxo
+        `procedimento_escolher_tipo`, ver `pesquisar_tipos_processo_web`),
+        `selHipoteseLegal` só existe no form final `frmProcedimentoCadastro`
+        — depois de já ter escolhido um tipo de processo — não no toolbar da
+        inbox. Esta função ainda assume o fluxo antigo direto e vai levantar
+        `SEINotFoundError` nessas instâncias. Só afeta criar processo com
+        `nivel_acesso` restrito/sigiloso (público não precisa de hipótese legal).
+        """
         await self.ensure_authenticated()
         cadastrar_url = await self._obter_link_toolbar("procedimento_cadastrar")
         r = await self._http.get(cadastrar_url, headers={"Referer": str(self._inbox_url)})
