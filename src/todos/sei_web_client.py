@@ -236,9 +236,7 @@ def _parse_unidades_envio_xml(xml_text: str) -> list[dict]:
     for item in root.findall("item"):
         descricao = item.get("descricao", "")
         sigla, _, nome = descricao.partition(" - ")
-        resultados.append(
-            {"id": item.get("id", ""), "sigla": sigla.strip(), "nome": nome.strip()}
-        )
+        resultados.append({"id": item.get("id", ""), "sigla": sigla.strip(), "nome": nome.strip()})
     return resultados
 
 
@@ -4124,8 +4122,25 @@ class SEIWebClient:
         sei_base = f"{self.sei_root}/sei/"
 
         # --- Step 1: encontrar link documento_escolher_tipo na árvore ---
+        # As ações do nó raiz (`Nos[0].acoes`) vêm como HTML *escapado dentro de
+        # uma string JS* (`Nos[0].acoes = '<a href="...">...'`), não como <a> de
+        # verdade no DOM da página — por isso soup.find_all("a", ...) na árvore
+        # inteira não enxerga esse link; é preciso extrair a string primeiro.
         incluir_href: str | None = None
-        soup_acoes = BeautifulSoup(html_arvore, "html.parser")
+        for pat in (
+            r"(?s)Nos\[0\]\.acoes\s*=\s*'((?:[^'\\]|\\.)*)'",
+            r'(?s)Nos\[0\]\.acoes\s*=\s*"((?:[^"\\]|\\.)*)"',
+        ):
+            m_acoes = re.search(pat, html_arvore)
+            if m_acoes:
+                acoes_html = (
+                    m_acoes.group(1).replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
+                )
+                break
+        else:
+            acoes_html = ""
+
+        soup_acoes = BeautifulSoup(acoes_html or html_arvore, "html.parser")
         for a in soup_acoes.find_all("a", href=re.compile(r"documento_escolher_tipo")):
             incluir_href = _tag_str(a, "href").replace("&amp;", "&")
             break
@@ -4140,6 +4155,15 @@ class SEIWebClient:
                     if pa and "documento_escolher_tipo" in _tag_str(pa, "href"):
                         incluir_href = _tag_str(pa, "href").replace("&amp;", "&")
                         break
+        if not incluir_href:
+            # Último recurso: regex direto no HTML bruto (cobre instâncias onde
+            # nem Nos[0].acoes existe mas o link aparece solto em outro script).
+            m_href = re.search(
+                r"controlador\.php\?acao=documento_escolher_tipo[^\"'\s]*infra_hash=[a-fA-F0-9]+",
+                html_arvore,
+            )
+            if m_href:
+                incluir_href = m_href.group(0)
 
         if not incluir_href:
             msg = "Link 'Incluir Documento' não encontrado nas ações do processo."
@@ -4156,40 +4180,43 @@ class SEIWebClient:
         if erro3:
             raise SEIConnectionError(erro3)
 
-        # Se id_serie não fornecido — retorna lista de tipos disponíveis
+        # Se id_serie não fornecido — retorna lista de tipos disponíveis.
+        # Nesta instância os tipos vêm como linhas de tabela com
+        # <a onclick="escolher(ID)">Nome</a> (mesmo padrão de
+        # pesquisar_tipos_processo_web para tipo de processo), não como
+        # <a href="...id_serie=...">.
         if not id_serie:
             soup3 = BeautifulSoup(body3, "html.parser")
             tipos = []
-            for a in soup3.find_all("a", href=re.compile(r"id_serie=")):
-                href = _tag_str(a, "href")
-                m_s = re.search(r"id_serie=(\d+)", href)
+            for a in soup3.find_all("a", onclick=re.compile(r"^escolher\(")):
+                m_s = re.match(r"escolher\((\d+)\)", _tag_str(a, "onclick"))
                 if m_s:
                     tipos.append({"id_serie": m_s.group(1), "nome": a.get_text(strip=True)})
+            if not tipos:
+                for a in soup3.find_all("a", href=re.compile(r"id_serie=")):
+                    href = _tag_str(a, "href")
+                    m_s = re.search(r"id_serie=(\d+)", href)
+                    if m_s:
+                        tipos.append({"id_serie": m_s.group(1), "nome": a.get_text(strip=True)})
             return {"tipos_disponiveis": tipos}
 
-        # Encontra o link do editor para este id_serie
-        m_editor = re.search(
-            rf"(controlador\.php[^\"'\s]*acao=editor_montar[^\"'\s]*id_serie={re.escape(id_serie)}[^\"'\s]*infra_hash=[a-fA-F0-9]+)",
-            body3,
-        )
-        if not m_editor:
-            # Try reverse order: infra_hash before id_serie
-            m_editor = re.search(
-                rf"(controlador\.php[^\"'\s]*acao=editor_montar[^\"'\s]*infra_hash=[a-fA-F0-9]+[^\"'\s]*id_serie={re.escape(id_serie)}[^\"'\s]*)",
-                body3,
-            )
-        if not m_editor:
+        # Escolhe o tipo: o link acima só abre a tela de escolha (mesma que
+        # lista os `tipos_disponiveis`) — a seleção em si é um POST do form
+        # frmDocumentoEscolherTipo com hdnIdSerie=<id_serie> (JS `escolher()`),
+        # não um GET direto com id_serie na querystring do editor.
+        soup3_form = BeautifulSoup(body3, "html.parser")
+        form3 = soup3_form.find("form", id="frmDocumentoEscolherTipo")
+        if form3 is None:
             msg = (
-                f"Link editor_montar para id_serie={id_serie} não encontrado. "
+                f"Form frmDocumentoEscolherTipo não encontrado para id_serie={id_serie}. "
                 "Use id_serie='' para listar os tipos disponíveis."
             )
             raise SEINotFoundError(msg)
-
-        editor_url = urljoin(sei_base, m_editor.group(1).replace("&amp;", "&"))
-
-        # --- Step 3: GET editor_montar ---
-        r4 = await self._http.get(editor_url, headers={"Referer": str(r3.url)})
+        r4 = await self._post_form_preservando(
+            form3, str(r3.url), {"hdnIdSerie": id_serie}, str(r3.url)
+        )
         _check(r4)
+        editor_url = str(r4.url)
 
         body4 = _decode_response(r4.content, r4.headers.get("content-type", ""))
         erro4 = _extrair_erro_sei(body4)
@@ -4199,7 +4226,7 @@ class SEIWebClient:
         soup4 = BeautifulSoup(body4, "html.parser")
         form4 = soup4.find("form")
         if form4 is None:
-            msg = "Form editor_montar não encontrado."
+            msg = f"Form editor_montar não encontrado para id_serie={id_serie}."
             raise SEINotFoundError(msg)
 
         action4 = _tag_str(form4, "action").replace("&amp;", "&")
