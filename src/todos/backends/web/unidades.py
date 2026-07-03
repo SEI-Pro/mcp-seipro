@@ -25,10 +25,19 @@ class UnidadesWeb(_WebMixin):
         """Troca a unidade ativa (aceita id interno ou sigla)."""
         return await self._web.trocar_unidade(id_unidade)
 
-    async def pesquisar_unidades(self, filtro: str = "", limit: int = 50, pagina: int = 0) -> dict:
-        """Pesquisa unidades por nome ou sigla (inclui a unidade atual)."""
+    async def pesquisar_unidades(
+        self, filtro: str = "", limit: int = 50, pagina: int = 0, protocolo: str = ""
+    ) -> dict:
+        """Pesquisa unidades por nome ou sigla (inclui a unidade atual).
+
+        `protocolo` é obrigatório neste backend — o autocomplete do SEI só
+        responde dentro do contexto de uma tela "Enviar Processo" já aberta
+        para um processo específico. Veja SEIWebClient.pesquisar_unidades_envio.
+        """
         del pagina  # contrato exige o parâmetro; a pesquisa web não pagina via offset
-        result = await self._web.pesquisar_outras_unidades_web(filtro=filtro, limit=limit)
+        result = await self._web.pesquisar_outras_unidades_web(
+            filtro=filtro, limit=limit, protocolo=protocolo
+        )
         # O autocomplete web exclui a unidade atual; ao contrário de
         # pesquisar_outras_unidades, esta op deve incluí-la. Reinsere-a quando
         # casa o filtro (mesma forma {id, sigla, nome} dos demais itens).
@@ -50,11 +59,16 @@ class UnidadesWeb(_WebMixin):
         return result
 
     async def pesquisar_outras_unidades(
-        self, filtro: str = "", limit: int = 50, pagina: int = 0
+        self, filtro: str = "", limit: int = 50, pagina: int = 0, protocolo: str = ""
     ) -> dict:
-        """Pesquisa unidades excluindo a unidade atual."""
+        """Pesquisa unidades excluindo a unidade atual.
+
+        `protocolo` é obrigatório neste backend — ver pesquisar_unidades acima.
+        """
         del pagina  # contrato exige o parâmetro; a pesquisa web não pagina via offset
-        return await self._web.pesquisar_outras_unidades_web(filtro=filtro, limit=limit)
+        return await self._web.pesquisar_outras_unidades_web(
+            filtro=filtro, limit=limit, protocolo=protocolo
+        )
 
     async def listar_usuarios(self, filtro: str = "", *, apenas_unidade: bool = True) -> dict:
         """Lista usuários do órgão ou apenas da unidade atual."""

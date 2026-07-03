@@ -39,12 +39,14 @@ class UnidadesProtocol(Protocol):
         """Troca a unidade ativa (aceita id interno ou sigla)."""
         ...
 
-    async def pesquisar_unidades(self, filtro: str = "", limit: int = 50, pagina: int = 0) -> dict:
+    async def pesquisar_unidades(
+        self, filtro: str = "", limit: int = 50, pagina: int = 0, protocolo: str = ""
+    ) -> dict:
         """Pesquisa unidades por nome ou sigla."""
         ...
 
     async def pesquisar_outras_unidades(
-        self, filtro: str = "", limit: int = 50, pagina: int = 0
+        self, filtro: str = "", limit: int = 50, pagina: int = 0, protocolo: str = ""
     ) -> dict:
         """Pesquisa unidades excluindo a unidade atual."""
         ...

@@ -23,6 +23,7 @@ import mimetypes
 import re
 import time
 import warnings
+import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -218,6 +219,27 @@ def _extrair_erro_sei(html: str) -> str | None:
         if m:
             return m.group(1)
     return None
+
+
+def _parse_unidades_envio_xml(xml_text: str) -> list[dict]:
+    """Parseia a resposta de `unidade_auto_completar_envio_processo`.
+
+    Formato: ``<itens><item id="123" descricao="SIGLA - Nome da unidade"/></itens>``.
+    `descricao` sempre vem como "SIGLA - Nome" (separador " - " literal).
+    """
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        logger.warning("pesquisar_unidades_envio: resposta XML inválida: %r", xml_text[:200])
+        return []
+    resultados = []
+    for item in root.findall("item"):
+        descricao = item.get("descricao", "")
+        sigla, _, nome = descricao.partition(" - ")
+        resultados.append(
+            {"id": item.get("id", ""), "sigla": sigla.strip(), "nome": nome.strip()}
+        )
+    return resultados
 
 
 def _extrair_submit_btn(form: Tag) -> tuple[str, str] | None:
@@ -2819,42 +2841,64 @@ class SEIWebClient:
     # Complex forms — PR #5
     # ------------------------------------------------------------------
 
-    async def autocomplete_unidades(self, termo: str) -> list[dict]:
-        """Resolve sigla/nome de unidade via AJAX autocomplete do SEI.
+    async def pesquisar_unidades_envio(self, protocolo: str, termo: str) -> list[dict]:
+        """Pesquisa unidades destino para tramitação de um `protocolo` específico.
+
+        O link para a tela "Enviar Processo" (`acao=procedimento_enviar`, com seu
+        próprio `infra_hash`) já vem embutido no HTML da árvore do processo — é
+        só procurar pelo nome de ação certo (versões antigas deste cliente
+        procuravam por "procedimento_tramitar", que não existe nesta instância).
+        Dentro dessa página, o SEI expõe a URL completa (com um SEGUNDO
+        `infra_hash`, próprio do autocomplete, distinto do hash da própria
+        página) como literal JavaScript:
+        ``new infraAjaxAutoCompletar('hdnIdUnidade','txtUnidade','controlador_ajax.php?acao_ajax=unidade_auto_completar_envio_processo&...&infra_hash=...')``.
+        Bastam duas requisições HTTP simples — sem navegador.
 
         Retorna lista de {"id": str, "sigla": str, "nome": str}.
         """
         await self.ensure_authenticated()
+        html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
         sei_base = f"{self.sei_root}/sei/"
-        r = await self._http.get(
-            f"{sei_base}controlador_ajax.php",
-            params={"acao_ajax": "unidade_auto_completar", "termo": termo},
-            headers={"Referer": str(self._inbox_url)},
+
+        m_enviar = re.search(
+            r"controlador\.php\?acao=(?:procedimento_enviar|procedimento_tramitar)"
+            r"[^\"'\s]*infra_hash=[a-fA-F0-9]+",
+            html_arvore,
         )
-        if not r.is_success:
-            logger.warning("autocomplete_unidades: HTTP %s para termo=%r", r.status_code, termo)
-            return []
-        try:
-            raw = r.json()
-        except ValueError:
-            logger.warning(
-                "autocomplete_unidades: resposta não-JSON (HTTP %s) para termo=%r",
-                r.status_code,
-                termo,
+        if not m_enviar:
+            msg = (
+                f"Ação de enviar processo não encontrada na árvore de {protocolo}. "
+                "Verifique permissão de tramitação neste processo."
             )
-            return []
-        results = []
-        for item in raw if isinstance(raw, list) else []:
-            if not isinstance(item, dict):
-                continue
-            results.append(
-                {
-                    "id": str(item.get("id", item.get("value", ""))),
-                    "sigla": str(item.get("sigla", item.get("label", ""))),
-                    "nome": str(item.get("nome", item.get("descricao", ""))),
-                }
-            )
-        return results
+            raise SEINotFoundError(msg)
+        enviar_url = urljoin(sei_base, m_enviar.group(0).replace("&amp;", "&"))
+
+        r1 = await self._http.get(enviar_url, headers={"Referer": url_arvore})
+        _check(r1)
+        html_enviar = _decode_response(r1.content, r1.headers.get("content-type", ""))
+
+        m_ajax = re.search(
+            r"controlador_ajax\.php\?acao_ajax=unidade_auto_completar_envio_processo"
+            r"[^'\"]*infra_hash=[a-fA-F0-9]+",
+            html_enviar,
+        )
+        if not m_ajax:
+            msg = f"Campo de busca de unidade não encontrado na tela de envio de {protocolo}."
+            raise SEIParseError(msg)
+        ajax_url = urljoin(sei_base, m_ajax.group(0).replace("&amp;", "&"))
+
+        body = urlencode({"palavras_pesquisa": termo, "id_orgao": "", "unidade_atual": "0"})
+        r2 = await self._http.post(
+            ajax_url,
+            content=body,
+            headers={
+                "Referer": str(r1.url),
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        _check(r2)
+        xml_text = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        return _parse_unidades_envio_xml(xml_text)
 
     async def enviar_processo_web(
         self,
@@ -2864,8 +2908,12 @@ class SEIWebClient:
     ) -> dict:
         """Envia (tramita) um processo via scraper web do SEI.
 
-        Fluxo: trabalhar → arvore → link(procedimento_tramitar) → GET form → POST.
+        Fluxo: trabalhar → arvore → link(procedimento_enviar) → GET form → POST.
         As `unidades_ids` devem ser IDs numéricos já resolvidos.
+
+        O nome da ação varia por instância/versão do SEI: algumas chamam
+        "procedimento_tramitar", outras (confirmado em sei.sistemas.ro.gov.br,
+        2026-07-03) chamam "procedimento_enviar" — aceitamos os dois.
         """
         _op = opcoes or OpcoesTramitacaoWeb()
         await self.ensure_authenticated()
@@ -2874,12 +2922,13 @@ class SEIWebClient:
         sei_base = f"{self.sei_root}/sei/"
 
         m = re.search(
-            r"(controlador\.php\?acao=procedimento_tramitar[^\"'\s]*infra_hash=[a-fA-F0-9]+)",
+            r"(controlador\.php\?acao=(?:procedimento_enviar|procedimento_tramitar)"
+            r"[^\"'\s]*infra_hash=[a-fA-F0-9]+)",
             html_arvore,
         )
         if not m:
             msg = (
-                f"Ação 'procedimento_tramitar' não encontrada na árvore de {protocolo}. "
+                f"Ação de enviar/tramitar processo não encontrada na árvore de {protocolo}. "
                 "Verifique permissão de tramitação neste processo."
             )
             raise SEINotFoundError(msg)
@@ -3088,10 +3137,16 @@ class SEIWebClient:
             "tem_proxima": len(blocos) >= limit,
         }
 
-    async def pesquisar_outras_unidades_web(self, filtro: str = "", limit: int = 50) -> dict:
-        """Pesquisa unidades via AJAX autocomplete (unidade_auto_completar).
+    async def pesquisar_outras_unidades_web(
+        self, filtro: str = "", limit: int = 50, protocolo: str = ""
+    ) -> dict:
+        """Pesquisa unidades via AJAX autocomplete (unidade_auto_completar_envio_processo).
 
-        Requer filtro não-vazio — o endpoint AJAX não retorna resultados sem termo.
+        Requer `filtro` não-vazio e um `protocolo` de referência — o autocomplete
+        do SEI só responde dentro do contexto de uma tela "Enviar Processo" já
+        aberta para esse processo específico (ver pesquisar_unidades_envio).
+        Sem `protocolo`, esta busca é estruturalmente impossível no backend web
+        (diferente do REST, que lista órgãos/unidades sem esse contexto).
         """
         if not filtro:
             msg = (
@@ -3099,7 +3154,15 @@ class SEIWebClient:
                 "Informe pelo menos 1 caractere (sigla ou nome da unidade)."
             )
             raise SEIValidationError(msg)
-        resultados = await self.autocomplete_unidades(filtro)
+        if not protocolo:
+            msg = (
+                "Em modo web (sem mod-wssei), pesquisar unidades exige um `protocolo` de "
+                "referência — o autocomplete do SEI só funciona dentro do contexto de uma "
+                "tela 'Enviar Processo' já aberta para esse processo. Informe o protocolo "
+                "de qualquer processo ao qual você tenha acesso de tramitação."
+            )
+            raise SEIValidationError(msg)
+        resultados = await self.pesquisar_unidades_envio(protocolo, filtro)
         resultados = resultados[:limit]
         return {"unidades": resultados, "total_itens": len(resultados)}
 
