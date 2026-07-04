@@ -367,7 +367,7 @@ mcp = FastMCP(
         "Se total_volumes > 1, separe por volume.\n"
         # ── Compatibilidade ──────────────────────────────────────────────────
         "=== COMPATIBILIDADE ===\n"
-        "Todos os 131 tools funcionam em qualquer SEI 4.0+ (com ou sem mod-wssei). "
+        "Todos os 129 tools funcionam em qualquer SEI 4.0+ (com ou sem mod-wssei). "
         "Exceção: sei_listar_relacionamentos requer mod-wssei 3.0.2+ (SEI 5.0.x). "
         "Assinatura (sei_assinar_documento, sei_assinar_bloco) requer mod-wssei. "
         "Se endpoint falhar inesperadamente, use sei_versao para diagnosticar.\n"

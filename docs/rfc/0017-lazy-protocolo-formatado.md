@@ -1,8 +1,15 @@
 # RFC 0017 — Validação lazy de ProtocoloFormatado
 
-**Status:** ✅ Implementado (Opção A)
+**Status:** ❌ Revogada (2026-07-04) — a validação lazy sobre env var/keyring descrita aqui foi substituída por regex fixo (dois formatos conhecidos + fallback permissivo), sem env var nem keyring. Ver `changelog/0.6.14.md` e RFC 0010 (também revogada).
 **Data:** 2026-06-26
 **Motivação:** skipped finding do code review de PR #109
+
+> **Nota de revogação**: `sei_protocolo_pattern`/`SEI_PROTOCOLO_PATTERN`, a
+> descoberta via `sei_detectar_formato_protocolo` e o keyring por host que
+> este RFC tornava efetivo em runtime deixaram de existir. `_validar_protocolo`
+> agora é síncrona, sem `ctx`, e usa dois regex fixos (SEI administrativo e
+> CNJ) com fallback permissivo obrigatório para formatos não mapeados. O texto
+> abaixo é mantido só como histórico de design.
 
 ---
 

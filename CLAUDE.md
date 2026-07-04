@@ -1,7 +1,7 @@
 # todos — Contexto para Claude Code
 
 **TOdos Domina O Sei** — MCP Server para o SEI (Sistema Eletrônico de Informações) com arquitetura web-first.
-131 tools cobrindo processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais.
+129 tools cobrindo processos, documentos, tramitação, assinatura, blocos, marcadores, acompanhamento, credenciamento, modelos e mais.
 Opera via scraper HTTP do frontend web + REST mod-wssei v2 quando disponível. Funciona em qualquer instância SEI 4.0+ — inclusive sem mod-wssei instalado.
 
 ## Stack
@@ -120,7 +120,7 @@ Hosts MCP recebem `ToolError` com a mensagem equivalente — nunca exit codes.
 
 ## Arquivos principais
 
-- `src/todos/server.py` — FastMCP server com 131 tools + helpers (`_resolver_documento`, `_resolver_processo`)
+- `src/todos/server.py` — FastMCP server com 129 tools + helpers (`_resolver_documento`, `_resolver_processo`)
 - `src/todos/mcp_app.py` — lifespan, pool de sessões, gate de acesso a documentos restritos
 - `src/todos/backends/composite.py` — router REST-first com fallback web; ponto central de despacho
 - `src/todos/sei_client.py` — Cliente REST assíncrono para mod-wssei v2 (auth automática, auto-reauth 401/403, cache TTL 1h)
@@ -209,7 +209,7 @@ entry point real (sem escolha de arquivo) e herda o ambiente do processo pai.
 - Atribuições NÃO aparecem no histórico resumido — usar `historico_atribuicoes` (POST `hdnTipoHistorico='P'`)
 
 ### Compatibilidade mod-wssei
-- Todos os 131 tools funcionam em qualquer SEI 4.0+ sem mod-wssei (web-only)
+- Todos os 129 tools funcionam em qualquer SEI 4.0+ sem mod-wssei (web-only)
 - Única exceção REST-only: `sei_listar_relacionamentos` requer mod-wssei 3.0.2+ (SEI 5.0.x)
 - Se um endpoint falhar com erro inesperado, use `sei_versao` para verificar a versão instalada
 

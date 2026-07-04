@@ -2,7 +2,7 @@
 
 Importa ``todos.server`` (não só ``todos.mcp_app``) para que os 6 tools de
 orquestração definidos em server.py sejam registrados no ``mcp`` compartilhado
-— refletindo a contagem real de 131 tools disponíveis ao agente em produção.
+— refletindo a contagem real de 129 tools disponíveis ao agente em produção.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 # orquestração em server.py sejam registrados no mcp compartilhado.
 from todos.server import mcp
 
-_TOOL_COUNT = 131
+_TOOL_COUNT = 129
 _DOC_FILES = (
     "README.md",
     "CLAUDE.md",
