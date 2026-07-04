@@ -332,7 +332,10 @@ class TestWebDocumentosBackend:
 # (RFC 0020, web-only genérico form inspection/submission) — no REST
 # equivalent exists (mod-wssei doesn't expose HTML to inspect), growing the
 # contract from 126 to 128 ops while REST's implemented count stays at 112.
-_REST_COVERAGE_MIN = 112 / 128  # exact fraction; one drop → 111/128 = 0.867 < 0.875 → fails
+# `capturar_tela` was added next (RFC 0021, web-only browser screenshot) —
+# same reasoning: no REST equivalent (mod-wssei has no rendered screen to
+# photograph), growing the contract from 128 to 129 while REST stays at 112.
+_REST_COVERAGE_MIN = 112 / 129  # exact fraction; one drop → 111/129 = 0.860 < 0.868 → fails
 _WEB_COVERAGE_MIN = 91 / 128  # exact fraction; one drop → 90/128 = 0.703 < 0.711 → fails
 
 

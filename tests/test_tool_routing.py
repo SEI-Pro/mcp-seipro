@@ -902,6 +902,8 @@ _TOOLS_WITHOUT_ROUTING: frozenset[str] = frozenset(
         # --- generico.py: inspeção/submissão genérica de form (RFC 0020, web-only) ---
         "sei_inspecionar_pagina",  # backend.inspecionar_pagina(url, ...) via _web_backend direto
         "sei_submeter_form",  # backend.submeter_form(...) via _web_backend direto
+        # --- generico.py: captura de tela via browser real (RFC 0021, web-only) ---
+        "sei_capturar_tela",  # backend.capturar_tela(url, ...) via _web_backend direto
     }
 )
 

@@ -13,6 +13,20 @@ Limitações:
 - Layout dos campos depende da configuração de painel do usuário no SEI
 - Sem suporte a 2FA ou CAPTCHA (aborta com erro)
 - Específico para instâncias SEI com Infra v1.5x+ (login form com hdnToken)
+
+Arquitetura deliberadamente pure-HTTP (httpx + BeautifulSoup), sem
+browser/Playwright — mais leve e mais rápido que dirigir um browser real, e
+suficiente pra tudo que é scraping/parsing/submissão de formulário (RFC
+0020 explicitamente lista "executar JS de verdade" como não-objetivo).
+
+A ÚNICA exceção conhecida é `sei_capturar_tela` (RFC 0021,
+`src/todos/browser_capture.py`) — captura visual (screenshot PNG) não tem
+como ser obtida renderizando HTML puro, então essa tool específica levanta
+um Playwright/Chromium headless à parte. Ela reaproveita a sessão SIP já
+autenticada por este módulo (`ensure_authenticated` + cookies de
+`self._http`) em vez de logar de novo no browser — ver `browser_capture.py`
+para os detalhes. Essa exceção é escopada a essa tool: não é precedente
+para reescrever o resto deste scraper em Playwright.
 """
 
 from __future__ import annotations
@@ -4475,6 +4489,29 @@ class SEIWebClient:
         if incluir_raw:
             resultado["raw_html"] = body2
         return resultado
+
+    async def capturar_tela_web(
+        self,
+        url: str,
+        *,
+        selector: str | None = None,
+        aguardar_segundos: float = 1.0,
+    ) -> Path:
+        """Captura um screenshot PNG real (browser Playwright) de `url` (RFC 0021).
+
+        Exceção deliberada e escopada à arquitetura pure-HTTP deste cliente —
+        ver o docstring do módulo (topo deste arquivo) e
+        `todos.browser_capture` para a justificativa completa. Delega toda a
+        implementação (transplante de cookies da sessão já autenticada deste
+        client, navegação, detecção de tela de login) a esse módulo separado;
+        importado localmente aqui (não no topo do arquivo) para evitar import
+        circular — `browser_capture` importa `SEIWebClient` deste módulo.
+        """
+        from todos import browser_capture  # noqa: PLC0415 — import circular, ver docstring
+
+        return await browser_capture.capturar_tela(
+            self, url, selector=selector, aguardar_segundos=aguardar_segundos
+        )
 
     async def _abrir_form_cadastro_processo(self, tipo_processo: str) -> tuple[Tag, str]:
         """Navega até o form `frmProcedimentoCadastro` retornando (form, url_atual).
