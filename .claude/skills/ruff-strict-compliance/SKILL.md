@@ -30,23 +30,23 @@ This skill enforces **strict, zero-warning compliance** with the Ruff linter and
 
 ### 1. Cyclopts / Typer CLI (Resolving B008, F841, etc.)
 
-**The Problem:** In Cyclopts (and Typer before it), developers often write CLI options using `cyclopts.Parameter(...)` / `typer.Option(...)` directly in function signatures as default values. This triggers Ruff rule **B008** (Do not perform function call in argument defaults).
+**The Problem:** In Typer, developers often write CLI options using `typer.Option(...)` or `typer.Argument(...)` directly in function signatures as default values. This triggers Ruff rule **B008** (Do not perform function call in argument defaults).
 
 To bypass this, lazy agents write `# noqa: B008` or `# noqa: F841`.
 
 **The Right Way (Annotated):**
-Use Python's `typing.Annotated` to define options and arguments. This completely avoids B008 and is the modern, type-safe standard recommended by both frameworks. Note that `@app.command(name=...)` needs `name=` as a keyword — passing the name positionally (`@app.command("setup")`) is interpreted as the object to decorate, not the command name, and breaks at runtime.
+Use Python's `typing.Annotated` to define options and arguments. This completely avoids B008 and is the modern, type-safe standard recommended by both Typer and Cyclopts. Note that in Cyclopts, `@app.command(name=...)` needs `name=` as a keyword — passing the name positionally (`@app.command("setup")`) is interpreted as the object to decorate, not the command name, and breaks at runtime. Also note Cyclopts' `Parameter` has no bare-default form to migrate away from: unlike `typer.Option(...)`, `cyclopts.Parameter(...)` is only meaningful inside `Annotated[...]` — using it as a plain default (`name: str = cyclopts.Parameter(...)`) doesn't raise, but silently assigns the unevaluated `Parameter` object itself as the default value instead of parsing anything.
 
 ```python
 # ❌ INCORRECT (Triggers B008 and F841)
-import cyclopts
+import typer
 
-app = cyclopts.App()
+app = typer.Typer()
 
-@app.command
+@app.command()
 def main(
-    name: str = cyclopts.Parameter("World", help="Who to greet"), # B008 triggered here
-    verbose: bool = cyclopts.Parameter(False, "--verbose", "-v") # B008 triggered here
+    name: str = typer.Option("World", help="Who to greet"), # B008 triggered here
+    verbose: bool = typer.Option(False, "--verbose", "-v") # B008 triggered here
 ):
     print(f"Hello {name}")
 ```
