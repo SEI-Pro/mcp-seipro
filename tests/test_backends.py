@@ -25,21 +25,25 @@ from todos.sei_web_client import SEIWebClient
 
 
 def _mixin_async_ops(cls: type) -> set[str]:
-    """Return async methods actually implemented in *cls* or its mixins.
+    """Return contract methods that *cls* actually overrides (not the base stub).
 
-    Walks the MRO, skipping `SEIBackend` (base stubs) and `object`.  Every
-    ``async def`` found in a concrete mixin is counted as an implementation,
-    regardless of whether it is exposed under a different name by the class.
-    This replaces the former regex approach (``_async_defs``) which was fragile
-    to refactoring and could silently miss methods defined across mixin files.
+    For each name in the `SEIBackend` contract, resolves it on *cls* via
+    `getattr` — the same attribute lookup Python itself performs on a call —
+    and checks whether that's a different function object than
+    `SEIBackend`'s own stub. This mirrors real method resolution instead of
+    reimplementing a piece of it by walking `__mro__`/`vars()` by hand (the
+    previous approach), which conflated "some non-base class in the MRO
+    happens to define an async method with this name" with "this class's
+    actual resolved method differs from the stub" — accidentally correct
+    only because no mixin here shadows another's implementation.
     """
-    skip = {SEIBackend, object}
+    contract = _contract_ops()
+    base = SEIBackend
     return {
         name
-        for klass in cls.__mro__
-        if klass not in skip
-        for name, val in vars(klass).items()
-        if not name.startswith("_") and inspect.iscoroutinefunction(val)
+        for name in contract
+        if inspect.iscoroutinefunction(getattr(cls, name, None))
+        and getattr(cls, name) is not getattr(base, name)
     }
 
 
@@ -324,11 +328,12 @@ class TestWebDocumentosBackend:
 # decision (add a comment explaining why a method was removed/moved).
 # ---------------------------------------------------------------------------
 
-# `requer_id_serie` was removed from the SEIBackend contract (dead code — its
-# only caller was replaced by an explicit `get_backend_choice(ctx)` check),
-# shrinking the contract from 127 to 126 ops and both backends' counts by one.
-_REST_COVERAGE_MIN = 112 / 126  # exact fraction; one drop → 111/126 = 0.881 < 0.889 → fails
-_WEB_COVERAGE_MIN = 87 / 126  # exact fraction; one drop → 86/126 = 0.683 < 0.690 → fails
+# `inspecionar_pagina`/`submeter_form` were added to the SEIBackend contract
+# (RFC 0020, web-only genérico form inspection/submission) — no REST
+# equivalent exists (mod-wssei doesn't expose HTML to inspect), growing the
+# contract from 126 to 128 ops while REST's implemented count stays at 112.
+_REST_COVERAGE_MIN = 112 / 128  # exact fraction; one drop → 111/128 = 0.867 < 0.875 → fails
+_WEB_COVERAGE_MIN = 91 / 128  # exact fraction; one drop → 90/128 = 0.703 < 0.711 → fails
 
 
 def _contract_ops() -> set[str]:

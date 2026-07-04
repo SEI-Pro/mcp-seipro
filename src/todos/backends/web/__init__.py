@@ -28,6 +28,7 @@ from todos.backends.web.acompanhamento import AcompanhamentoWeb
 from todos.backends.web.blocos import BlocosWeb
 from todos.backends.web.catalogos import CatalogosWeb
 from todos.backends.web.documentos import DocumentosWeb
+from todos.backends.web.generico import GenericoWeb
 from todos.backends.web.marcadores import MarcadoresWeb
 from todos.backends.web.processos import ProcessosWeb
 from todos.backends.web.unidades import UnidadesWeb
@@ -44,6 +45,7 @@ class SEIWebBackend(
     MarcadoresWeb,
     AcompanhamentoWeb,
     BlocosWeb,
+    GenericoWeb,
     SEIBackend,
 ):
     """Backend que atende ao contrato `SEIBackend` via scraper do frontend web."""

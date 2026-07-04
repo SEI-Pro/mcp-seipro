@@ -681,6 +681,30 @@ class CredenciamentoProtocol(Protocol):
         ...
 
 
+class GenericoProtocol(Protocol):
+    """Inspeção e submissão de formulário arbitrário (RFC 0020, 2 ops).
+
+    Só o backend web implementa — não há equivalente REST (o mod-wssei
+    não expõe HTML pra inspecionar).
+    """
+
+    async def inspecionar_pagina(self, url: str, *, incluir_raw: bool = False) -> dict:
+        """Busca uma URL e devolve forms + ações descobertas na página."""
+        ...
+
+    async def submeter_form(
+        self,
+        url_pagina: str,
+        form_id: str,
+        overrides: dict[str, str],
+        url_destino: str | None = None,
+        *,
+        incluir_raw: bool = False,
+    ) -> dict:
+        """Submete um form arbitrário, com overrides de campo e URL de destino opcional."""
+        ...
+
+
 __all__ = [
     "AcompanhamentoProtocol",
     "BlocoAssinaturaProtocol",
@@ -688,6 +712,7 @@ __all__ = [
     "CatalogosProtocol",
     "CredenciamentoProtocol",
     "DocumentosProtocol",
+    "GenericoProtocol",
     "MarcadoresProtocol",
     "ProcessosEscritaProtocol",
     "ProcessosLeituraProtocol",

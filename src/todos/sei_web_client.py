@@ -265,6 +265,135 @@ def _extrair_link_enviar_processo(html_arvore: str, sei_base: str, protocolo: st
     return urljoin(sei_base, m.group(0).replace("&amp;", "&"))
 
 
+def _parse_form_info(form: Tag) -> dict:
+    """Extrai id, action, campos (com valor atual), ocultos e botões de um `<form>`.
+
+    Usado por `inspecionar_pagina_web`/`submeter_form_web` (RFC 0020) para
+    descrever um form genericamente, sem conhecimento prévio da ação SEI
+    específica que ele representa.
+    """
+    campos: list[dict] = []
+    escondidos: dict[str, str] = {}
+    for inp in form.find_all(["input", "select", "textarea"]):
+        name = _tag_str(inp, "name")
+        if not name:
+            continue
+        itype = _tag_str(inp, "type", "text").lower() if inp.name == "input" else inp.name
+        if itype == "hidden":
+            escondidos[name] = _tag_str(inp, "value")
+            continue
+        campo: dict = {"nome": name, "tipo": itype}
+        if inp.name == "select":
+            campo["opcoes"] = [
+                {"valor": _tag_str(opt, "value"), "texto": opt.get_text(strip=True)}
+                for opt in inp.find_all("option")
+            ]
+            selecionada = inp.find("option", selected=True)
+            campo["valor_atual"] = _tag_str(selecionada, "value") if selecionada else ""
+        elif inp.name == "textarea":
+            campo["valor_atual"] = inp.get_text()
+        else:
+            campo["valor_atual"] = _tag_str(inp, "value")
+        campos.append(campo)
+
+    botoes: list[dict] = []
+    for btn in form.find_all(["button", "input"]):
+        btype = _tag_str(btn, "type").lower()
+        if btn.name == "input" and btype not in ("submit", "button"):
+            continue
+        if btn.name == "button" and not btype:
+            btype = "submit"  # default HTML: <button> sem type é submit
+        onclick = _tag_str(btn, "onclick")
+        fn_match = re.match(r"^(\w+)\(", onclick)
+        botoes.append(
+            {
+                "nome": _tag_str(btn, "name"),
+                "valor": _tag_str(btn, "value") or btn.get_text(strip=True),
+                "tipo": btype,
+                "onclick_funcao": fn_match.group(1) if fn_match else None,
+            }
+        )
+
+    return {
+        "id": form.get("id"),
+        "action": _tag_str(form, "action").replace("&amp;", "&"),
+        "campos": campos,
+        "escondidos": escondidos,
+        "botoes": botoes,
+    }
+
+
+def _descobrir_acoes(html: str) -> list[dict]:
+    """Descobre ocorrências de `acao=X` na página (RFC 0020).
+
+    Classifica por origem:
+    - `href`: `<a href="...acao=X...">` — link direto, resolvível sem
+      passo intermediário.
+    - `js_variable`: atribuição JS tipo `linkEditarConteudo =
+      "controlador.php?acao=X...";` — precisa de GET adicional na URL
+      extraída pra chegar na ação de verdade (padrão de `editor_montar`/
+      `documento_assinar`).
+    - `js_function`: dentro do corpo de uma função JS (ex.: `function
+      acaoExcluir(id){... .action='controlador.php?acao=X...'; ...}`) —
+      geralmente dispara ao clicar um botão/ícone cujo `onclick` chama essa
+      função (ver `botoes[].onclick_funcao` em `_parse_form_info`).
+
+    Não executa JS de verdade — tudo via regex sobre o texto estático da
+    resposta, mesma filosofia "sem browser" do resto do scraper.
+    """
+    acoes: list[dict] = []
+    vistas: set[tuple[str, str, str]] = set()
+
+    soup = BeautifulSoup(html, "html.parser")
+    for a in soup.find_all("a", href=True):
+        href = str(a["href"])
+        m = re.search(r"acao=(\w+)", href)
+        if not m:
+            continue
+        url = href.replace("&amp;", "&")
+        chave = (m.group(1), "href", url)
+        if chave in vistas:
+            continue
+        vistas.add(chave)
+        acoes.append({"nome_acao": m.group(1), "origem": "href", "url": url})
+
+    for m in re.finditer(r'(\w*[Ll]ink\w*)\s*=\s*["\']([^"\']*acao=(\w+)[^"\']*)["\']', html):
+        var_nome, url_bruta, acao_nome = m.group(1), m.group(2), m.group(3)
+        url = url_bruta.replace("&amp;", "&")
+        chave = (acao_nome, "js_variable", url)
+        if chave in vistas:
+            continue
+        vistas.add(chave)
+        acoes.append(
+            {"nome_acao": acao_nome, "origem": "js_variable", "url": url, "variavel": var_nome}
+        )
+
+    for m in re.finditer(r"function\s+(\w+)\s*\([^)]*\)\s*\{", html):
+        fn_nome = m.group(1)
+        corpo = html[m.end() : m.end() + 2000]
+        limite = corpo.find("\nfunction ")
+        if limite != -1:
+            corpo = corpo[:limite]
+        acao_m = re.search(r"acao=(\w+)", corpo)
+        if not acao_m:
+            continue
+        url_m = re.search(rf'["\']([^"\']*acao={re.escape(acao_m.group(1))}[^"\']*)["\']', corpo)
+        chave = (acao_m.group(1), "js_function", fn_nome)
+        if chave in vistas:
+            continue
+        vistas.add(chave)
+        acoes.append(
+            {
+                "nome_acao": acao_m.group(1),
+                "origem": "js_function",
+                "funcao": fn_nome,
+                "url": url_m.group(1).replace("&amp;", "&") if url_m else None,
+            }
+        )
+
+    return acoes
+
+
 def _extrair_ids_bloco(html: str) -> set[str]:
     """Extrai os ids de bloco presentes numa página `bloco_assinatura_listar`.
 
@@ -4133,6 +4262,94 @@ class SEIWebClient:
             content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
             headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
         )
+
+    async def inspecionar_pagina_web(self, url: str, *, incluir_raw: bool = False) -> dict:
+        """Busca uma URL e devolve forms + ações descobertas (RFC 0020).
+
+        Leitura pura — nenhum POST é feito. `url` deve ser absoluta e já
+        assinada (com `infra_hash`), obtida de outra tool ou de uma resposta
+        anterior desta mesma tool/`submeter_form_web`.
+
+        `incluir_raw=True` devolve também o HTML/JS bruto da página — útil
+        quando o parsing automático (`formularios`/`acoes_descobertas`) não
+        captura algo que o agente precisa ver com os próprios olhos (ex.: um
+        padrão de ação novo, não coberto pelos três formatos que
+        `_descobrir_acoes` reconhece hoje: `href`, `js_variable`,
+        `js_function`).
+        """
+        await self.ensure_authenticated()
+        r = await self._http.get(url, headers={"Referer": str(self._inbox_url)})
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(body)
+        soup = BeautifulSoup(body, "html.parser")
+        resultado = {
+            "url": url,
+            "erro": erro,
+            "formularios": [_parse_form_info(f) for f in soup.find_all("form")],
+            "acoes_descobertas": _descobrir_acoes(body),
+        }
+        if incluir_raw:
+            resultado["raw_html"] = body
+        return resultado
+
+    async def submeter_form_web(
+        self,
+        url_pagina: str,
+        form_id: str,
+        overrides: dict[str, str],
+        url_destino: str | None = None,
+        *,
+        incluir_raw: bool = False,
+    ) -> dict:
+        """Rebusca `url_pagina`, localiza o form `form_id`, sobrescreve campos e submete.
+
+        RFC 0020. Rebusca em vez de reusar um form já obtido antes porque
+        campos ocultos/hashes do SEI costumam ser de uso único ou
+        específicos da sessão — uma cópia obtida antes pode estar stale.
+
+        Se `url_destino` for informado, POSTa lá IGNORANDO o `action` próprio
+        do form (`_post_form_com_acao_override`) — necessário para o padrão
+        JS "sobrescreve `form.action` antes de submeter o mesmo form
+        auto-referente" (ex.: excluir/disponibilizar bloco de assinatura).
+        Sem `url_destino`, usa o `action` do próprio form
+        (`_post_form_preservando`) — correto quando o form já está na
+        página certa (ex.: criar bloco, anotar documento).
+
+        NÃO tenta verificar sucesso sozinha — "sem erro" não significa "deu
+        certo" (ver RFC 0020 §2.2, bug real do PR #129 onde um POST pro
+        lugar errado retornava 200 sem erro mas não executava nada). Cabe
+        ao agente chamador comparar o estado antes/depois usando
+        `inspecionar_pagina_web` ou outra tool de leitura.
+        """
+        await self.ensure_authenticated()
+        r = await self._http.get(url_pagina, headers={"Referer": str(self._inbox_url)})
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        soup = BeautifulSoup(body, "html.parser")
+        form = soup.find("form", {"id": form_id})
+        if not isinstance(form, Tag):
+            msg = f"Form '{form_id}' não encontrado em {url_pagina}."
+            raise SEIParseError(msg)
+        if url_destino:
+            r2 = await self._post_form_com_acao_override(
+                form, url_destino, overrides, referer=url_pagina
+            )
+        else:
+            r2 = await self._post_form_preservando(form, url_pagina, overrides, referer=url_pagina)
+        _check(r2)
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro2 = _extrair_erro_sei(body2)
+        soup2 = BeautifulSoup(body2, "html.parser")
+        resultado = {
+            "status_code": r2.status_code,
+            "url_final": str(r2.url),
+            "erro": erro2,
+            "formularios_apos": [_parse_form_info(f) for f in soup2.find_all("form")],
+        }
+        if incluir_raw:
+            resultado["raw_html"] = body2
+        return resultado
 
     async def _abrir_form_cadastro_processo(self, tipo_processo: str) -> tuple[Tag, str]:
         """Navega até o form `frmProcedimentoCadastro` retornando (form, url_atual).
