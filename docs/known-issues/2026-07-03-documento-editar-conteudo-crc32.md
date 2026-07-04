@@ -1,6 +1,7 @@
 ---
-status: causa-raiz-confirmada
+status: resolvido — contorno server-side implementado
 descoberto_em: 2026-07-03
+resolvido_em: 2026-07-03
 instancia: sei.sistemas.ro.gov.br (SEI 5.0.3-2.41.1, sem mod-wssei)
 branch_relacionada: fix/pesquisar-unidades-envio-web
 ---
@@ -101,26 +102,40 @@ abriu nesse teste — a ferramenta de automação usada (Claude in Chrome)
 não rastreia janelas popup fora do grupo de abas que ela controla, então
 a ausência de uma nova aba visível não é prova de falha.
 
-## Próximos passos sugeridos
+## Resolução: contorno server-side via HTTP puro (sem navegador)
 
-- [ ] **Testar num navegador comum** (não via automação): aplicar o mesmo
-      patch runtime no console do DevTools antes de clicar em "Editar
-      Conteúdo", e ver diretamente se a janela popup do editor abre. Isso
-      confirmaria definitivamente que o contorno funciona.
-- [ ] Considerar reportar o bug (`title=null` nos ícones de documento +
-      `seiAssociarRegistroExibicaoBotoes` não trata isso) ao fornecedor/
-      mantenedor do SEI desta instância — é um bug real da aplicação,
-      independente do nosso scraper.
-- [ ] Como contorno client-side permanente (sem depender de reportar e
-      esperar correção): um `content script`/bookmarklet que aplica o
-      mesmo patch (`window.seiCrc32 = str => str ?? ''`) automaticamente
-      ao carregar qualquer página do SEI, para todo mundo que usa o
-      sistema, não só nesta investigação.
-- [ ] Alternativa server-side (scraper): já sabemos o padrão de POST
-      (`_post_form_preservando`) usado nos outros fixes desta branch —
-      ainda vale tentar achar a ação/campos do form de conteúdo real via
-      HTTP puro, sem depender do JS do navegador em nenhuma hipótese,
-      mas ainda não localizamos esse form (documento_alterar não é ele).
+Em vez de contornar o bug de JS no navegador, achamos a URL real do editor
+via HTTP puro, evitando o `sei.js` quebrado por completo:
+
+- A URL assinada de `editor_montar` **não está em `Nos[].acoes`** (por
+  isso `_get_doc_signed_url` nunca a encontrava, mesmo tentando
+  `documento_alterar` como alias — essa era a ação errada, abre a tela de
+  metadados, não o conteúdo).
+- Ela só existe como a variável JS `linkEditarConteudo`, embutida na
+  página `arvore_visualizar` carregada quando o nó do documento é
+  selecionado — e essa página, por sua vez, só é alcançável via
+  `Nos[].link` do nó do documento (não `.acoes`).
+
+Implementado em `_get_editor_montar_url` (novo método): busca
+`no_alvo["link"]` (a própria `arvore_visualizar` do nó) → extrai
+`linkEditarConteudo` dessa página com regex → segue para o form real
+(`#divEditores`, textareas por seção). `listar_secoes_web` e
+`alterar_secoes_web` agora usam esse método em vez da busca genérica.
+
+**Confirmado de ponta a ponta contra a instância real**: `sei_listar_secoes`
+retorna as 4 seções do Ofício 15380/2026 (id_documento `76858997`) com
+conteúdo real; `sei_editar_secao` grava o texto de verdade — confirmado
+visualmente no SEI (documento passou para versão 2, com o corpo completo
+do ofício). Zero dependência de navegador, JS, ou do patch runtime que
+tínhamos cogitado antes.
+
+## Pendências (não bloqueiam o fix acima)
+
+- [ ] Considerar reportar o bug de UI em si (`title=null` nos ícones de
+      documento + `seiAssociarRegistroExibicaoBotoes` não trata isso) ao
+      fornecedor/mantenedor do SEI desta instância — continua sendo um
+      bug real da aplicação (clicar "Editar Conteúdo" na UI normal do SEI
+      ainda quebra), só não afeta mais o nosso scraper.
 
 ## Ambiente
 
