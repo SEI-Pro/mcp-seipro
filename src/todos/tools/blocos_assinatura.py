@@ -59,9 +59,13 @@ async def sei_incluir_documento_bloco_assinatura(
     """Inclui documento(s) em um bloco de assinatura.
 
     - id_bloco: ID do bloco de assinatura
-    - documentos: ID(s) de documento(s) separados por vírgula
-    - processo: protocolo do processo (necessário em instâncias sem mod-wssei
-      — todos os documentos devem pertencer ao mesmo processo)
+    - documentos: ID(s) de documento(s) separados por vírgula. No backend
+      REST, aceita vários de processos diferentes numa única chamada. No
+      backend web, aceita só 1 documento por chamada — um bloco agrupa
+      documentos de processos diferentes, e um único 'processo' não serve
+      pra resolver vários documentos que podem pertencer a processos
+      distintos; para incluir vários, chame esta tool uma vez por documento.
+    - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
     """
     backend = await _backend(ctx)
     result = await backend.incluir_documento_bloco_assinatura(id_bloco, documentos, processo)

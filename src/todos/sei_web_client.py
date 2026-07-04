@@ -264,6 +264,19 @@ def _extrair_link_enviar_processo(html_arvore: str, sei_base: str, protocolo: st
     return urljoin(sei_base, m.group(0).replace("&amp;", "&"))
 
 
+def _extrair_ids_bloco(html: str) -> set[str]:
+    """Extrai os ids de bloco presentes numa página `bloco_assinatura_listar`.
+
+    Usa BeautifulSoup (não regex sobre HTML bruto) para evitar problemas de
+    entidades HTML/escaping na descrição do bloco. Usado para diff
+    antes/depois de criar um bloco — o SEI não devolve o id do bloco recém-
+    criado em nenhum lugar explícito (nem na URL de redirect, nem em campo
+    id_bloco=... no HTML).
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    return {a.get_text(strip=True) for a in soup.select("a.ancoraBlocoAberto")}
+
+
 def _extrair_submit_btn(form: Tag) -> tuple[str, str] | None:
     """Extrai o par (name, value) do botão submit de um form.
 
@@ -3369,6 +3382,54 @@ class SEIWebClient:
             raise SEINotFoundError(msg)
         return urljoin(sei_base, m.group(1).replace("&amp;", "&"))
 
+    async def _executar_acao_bloco_form(self, id_bloco: str, nome_acao: str, mensagem: str) -> dict:
+        """Executa uma ação de item único em bloco via reenvio do form `frmBlocoLista`.
+
+        Ações como excluir/disponibilizar/concluir/cancelar disponibilização/
+        retornar NÃO são links simples (diferente do que `_obter_acao_bloco_url`
+        assume) — são disparadas por funções JS na própria página
+        `bloco_assinatura_listar` (ex.: `acaoExcluir(id)`) que: (1) setam
+        `hdnInfraItemId` do form `frmBlocoLista` com o id do bloco, (2)
+        sobrescrevem `frmBlocoLista.action` com uma URL assinada específica
+        daquela ação (embutida como string literal no corpo da função JS,
+        não como `<a href>`), (3) submetem o mesmo form. Os nomes de ação
+        reais também NÃO têm o infixo "_assinatura_" que o resto do código
+        assumia (`bloco_excluir`, não `bloco_assinatura_excluir`).
+        Confirmado em sei.sistemas.ro.gov.br, 2026-07-04.
+        """
+        await self.ensure_authenticated()
+        sei_base = f"{self.sei_root}/sei/"
+        lista_url = await self._obter_link_toolbar("bloco_assinatura_listar")
+        r = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        m = re.search(
+            rf"acao={re.escape(nome_acao)}&acao_origem=bloco_assinatura_listar"
+            rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+",
+            body,
+        )
+        if not m:
+            msg = (
+                f"Ação '{nome_acao}' não encontrada na listagem de blocos de "
+                f"assinatura para o bloco {id_bloco}."
+            )
+            raise SEINotFoundError(msg)
+        acao_url = urljoin(sei_base, "controlador.php?" + m.group().replace("&amp;", "&"))
+        soup = BeautifulSoup(body, "html.parser")
+        form = soup.find("form", {"id": "frmBlocoLista"})
+        if not isinstance(form, Tag):
+            msg = "Form frmBlocoLista não encontrado."
+            raise SEIParseError(msg)
+        r2 = await self._post_form_preservando(
+            form, acao_url, {"hdnInfraItemId": id_bloco}, referer=lista_url
+        )
+        _check(r2)
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro2 = _extrair_erro_sei(body2)
+        if erro2:
+            raise SEIConnectionError(erro2)
+        return {"ok": True, "idBloco": id_bloco, "mensagem": mensagem}
+
     async def criar_bloco_assinatura_web(self, descricao: str) -> dict:
         """Cria um bloco de assinatura via scraper web.
 
@@ -3386,6 +3447,7 @@ class SEIWebClient:
         r0 = await self._http.get(listar_url, headers={"Referer": str(self._inbox_url)})
         _check(r0)
         listar_html = _decode_response(r0.content, r0.headers.get("content-type", ""))
+        ids_antes = _extrair_ids_bloco(listar_html)
         m = re.search(
             r"(controlador\.php\?acao=bloco_assinatura_(?:cadastrar|incluir)"
             r"[^\"'\s]*infra_hash=[a-fA-F0-9]+)",
@@ -3426,19 +3488,26 @@ class SEIWebClient:
         if erro2:
             raise SEIConnectionError(erro2)
         # Após salvar, o SEI redireciona para bloco_assinatura_listar (sem
-        # id_bloco na URL nem em nenhum campo id_bloco=... no HTML) — o
-        # único jeito de saber o id do bloco recém-criado é achar a própria
-        # linha da tabela pela descrição: `<a class="...ancoraBlocoAberto">
-        # NUMERO</a>` aparece antes de `data-label="Descrição">descricao`
-        # na mesma <tr>. Confirmado em sei.sistemas.ro.gov.br, 2026-07-04.
-        id_bloco = ""
-        mb = re.search(
-            r'ancoraBlocoAberto">(\d+)</a>.*?data-label="Descrição">' + re.escape(descricao),
-            body2,
-            re.DOTALL,
-        )
-        if mb:
-            id_bloco = mb.group(1)
+        # id_bloco na URL nem em nenhum campo id_bloco=... no HTML). Um regex
+        # buscando a linha pela descrição é frágil (HTML escapado em &/</"/
+        # entidades, descrições duplicadas, ou DOTALL casando através de
+        # linhas erradas da tabela) — e o id retornado alimenta chamadas
+        # seguintes, então um id errado/ambíguo é pior que um erro claro.
+        # Em vez disso: diff dos ids presentes antes vs depois do POST (via
+        # BeautifulSoup, não regex sobre HTML bruto) — exige exatamente 1 id
+        # novo. Corrigido em code review, 2026-07-04.
+        ids_depois = _extrair_ids_bloco(body2)
+        novos = ids_depois - ids_antes
+        if len(novos) != 1:
+            msg = (
+                f"Não foi possível identificar de forma inequívoca o bloco "
+                f"recém-criado (descrição {descricao!r}): "
+                f"{len(novos)} candidato(s) novo(s) encontrado(s) "
+                f"({sorted(novos)!r}). Verifique manualmente em "
+                f"bloco_assinatura_listar."
+            )
+            raise SEIParseError(msg)
+        id_bloco = next(iter(novos))
         return {"ok": True, "idBloco": id_bloco, "descricao": descricao}
 
     async def incluir_documento_bloco_assinatura_web(
@@ -3481,41 +3550,59 @@ class SEIWebClient:
 
     async def disponibilizar_bloco_assinatura_web(self, id_bloco: str) -> dict:
         """Disponibiliza um bloco de assinatura via scraper web."""
-        acao_url = await self._obter_acao_bloco_url(id_bloco, "bloco_assinatura_disponibilizar")
-        r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
-        if r.status_code not in (200, 302):
-            msg = f"bloco_assinatura_disponibilizar status={r.status_code}"
-            raise SEIConnectionError(msg)
-        body = _decode_response(r.content, r.headers.get("content-type", ""))
-        erro = _extrair_erro_sei(body)
-        if erro:
-            raise SEIConnectionError(erro)
-        return {"ok": True, "idBloco": id_bloco, "mensagem": "Bloco disponibilizado com sucesso."}
+        return await self._executar_acao_bloco_form(
+            id_bloco, "bloco_disponibilizar", "Bloco disponibilizado com sucesso."
+        )
 
     async def cancelar_disponibilizacao_bloco_assinatura_web(self, id_bloco: str) -> dict:
         """Cancela a disponibilização de um bloco de assinatura via scraper web."""
-        try:
-            acao_url = await self._obter_acao_bloco_url(
-                id_bloco, "bloco_assinatura_cancelar_disponibilizacao"
-            )
-        except SEINotFoundError:
-            acao_url = await self._obter_acao_bloco_url(id_bloco, "bloco_assinatura_cancelar")
-        r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
-        if r.status_code not in (200, 302):
-            msg = f"bloco_assinatura_cancelar status={r.status_code}"
-            raise SEIConnectionError(msg)
-        body = _decode_response(r.content, r.headers.get("content-type", ""))
-        erro = _extrair_erro_sei(body)
-        if erro:
-            raise SEIConnectionError(erro)
-        return {
-            "ok": True,
-            "idBloco": id_bloco,
-            "mensagem": "Disponibilização cancelada com sucesso.",
-        }
+        return await self._executar_acao_bloco_form(
+            id_bloco, "bloco_cancelar_disponibilizacao", "Disponibilização cancelada com sucesso."
+        )
+
+    async def concluir_bloco_assinatura_web(self, id_bloco: str) -> dict:
+        """Conclui bloco de assinatura via scraper web."""
+        return await self._executar_acao_bloco_form(
+            id_bloco, "bloco_concluir", "Bloco concluído com sucesso."
+        )
+
+    async def reabrir_bloco_assinatura_web(self, id_bloco: str) -> dict:
+        """Reabre bloco de assinatura concluído via scraper web.
+
+        NÃO CONFIRMADO: a ação "Reabrir" só aparece no toolbar de
+        `bloco_assinatura_listar` quando há pelo menos um bloco no estado
+        "Concluído" na visão filtrada atual (o filtro padrão de Estado nem
+        sempre inclui "Concluído") — não foi possível confirmar o nome real
+        da ação nem seu mecanismo em 2026-07-04 por falta de um bloco
+        concluído disponível para teste. Mantido com o nome antigo
+        (provavelmente incorreto, mesmo padrão de bug dos demais) até
+        confirmação.
+        """
+        return await self._executar_acao_bloco(
+            id_bloco, "bloco_assinatura_reabrir", "Bloco reaberto com sucesso."
+        )
+
+    async def retornar_bloco_assinatura_web(self, id_bloco: str) -> dict:
+        """Retorna bloco de assinatura para a unidade de origem via scraper web."""
+        return await self._executar_acao_bloco_form(
+            id_bloco, "bloco_retornar", "Bloco retornado para a unidade de origem."
+        )
+
+    async def excluir_bloco_assinatura_web(self, id_bloco: str) -> dict:
+        """Exclui bloco de assinatura via scraper web."""
+        return await self._executar_acao_bloco_form(
+            id_bloco, "bloco_excluir", "Bloco excluído com sucesso."
+        )
 
     async def _executar_acao_bloco(self, id_bloco: str, nome_acao: str, mensagem: str) -> dict:
-        """Executa ação simples em bloco via URL assinada (GET sem form)."""
+        """Executa ação simples em bloco via URL assinada (GET sem form).
+
+        Usado só por `reabrir_bloco_assinatura_web`, cujo nome de ação real
+        ainda não foi confirmado (ver docstring lá) — as demais ações
+        (disponibilizar/cancelar/concluir/retornar/excluir) usam
+        `_executar_acao_bloco_form`, que reflete o mecanismo real
+        confirmado (reenvio do form `frmBlocoLista`).
+        """
         acao_url = await self._obter_acao_bloco_url(id_bloco, nome_acao)
         r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
         if r.status_code not in (200, 302):
@@ -3526,30 +3613,6 @@ class SEIWebClient:
         if erro:
             raise SEIConnectionError(erro)
         return {"ok": True, "idBloco": id_bloco, "mensagem": mensagem}
-
-    async def concluir_bloco_assinatura_web(self, id_bloco: str) -> dict:
-        """Conclui bloco de assinatura via scraper web."""
-        return await self._executar_acao_bloco(
-            id_bloco, "bloco_assinatura_concluir", "Bloco concluído com sucesso."
-        )
-
-    async def reabrir_bloco_assinatura_web(self, id_bloco: str) -> dict:
-        """Reabre bloco de assinatura concluído via scraper web."""
-        return await self._executar_acao_bloco(
-            id_bloco, "bloco_assinatura_reabrir", "Bloco reaberto com sucesso."
-        )
-
-    async def retornar_bloco_assinatura_web(self, id_bloco: str) -> dict:
-        """Retorna bloco de assinatura para a unidade de origem via scraper web."""
-        return await self._executar_acao_bloco(
-            id_bloco, "bloco_assinatura_retornar", "Bloco retornado para a unidade de origem."
-        )
-
-    async def excluir_bloco_assinatura_web(self, id_bloco: str) -> dict:
-        """Exclui bloco de assinatura via scraper web."""
-        return await self._executar_acao_bloco(
-            id_bloco, "bloco_assinatura_excluir", "Bloco excluído com sucesso."
-        )
 
     async def listar_documentos_bloco_assinatura_web(self, id_bloco: str) -> list[dict]:
         """Lista documentos de um bloco de assinatura via scraper web.
@@ -3590,6 +3653,12 @@ class SEIWebClient:
                         "numeroSei": numero_sei,
                         "tipo": tipo,
                         "processo": processo,
+                        # `DocumentoBloco._normalizar_campos` só reconhece
+                        # `numero` como fonte de `protocolo` — sem isso o
+                        # campo público `protocolo` (nº do processo) fica
+                        # vazio no schema tipado. Confirmado em code review,
+                        # 2026-07-04.
+                        "numero": processo,
                     }
                 )
         return docs

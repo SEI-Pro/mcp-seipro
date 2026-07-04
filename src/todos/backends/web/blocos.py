@@ -28,11 +28,15 @@ class BlocosWeb(_WebMixin):
     async def incluir_documento_bloco_assinatura(
         self, id_bloco: str, documentos: str, processo: str | None = None
     ) -> dict:
-        """Inclui documento(s) num bloco de assinatura.
+        """Inclui um documento num bloco de assinatura.
 
-        Executa os documentos em paralelo via asyncio.gather; falhas
-        individuais são registradas como aviso e excluídas do resultado.
-        Se todos falharem, levanta SEIError.
+        Um bloco de assinatura agrupa documentos de PROCESSOS DIFERENTES —
+        um único `processo` não serve pra resolver múltiplos `documentos`
+        de processos distintos (diferente do REST, que resolve cada
+        documento via Solr sem precisar do protocolo). Por isso, no backend
+        web esta operação é deliberadamente unitária: um documento por
+        chamada. Para incluir vários documentos (do mesmo processo ou de
+        processos diferentes), chame esta tool uma vez por documento.
         """
         if processo is None:
             msg = (
@@ -43,6 +47,15 @@ class BlocosWeb(_WebMixin):
         ids = [d.strip() for d in documentos.split(",") if d.strip()]
         if not ids:
             msg = "Lista vazia — forneça pelo menos um id."
+            raise SEIValidationError(msg)
+        if len(ids) > 1:
+            msg = (
+                f"Backend web só aceita 1 documento por chamada (recebeu {len(ids)}) "
+                "— um bloco agrupa documentos de processos diferentes, e um único "
+                "'processo' não serve pra resolver vários documentos que podem "
+                "pertencer a processos distintos. Chame esta tool uma vez por "
+                "documento, cada uma com o 'processo' correto."
+            )
             raise SEIValidationError(msg)
         coros = [
             self._web.incluir_documento_bloco_assinatura_web(processo, id_doc, id_bloco)
