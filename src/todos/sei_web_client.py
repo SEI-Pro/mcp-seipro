@@ -4252,15 +4252,24 @@ class SEIWebClient:
 
         Codifica em ISO-8859-1 (charset do SEI) e força bytes ASCII para evitar
         double-encoding pelo httpx dos separadores `±`/`¥` dos campos multivalor.
+
+        POSTa via `_enviar_mesma_origem` (RFC 0020 — hardening de SSRF
+        estendido aqui, embora `post_url` já seja sempre derivado
+        internamente pelo próprio scraper, nunca de parâmetro externo do
+        agente): garante que nem uma resolução interna equivocada nem um
+        redirect do servidor escapem da instância SEI configurada.
         """
         action = _tag_str(form, "action").replace("&amp;", "&")
         post_url = urljoin(base_url, action) if action else base_url
         dados = _coletar_estado_form(form)
         dados.update(overrides)
-        return await self._http.post(
-            post_url,
-            content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
-            headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+        return await self._enviar_mesma_origem(
+            self._http.build_request(
+                "POST",
+                post_url,
+                content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+                headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+            )
         )
 
     async def _post_form_com_acao_override(
@@ -4273,13 +4282,19 @@ class SEIWebClient:
         SEI num form de listagem cujo `action` próprio é a própria
         listagem) — `_post_form_preservando` não serve aqui porque ele
         sempre usa o `action` do form, nunca `post_url`.
+
+        POSTa via `_enviar_mesma_origem` (RFC 0020 — mesmo hardening de
+        `_post_form_preservando`, ver docstring lá).
         """
         dados = _coletar_estado_form(form)
         dados.update(overrides)
-        return await self._http.post(
-            post_url,
-            content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
-            headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+        return await self._enviar_mesma_origem(
+            self._http.build_request(
+                "POST",
+                post_url,
+                content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+                headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+            )
         )
 
     def _validar_mesma_origem(self, url: str, *, base: str | None = None) -> str:
