@@ -228,7 +228,10 @@ def _parse_unidades_envio_xml(xml_text: str) -> list[dict]:
     `descricao` sempre vem como "SIGLA - Nome" (separador " - " literal).
     """
     try:
-        root = ET.fromstring(xml_text)
+        # XML vem da própria instância SEI autenticada, não de entrada de
+        # usuário/terceiro — mesma justificativa do S314 já ignorado para
+        # este arquivo em pyproject.toml (ver [tool.ruff.lint.per-file-ignores]).
+        root = ET.fromstring(xml_text)  # nosec B314
     except ET.ParseError:
         logger.warning("pesquisar_unidades_envio: resposta XML inválida: %r", xml_text[:200])
         return []
@@ -2267,9 +2270,7 @@ class SEIWebClient:
             msg = f"Nó do documento {id_documento} não encontrado na árvore de {protocolo}."
             raise SEIParseError(msg)
 
-        arvore_visualizar_url = urljoin(
-            sei_base, str(no_alvo["link"]).replace("&amp;", "&")
-        )
+        arvore_visualizar_url = urljoin(sei_base, str(no_alvo["link"]).replace("&amp;", "&"))
         r = await self._http.get(arvore_visualizar_url, headers={"Referer": url_arvore})
         _check(r)
         html = _decode_response(r.content, r.headers.get("content-type", ""))
