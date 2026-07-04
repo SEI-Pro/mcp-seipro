@@ -182,7 +182,9 @@ async def sei_assinar_documento(
     """
     backend = await _backend(ctx)
     await _validar_cargo(backend, cargo)
-    result = await backend.assinar_documento(id_documento, cargo=cargo, orgao=orgao, processo=processo)
+    result = await backend.assinar_documento(
+        id_documento, cargo=cargo, orgao=orgao, processo=processo
+    )
     return _json(result)
 
 
