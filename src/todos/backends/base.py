@@ -67,14 +67,26 @@ class SEIBackend:
         """Troca a unidade ativa (aceita id interno ou sigla)."""
         raise NotImplementedError
 
-    async def pesquisar_unidades(self, filtro: str = "", limit: int = 50, pagina: int = 0) -> dict:
-        """Pesquisa unidades por nome ou sigla."""
+    async def pesquisar_unidades(
+        self, filtro: str = "", limit: int = 50, pagina: int = 0, protocolo: str = ""
+    ) -> dict:
+        """Pesquisa unidades por nome ou sigla.
+
+        `protocolo` é ignorado pelo backend REST; alguns backends web exigem
+        um processo de referência para abrir o contexto de busca (ver
+        SEIWebClient.pesquisar_unidades_envio).
+        """
         raise NotImplementedError
 
     async def pesquisar_outras_unidades(
-        self, filtro: str = "", limit: int = 50, pagina: int = 0
+        self, filtro: str = "", limit: int = 50, pagina: int = 0, protocolo: str = ""
     ) -> dict:
-        """Pesquisa unidades excluindo a unidade atual."""
+        """Pesquisa unidades excluindo a unidade atual.
+
+        `protocolo` é ignorado pelo backend REST; alguns backends web exigem
+        um processo de referência para abrir o contexto de busca (ver
+        SEIWebClient.pesquisar_unidades_envio).
+        """
         raise NotImplementedError
 
     async def listar_usuarios(self, filtro: str = "", *, apenas_unidade: bool = True) -> dict:
@@ -368,7 +380,13 @@ class SEIBackend:
         """Lista os blocos que contêm um documento."""
         raise NotImplementedError
 
-    async def assinar_documento(self, id_documento: str, cargo: str = "", orgao: str = "") -> dict:
+    async def assinar_documento(
+        self,
+        id_documento: str,
+        cargo: str = "",
+        orgao: str = "",
+        processo: str | None = None,
+    ) -> dict:
         """Assina um documento com o cargo informado."""
         raise NotImplementedError
 

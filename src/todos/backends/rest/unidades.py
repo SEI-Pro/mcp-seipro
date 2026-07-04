@@ -12,14 +12,18 @@ class UnidadesRest(_RestMixin):
         """Troca a unidade ativa no cliente REST."""
         return await self._rest.trocar_unidade(id_unidade)
 
-    async def pesquisar_unidades(self, filtro: str = "", limit: int = 50, pagina: int = 0) -> dict:
-        """Pesquisa unidades por nome ou sigla."""
+    async def pesquisar_unidades(
+        self, filtro: str = "", limit: int = 50, pagina: int = 0, protocolo: str = ""
+    ) -> dict:
+        """Pesquisa unidades por nome ou sigla. `protocolo` é ignorado (só o web precisa)."""
+        del protocolo
         return await self._rest.pesquisar_unidades(filtro=filtro, limit=limit, start=pagina)
 
     async def pesquisar_outras_unidades(
-        self, filtro: str = "", limit: int = 50, pagina: int = 0
+        self, filtro: str = "", limit: int = 50, pagina: int = 0, protocolo: str = ""
     ) -> dict:
-        """Pesquisa unidades excluindo a unidade atual."""
+        """Pesquisa unidades excluindo a unidade atual. `protocolo` é ignorado (só o web precisa)."""
+        del protocolo
         return await self._rest.pesquisar_outras_unidades(filtro=filtro, limit=limit, start=pagina)
 
     async def listar_usuarios(self, filtro: str = "", *, apenas_unidade: bool = True) -> dict:

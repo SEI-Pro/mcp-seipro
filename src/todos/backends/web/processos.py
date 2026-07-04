@@ -159,7 +159,7 @@ class ProcessosWeb(_WebMixin):
             if destino.isdigit():
                 ids_resolvidos.append(destino)
                 continue
-            matches = await self._web.autocomplete_unidades(destino)
+            matches = await self._web.pesquisar_unidades_envio(processo, destino)
             exact = next(
                 (m for m in matches if m.get("sigla", "").upper() == destino.upper()),
                 None,
@@ -167,7 +167,7 @@ class ProcessosWeb(_WebMixin):
             if not exact:
                 if not matches:
                     logger.warning(
-                        "enviar_processo: autocomplete_unidades retornou vazio para '%s'"
+                        "enviar_processo: pesquisar_unidades_envio retornou vazio para '%s'"
                         " — verifique conectividade",
                         destino,
                     )
