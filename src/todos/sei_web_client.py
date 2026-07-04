@@ -3370,59 +3370,114 @@ class SEIWebClient:
         return urljoin(sei_base, m.group(1).replace("&amp;", "&"))
 
     async def criar_bloco_assinatura_web(self, descricao: str) -> dict:
-        """Cria um bloco de assinatura via scraper web."""
+        """Cria um bloco de assinatura via scraper web.
+
+        A ação "Novo" não aparece no toolbar da inbox — só existe no toolbar
+        da própria página `bloco_assinatura_listar` (resolução em dois
+        passos, mesmo padrão de `_get_arvore_visualizar_link_var`). O form
+        real é `frmBlocoCadastro` (não o primeiro `<form>` da página, que é
+        `frmProtocoloPesquisaRapida` — a busca rápida do topo); o campo de
+        descrição é a textarea `txaDescricao`, não `txtDescricao` — confirmado
+        em sei.sistemas.ro.gov.br, 2026-07-04.
+        """
         await self.ensure_authenticated()
         sei_base = f"{self.sei_root}/sei/"
-        try:
-            incluir_url = await self._obter_link_toolbar("bloco_assinatura_incluir")
-        except SEINotFoundError:
-            incluir_url = await self._obter_link_toolbar("bloco_assinatura_cadastrar")
-        r = await self._http.get(incluir_url, headers={"Referer": str(self._inbox_url)})
+        listar_url = await self._obter_link_toolbar("bloco_assinatura_listar")
+        r0 = await self._http.get(listar_url, headers={"Referer": str(self._inbox_url)})
+        _check(r0)
+        listar_html = _decode_response(r0.content, r0.headers.get("content-type", ""))
+        m = re.search(
+            r"(controlador\.php\?acao=bloco_assinatura_(?:cadastrar|incluir)"
+            r"[^\"'\s]*infra_hash=[a-fA-F0-9]+)",
+            listar_html,
+        )
+        if not m:
+            msg = (
+                "Ação de criar bloco de assinatura não encontrada na "
+                "listagem (bloco_assinatura_listar)."
+            )
+            raise SEINotFoundError(msg)
+        incluir_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
+
+        r = await self._http.get(incluir_url, headers={"Referer": listar_url})
         _check(r)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body)
         if erro:
             raise SEIConnectionError(erro)
         soup = BeautifulSoup(body, "html.parser")
-        form = soup.find("form")
-        if form is None:
-            msg = "Form de criação de bloco não encontrado."
+        form = soup.find("form", {"id": "frmBlocoCadastro"})
+        if not isinstance(form, Tag):
+            msg = "Form frmBlocoCadastro não encontrado."
             raise SEIParseError(msg)
-        action = _tag_str(form, "action").replace("&amp;", "&")
-        post_url = urljoin(sei_base, action) if action else incluir_url
-        post_data: list[tuple[str, str]] = []
-        for inp in form.find_all("input", type="hidden"):
-            n = _tag_str(inp, "name")
-            if n:
-                post_data.append((n, _tag_str(inp, "value")))
+        # _post_form_preservando (via _coletar_estado_form) exclui de propósito
+        # o botão submit — o PHP do SEI ignora o POST silenciosamente sem o
+        # par name=value do botão (mesmo padrão de assinar_documento_web);
+        # sem isso aqui o bloco nunca era salvo (POST retornava 200 sem erro,
+        # mas nada era gravado). Confirmado em sei.sistemas.ro.gov.br, 2026-07-04.
+        overrides = {"txaDescricao": descricao}
         sbm = _extrair_submit_btn(form)
         if sbm:
-            post_data.append(sbm)
-        post_data.append(("txtDescricao", descricao))
-        r2 = await self._http.post(
-            post_url,
-            content=urlencode(post_data).encode("iso-8859-1"),
-            headers={
-                "Referer": incluir_url,
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-        )
-        if r2.status_code not in (200, 302):
-            msg = f"POST bloco_assinatura_incluir status={r2.status_code}"
-            raise SEIConnectionError(msg)
+            overrides[sbm[0]] = sbm[1]
+        r2 = await self._post_form_preservando(form, incluir_url, overrides, referer=incluir_url)
+        _check(r2)
         body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro2 = _extrair_erro_sei(body2)
         if erro2:
             raise SEIConnectionError(erro2)
+        # Após salvar, o SEI redireciona para bloco_assinatura_listar (sem
+        # id_bloco na URL nem em nenhum campo id_bloco=... no HTML) — o
+        # único jeito de saber o id do bloco recém-criado é achar a própria
+        # linha da tabela pela descrição: `<a class="...ancoraBlocoAberto">
+        # NUMERO</a>` aparece antes de `data-label="Descrição">descricao`
+        # na mesma <tr>. Confirmado em sei.sistemas.ro.gov.br, 2026-07-04.
         id_bloco = ""
-        mb = re.search(r"id_bloco=(\d+)", str(r2.url))
+        mb = re.search(
+            r'ancoraBlocoAberto">(\d+)</a>.*?data-label="Descrição">' + re.escape(descricao),
+            body2,
+            re.DOTALL,
+        )
         if mb:
             id_bloco = mb.group(1)
-        if not id_bloco:
-            mb = re.search(r"id_bloco[\"']?\s*[:=]\s*[\"']?(\d+)", body2)
-            if mb:
-                id_bloco = mb.group(1)
         return {"ok": True, "idBloco": id_bloco, "descricao": descricao}
+
+    async def incluir_documento_bloco_assinatura_web(
+        self, protocolo: str, id_documento: str, id_bloco: str
+    ) -> dict:
+        """Inclui um documento num bloco de assinatura via scraper web (ação `bloco_escolher`).
+
+        Diferente de `documento_assinar`/`editor_montar`, `bloco_escolher` É
+        um `<a href>` real (não uma variável JS) e já aparece em
+        `Nos[].acoes` — resolvível pela busca genérica de
+        `_get_doc_signed_url` sem precisar do padrão de 2 hops. O form
+        (`frmBlocoEscolher`) já vem com o documento pré-marcado
+        (`chkDocumentosItemN` checked) — só falta escolher o bloco em
+        `selBloco` e submeter com `sbmIncluir` (não
+        `sbmIncluirDisponibilizar`, que também disponibilizaria de uma vez).
+        Confirmado em sei.sistemas.ro.gov.br, 2026-07-04.
+        """
+        await self.ensure_authenticated()
+        url, referer = await self._get_doc_signed_url(protocolo, id_documento, "bloco_escolher")
+        r = await self._http.get(url, headers={"Referer": referer})
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(body)
+        if erro:
+            raise SEIConnectionError(erro)
+        soup = BeautifulSoup(body, "html.parser")
+        form = soup.find("form", {"id": "frmBlocoEscolher"})
+        if not isinstance(form, Tag):
+            msg = "Form frmBlocoEscolher não encontrado."
+            raise SEIParseError(msg)
+        r2 = await self._post_form_preservando(
+            form, url, {"selBloco": id_bloco, "sbmIncluir": "Incluir"}, referer=url
+        )
+        _check(r2)
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro2 = _extrair_erro_sei(body2)
+        if erro2:
+            raise SEIConnectionError(erro2)
+        return {"ok": True, "idBloco": id_bloco, "idDocumento": id_documento}
 
     async def disponibilizar_bloco_assinatura_web(self, id_bloco: str) -> dict:
         """Disponibiliza um bloco de assinatura via scraper web."""
@@ -3497,47 +3552,46 @@ class SEIWebClient:
         )
 
     async def listar_documentos_bloco_assinatura_web(self, id_bloco: str) -> list[dict]:
-        """Lista documentos de um bloco de assinatura via scraper web."""
-        await self.ensure_authenticated()
-        sei_base = f"{self.sei_root}/sei/"
-        lista_url = await self._obter_link_toolbar("bloco_assinatura_listar")
-        r = await self._http.get(lista_url, headers={"Referer": str(self._inbox_url)})
-        _check(r)
-        body = _decode_response(r.content, r.headers.get("content-type", ""))
-        pat = re.compile(
-            rf"controlador\.php\?[^\"'\s]*(?:acao=bloco_assinatura_alterar|bloco_assinatura_alterar)[^\"'\s]*id_bloco={re.escape(id_bloco)}[^\"'\s]*infra_hash=[a-fA-F0-9]+"
-            rf"|controlador\.php\?[^\"'\s]*id_bloco={re.escape(id_bloco)}[^\"'\s]*acao=bloco_assinatura_alterar[^\"'\s]*infra_hash=[a-fA-F0-9]+"
-        )
-        m = pat.search(body)
-        if not m:
-            logger.warning(
-                "listar_documentos_bloco_assinatura_web: link de detalhe não encontrado para bloco %s",
-                id_bloco,
-            )
-            return []
-        detail_url = urljoin(sei_base, m.group().replace("&amp;", "&"))
-        r2 = await self._http.get(detail_url, headers={"Referer": lista_url})
+        """Lista documentos de um bloco de assinatura via scraper web.
+
+        `bloco_assinatura_alterar` (usado anteriormente aqui) é a tela de
+        editar a DESCRIÇÃO do bloco (mesmo form `frmBlocoCadastro` da
+        criação) — não lista documento nenhum. A lista real de documentos
+        do bloco é `rel_bloco_protocolo_listar`, tabela `tblProtocolosBlocos`
+        (colunas: checkbox, Seq., Processo, Documento [número SEI], Tipo,
+        Assinaturas, Anotações, Ações). Confirmado em
+        sei.sistemas.ro.gov.br, 2026-07-04.
+        """
+        detail_url = await self._obter_acao_bloco_url(id_bloco, "rel_bloco_protocolo_listar")
+        r2 = await self._http.get(detail_url, headers={"Referer": str(self._inbox_url)})
         _check(r2)
         body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         soup = BeautifulSoup(body2, "html.parser")
-        tbl = soup.find("table", id=re.compile(r"tblDocumentos?", re.IGNORECASE))
-        if tbl is None:
-            tbl = soup.find("table", class_=re.compile(r"infraTable", re.IGNORECASE))
+        tbl = soup.find("table", id="tblProtocolosBlocos")
         docs: list[dict] = []
+        _min_cols = 5
         if tbl is not None:
             for tr in tbl.find_all("tr")[1:]:
                 tds = tr.find_all("td")
-                if len(tds) < _BLOCK_TABLE_MIN_COLS:
+                if len(tds) < _min_cols:
                     continue
-                tipo = tds[0].get_text(" ", strip=True)
-                num = tds[1].get_text(" ", strip=True)
+                processo = tds[2].get_text(" ", strip=True)
+                numero_sei = tds[3].get_text(" ", strip=True)
+                tipo = tds[4].get_text(" ", strip=True)
                 id_doc = ""
                 for a in tr.find_all("a", href=re.compile(r"id_documento=\d+")):
                     md = re.search(r"id_documento=(\d+)", _tag_str(a, "href"))
                     if md:
                         id_doc = md.group(1)
                         break
-                docs.append({"idDocumento": id_doc, "tipo": tipo, "numero": num})
+                docs.append(
+                    {
+                        "idDocumento": id_doc,
+                        "numeroSei": numero_sei,
+                        "tipo": tipo,
+                        "processo": processo,
+                    }
+                )
         return docs
 
     async def alterar_bloco_assinatura_web(self, id_bloco: str, descricao: str) -> dict:

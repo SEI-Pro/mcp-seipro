@@ -22,7 +22,6 @@ from todos.mcp_app import (
     _backend,
     _decode_cursor,
     _json,
-    _rest_backend,
     mcp,
 )
 from todos.responses import BlocoAssinatura, DocumentoBloco, NextAction, PaginadoGenerico
@@ -50,18 +49,22 @@ async def sei_criar_bloco_assinatura(
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_incluir_documento_bloco_assinatura(
     id_bloco: str,
     documentos: str,
+    processo: str | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Inclui documento(s) em um bloco de assinatura.
 
     - id_bloco: ID do bloco de assinatura
     - documentos: ID(s) de documento(s) separados por vírgula
+    - processo: protocolo do processo (necessário em instâncias sem mod-wssei
+      — todos os documentos devem pertencer ao mesmo processo)
     """
-    backend = await _rest_backend(ctx)
-    result = await backend.incluir_documento_bloco_assinatura(id_bloco, documentos)
+    backend = await _backend(ctx)
+    result = await backend.incluir_documento_bloco_assinatura(id_bloco, documentos, processo)
     return _json(result)
 
 

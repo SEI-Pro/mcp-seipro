@@ -86,7 +86,12 @@ class BlocosRest(_RestMixin):
         """Cria um bloco de assinatura."""
         return await self._rest.criar_bloco_assinatura(descricao, unidades)
 
-    async def incluir_documento_bloco_assinatura(self, id_bloco: str, documentos: str) -> dict:
+    async def incluir_documento_bloco_assinatura(
+        self,
+        id_bloco: str,
+        documentos: str,
+        processo: str | None = None,  # noqa: ARG002 — REST resolve via Solr, não precisa do protocolo
+    ) -> dict:
         """Inclui documentos em um bloco de assinatura."""
         return await self._rest.incluir_documento_bloco_assinatura(id_bloco, documentos)
 
