@@ -1,6 +1,6 @@
 # RFC 0018 — Dispatch genérico de tools via `todos <tool> chave=valor`
 
-**Status:** Proposta
+**Status:** ✅ Implementado (Opção B)
 **Data:** 2026-07-01
 **Motivação:** gap real encontrado em campo durante uma sessão de triagem — sem
 forma confiável de chamar uma tool via terminal, uma verificação simples (SEI
@@ -154,3 +154,58 @@ Esta RFC cobre **só** o dispatcher de CLI. Não inclui:
    removido ou rebaixado a nota de rodapé.
 4. (Opcional, follow-up) Medir custo por chamada da Opção B; considerar
    migrar para a Opção A (in-process) se o custo for sensível em uso real.
+
+## 6. Nota de implementação (2026-07-01)
+
+Passos 1–3 concluídos:
+
+- `src/todos/cli_call.py` — promove `scripts/call_tool.py` (removido) para
+  dentro do pacote, dividido em funções puras testáveis (`parse_kwargs`,
+  `format_result`) e uma função de I/O (`call_tool`, subprocesso stdio) +
+  orquestração (`run`). `--json` foi adicionado (§2.2) para saída JSON crua
+  linha-a-linha, útil para pipe/script; sem a flag, JSON é reindentado para
+  leitura humana.
+- Dispatch por nome (§2.1, Opção B) implementado **antes** do Typer resolver
+  o comando, não como um comando Typer dinâmico: `todos.server.main` inspeciona
+  `sys.argv` e, se o primeiro argumento não for `setup`/`set-password` nem
+  começar com `-`, despacha direto para `cli_call.run` sem invocar `_app()`.
+  Mais simples que ensinar o `click.Group` do Typer a resolver comandos
+  arbitrários, e não interfere em `todos --help`/`todos setup --help`
+  (continuam passando pelo Typer normalmente).
+- `CLAUDE.md` atualizado — `todos <tool> chave=valor` é o caminho recomendado;
+  as armadilhas do `fastmcp call` continuam documentadas (ainda podem confundir
+  quem tentar esse atalho por conta própria), mas como nota secundária.
+  `README.md` não citava `scripts/call_tool.py`, então não precisou de mudança.
+- Passo 4 (medir custo por chamada / considerar Opção A) fica como follow-up
+  não bloqueante — nenhum problema de performance relatado em uso real até
+  agora.
+- Testes: `tests/test_cli_call.py` (parsing/formatação/orquestração,
+  sem subprocesso real) e `tests/test_cli_dispatch.py` (decisão de dispatch e
+  `main()`, com `cli_call.run`/`_app` mockados). Validado ao vivo nesta sessão:
+  `uv run todos sei_estilos` (chamada e formatação padrão), `--json` (saída
+  crua), nome de tool inexistente (exit code 1 — a FastMCP devolve
+  `CallToolResult(isError=True)` para tool desconhecida, não uma exceção
+  `McpError`; o exit code 1 vem de `cli_call.run`'s `1 if result.isError else
+  0`, não do `except McpError` de `_dispatch_tool`, que fica reservado para
+  falhas reais de protocolo/transporte) e `todos --help`/`todos setup`
+  (fluxo Typer intacto).
+
+### 6.1 Revisão de código (2026-07-01)
+
+Correções aplicadas após revisão adversarial do PR:
+
+- `_FIXED_COMMANDS` deixou de ser um `frozenset` hardcoded e passou a ser
+  derivado de `_app.registered_commands` — evita desalinhar de um futuro
+  `@_app.command(...)` esquecido na lista manual.
+- `_dispatch_tool` agora também captura `(OSError, anyio.BrokenResourceError,
+  anyio.ClosedResourceError)` — falha ao spawnar/negociar o subprocesso
+  stdio (ex.: interpretador quebrado, subprocesso morre no meio do handshake)
+  antes só produzia um traceback cru.
+- `cli_call.run` valida o `tool_name` (`validate_tool_name`) antes de
+  despachar: `todos foo=bar` (nome da tool esquecido) ou `todos ""` agora
+  falham com um erro de uso claro em vez de um "Unknown tool" confuso vindo
+  do MCP.
+- `cli_call.format_result` usa `model_dump_json()` (não `str()`) para
+  conteúdo não-textual quando `--json` está ativo — mantém a saída
+  parseável mesmo nesse caso hoje inatingível (nenhuma das 127 tools
+  devolve algo além de `TextContent`).

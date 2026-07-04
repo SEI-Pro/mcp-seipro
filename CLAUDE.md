@@ -128,18 +128,29 @@ Hosts MCP recebem `ToolError` com a mensagem equivalente — nunca exit codes.
 - `src/todos/html_utils.py` — `html_to_text`, `html_to_markdown`, `pdf_to_text`, `pdf_to_markdown` (com OCR fallback)
 - `src/todos/sei_styles.py` — 39 estilos CSS do SEI + helpers (`html_referencia_sei`, `html_destinatario`)
 - `tests/test_parsers.py` — Testes unitários dos parsers HTML (sem servidor SEI)
-- `scripts/call_tool.py` — chama qualquer tool MCP via CLI, sem host MCP (ver seção abaixo)
+- `src/todos/cli_call.py` — dispatch genérico de tool via CLI, sem host MCP (ver seção abaixo)
 
 ## Chamar uma tool via CLI (sem host MCP)
 
-`todos` não tem um dispatcher CLI genérico como `pink <tool> chave=valor`.
-Para chamar uma tool diretamente (debug, scripts, verificação ad-hoc):
+`todos <tool> chave=valor` despacha qualquer tool diretamente do terminal, sem
+host MCP (RFC 0018, implementada) — mesmo espírito de `pink <tool> chave=valor`
+(RFC 0030 do projeto irmão):
 
 ```bash
 export SEI_WEB_URL="https://sei.orgao.gov.br"   # ou SEI_URL + demais vars (ver "Credenciais" acima)
 export SEI_USUARIO="..." SEI_ORGAO="..." SEI_SIGLA_ORGAO="..." SEI_SIGLA_ORGAO_SISTEMA="..." SEI_SIGLA_SISTEMA="..."
-uv run python scripts/call_tool.py sei_consultar_processo protocolo_formatado="0020.009181/2025-68" backend=web
+uv run todos sei_consultar_processo protocolo_formatado="0020.009181/2025-68" backend=web
+uv run todos sei_pesquisar_processos palavras_chave="fulano" --json   # saída JSON crua, para pipe/script
 ```
+
+Implementação em `src/todos/cli_call.py` (parsing de `chave=valor`, chamada,
+formatação) + dispatch em `src/todos/server.py::main` (`_is_tool_invocation`/
+`_dispatch_tool`): qualquer primeiro argumento que não seja um comando fixo
+(`setup`, `set-password`) nem uma opção (`--help`, ...) é tratado como nome de
+tool. Por baixo, sobe `python -m todos` como subprocesso stdio — mesma
+mecânica de `scripts/smoke_mcp.py`, `StdioServerParameters(...,
+env=dict(os.environ))` explícito — e por isso herda qualquer variável já
+exportada no shell.
 
 **Não use `fastmcp call arquivo.py <tool> chave=valor`** (o atalho de CLI do
 próprio pacote `fastmcp`) — ele NÃO repassa variáveis de ambiente customizadas
@@ -149,14 +160,13 @@ pai. O catálogo de tools carrega normalmente mesmo sem `SEI_URL`/`SEI_WEB_URL`
 (o registro das tools independe de login bem-sucedido), mas qualquer chamada
 que precise de sessão SEI falha em runtime com `RuntimeError: Nenhuma URL do
 SEI configurada` — confuso de diagnosticar porque a mensagem não menciona
-env vars faltando no subprocesso. **Além disso, aponte para `src/todos/server.py`
-(onde as tools são de fato decoradas com `@mcp.tool`), não para
-`src/todos/mcp_app.py`** (só instancia o `FastMCP` base — sem tools). Confundir
-os dois arquivos-alvo já produziu, sozinho, um `Tool ... not found` que mais
-parecia um problema de env do que de arquivo errado. `scripts/call_tool.py`
-usa o mesmo padrão já validado em `scripts/smoke_mcp.py` —
-`StdioServerParameters(..., env=dict(os.environ))` explícito — e por isso
-funciona com qualquer variável já exportada no shell.
+env vars faltando no subprocesso. **Além disso, se for apontar `fastmcp call`
+para um arquivo específico, aponte para `src/todos/server.py`** (onde as
+tools são de fato decoradas com `@mcp.tool`), não para `src/todos/mcp_app.py`
+(só instancia o `FastMCP` base — sem tools) — confundir os dois já produziu,
+sozinho, um `Tool ... not found` que mais parecia um problema de env do que de
+arquivo errado. `todos <tool>` evita as três armadilhas de uma vez: usa o
+entry point real (sem escolha de arquivo) e herda o ambiente do processo pai.
 
 ## Convenções importantes
 

@@ -203,6 +203,11 @@ ajudaria smoke-tests e operação manual sem duplicar lógica.
 **Proposta:** avaliar um adaptador CLI opcional sobre as funções de tool
 existentes (esforço alto; registrar como direção, não compromisso).
 
+> **Atualização (2026-07-01):** implementado por RFC 0018 —
+> `todos <tool> chave=valor` (`src/todos/cli_call.py`), sem duplicar as
+> funções de tool: despacha via `python -m todos` como subprocesso stdio,
+> reusando o mesmo catálogo MCP que um host normal usaria.
+
 ## 3. Priorização
 
 | Prioridade | Item | Esforço | Valor |
