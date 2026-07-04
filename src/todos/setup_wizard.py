@@ -22,10 +22,12 @@ from pydantic import Field, TypeAdapter
 from pydantic_core import SchemaError as _PydanticSchemaError
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
+from todos import output
 from todos.backends.models import SEIWebClientConfig
 from todos.exceptions import SEIAuthError, SEICredenciaisError, SEIError
 from todos.sei_web_client import SEIWebClient
@@ -1145,15 +1147,15 @@ def _validate_credentials_headless(conn: _SEIConnConfig) -> None:
         asyncio.run(_do_login())
     except SEICredenciaisError as exc:
         web_client.limpar_senha()
-        sys.stderr.write(f"Credenciais rejeitadas pelo SEI: {exc}\n")
+        output.emit_human(f"[bold red]Credenciais rejeitadas pelo SEI:[/] {escape(str(exc))}")
         sys.exit(1)
     except SEIAuthError as exc:
         web_client.limpar_senha()
-        sys.stderr.write(f"Falha de autenticação: {exc}\n")
+        output.emit_human(f"[bold red]Falha de autenticação:[/] {escape(str(exc))}")
         sys.exit(1)
     except (OSError, ValueError, RuntimeError) as exc:
         web_client.limpar_senha()
-        sys.stderr.write(f"Erro na validação de login: {exc}\n")
+        output.emit_human(f"[bold red]Erro na validação de login:[/] {escape(str(exc))}")
         sys.exit(1)
     else:
         web_client.limpar_senha()
@@ -1168,7 +1170,7 @@ def _save_password_headless(keyring_user: str, senha: str) -> None:
     try:
         _keyring.set_password("todos-mcp", keyring_user, senha)
     except (RuntimeError, OSError, ValueError) as exc:
-        sys.stderr.write(f"Falha ao gravar a senha no Keyring: {exc}\n")
+        output.emit_human(f"[bold red]Falha ao gravar a senha no Keyring:[/] {escape(str(exc))}")
         sys.exit(1)
 
 
@@ -1193,9 +1195,9 @@ def run_setup_headless(
     if not force:
         env = _read_existing_todos_env()
         if env is not None:
-            sys.stderr.write(
-                "MCP 'todos' já está configurado. Use --force para reconfigurar do zero, "
-                "ou 'todos set-password' para trocar só a senha.\n"
+            output.emit_human(
+                "[bold red]MCP 'todos' já está configurado.[/] Use --force para reconfigurar "
+                "do zero, ou 'todos set-password' para trocar só a senha."
             )
             sys.exit(1)
 
@@ -1218,6 +1220,6 @@ def run_setup_headless(
     # o runtime deve resolver a senha via keyring, não via env var em texto claro.
     mcp_env, using_plaintext_password = _build_mcp_env(inst, usuario, "")
     _deploy_mcp_configs(mcp_env, using_plaintext_password=using_plaintext_password)
-    sys.stdout.write(
-        f"todos configurado sem interação (usuário: {usuario!r}, SEI: {inst.sei_root!r}).\n"
+    output.emit_result(
+        f"todos configurado sem interação (usuário: {usuario!r}, SEI: {inst.sei_root!r})."
     )
