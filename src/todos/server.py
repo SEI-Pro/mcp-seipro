@@ -4,7 +4,8 @@ import asyncio
 import re
 import sys
 from collections.abc import Callable
-from typing import Annotated, TypeAlias, TypedDict, TypeGuard
+from pathlib import Path
+from typing import Annotated, TypeAlias, TypedDict, TypeGuard, cast
 
 import anyio
 import cyclopts
@@ -750,6 +751,55 @@ def _cmd_set_password() -> None:
     run_set_password()
 
 
+_skill_app = cyclopts.App(name="skill", help="Gera e instala a SKILL.md das tools MCP no path do agente.")
+_app.command(_skill_app)
+
+
+@_skill_app.command(name="install")
+def _cmd_skill_install(
+    *,
+    agent: Annotated[
+        str,
+        cyclopts.Parameter(
+            name="--agent",
+            help="claude-code|claude-desktop|cursor|opencode|cline|auto",
+        ),
+    ] = "auto",
+    scope: Annotated[
+        str,
+        cyclopts.Parameter(
+            name="--scope", help="global (~/<agent>/skills) ou project (./<agent>/skills)"
+        ),
+    ] = "global",
+    target: Annotated[
+        Path | None,
+        cyclopts.Parameter(name="--target", help="Override do diretório raiz (ignora --agent/--scope)"),
+    ] = None,
+) -> None:
+    """Instala ``todos/SKILL.md`` no path padrão do agente — equivale a ``npx skills add``.
+
+    Pré-requisito é só ter ``todos`` no PATH (``uv tool install --from
+    git+https://github.com/franklinbaldo/todos todos-sei``). Depois disso,
+    ``todos skill install`` grava o SKILL.md no diretório que o agente
+    escolhido espera (Claude Code ``~/.claude/skills/todos/SKILL.md`` por
+    padrão), gerado direto do schema vivo do servidor — não precisa clonar
+    o repo nem rodar ``fastmcp`` manualmente.
+    """
+    # Import tardio: todos.skill importa `mcp` deste módulo (server.py) para
+    # introspectar as tools — import no topo criaria ciclo.
+    from todos.skill import Scope, install_skill  # noqa: PLC0415
+
+    if scope not in ("global", "project"):
+        sys.stderr.write(f"Scope inválido: {scope!r}. Use 'global' ou 'project'.\n")
+        raise SystemExit(2)
+    try:
+        path = install_skill(agent=agent, scope=cast("Scope", scope), target=target)
+    except (RuntimeError, ValueError) as exc:
+        sys.stderr.write(f"{exc}\n")
+        raise SystemExit(1) from exc
+    sys.stdout.write(f"installed: {path}\n")
+
+
 @_app.default
 def _cmd_default() -> None:
     """MCP Server para o SEI — 127 tools, scraper HTTP + REST híbrido.
@@ -767,7 +817,8 @@ def _cmd_default() -> None:
 
 
 # Derivado de `_app` (não hardcoded) para nunca desalinhar de um novo
-# `@_app.command(...)` — sem isso, um comando fixo futuro sem entrada aqui
+# `@_app.command(...)` — sem isso, um comando fixo futuro (incluindo um
+# sub-app como `skill`, que o Cyclopts também expõe via `frozenset(_app)`)
 # seria despachado como nome de tool por engano. `help_flags`/`version_flags`
 # são as próprias listas do Cyclopts para os subapps internos (--help, -h,
 # --version) — usar essas propriedades em vez de checar prefixo "-" evita

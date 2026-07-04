@@ -48,6 +48,18 @@ instalado. Falta só o gerador de skill e o subcomando de instalação.
 - `scripts/regen_mcp_skill.py` grava em `.agents/skills/todos-mcp/SKILL.md`
   (dev/CI); CI checa drift com `git diff --exit-code`.
 
+> **Atualização (2026-07-04):** implementado nesta mesma PR —
+> `src/todos/skill.py`, `todos skill install` (`server.py`),
+> `scripts/regen_mcp_skill.py` e `tests/test_skill_install.py`. Correção
+> junto: `_FIXED_COMMANDS` só olhava `registered_commands`, não
+> `registered_groups` — o subgrupo `skill` (`add_typer`) era despachado
+> como nome de tool por engano (`todos skill install` virava uma chamada
+> de tool "skill"); corrigido + teste de regressão em
+> `tests/test_cli_dispatch.py`. Não há CI drift-check via `git diff`
+> — `.agents/` é gitignored neste repo (e no pink também não existe esse
+> check hoje, apesar do que a docstring original sugeria; a verificação
+> real do pink é via testes end-to-end, mesmo padrão adotado aqui).
+
 ### 2.2 (Alta) `cache_status`/`cache_clear` como tools MCP
 
 **Motivação.** `CatalogCache` (`src/todos/catalog_cache.py`) já tem TTL
@@ -87,6 +99,12 @@ forçando uma entrada de cada bump.
 
 **Proposta.** Adicionar ao job `version-bump` do todos a mesma checagem:
 `changelog/<versão>.md` deve existir para o `head_ver` novo.
+
+> **Atualização (2026-07-04):** implementado nesta mesma PR — checagem
+> inline no job `version-bump` de `.github/workflows/ci.yml` (todos usa
+> bash inline em vez de um script Python dedicado como o
+> `check_version_bump.py` do pink; manteve-se o estilo já existente no
+> arquivo). `changelog/0.6.4.md` criado como primeira entrada.
 
 ### 2.5 (Baixa) Script local único de CI
 

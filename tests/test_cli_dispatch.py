@@ -15,12 +15,17 @@ def test_fixed_commands_matches_registered_cyclopts_commands() -> None:
     """`_FIXED_COMMANDS` deve ser derivado do `_app` Cyclopts, não hardcoded.
 
     Regressão: um `@_app.command(...)` futuro sem entrada equivalente aqui
-    seria despachado como nome de tool por engano — ver RFC 0018 §6.1.
+    seria despachado como nome de tool por engano — ver RFC 0018 §6.1. O
+    mesmo vale para sub-apps (`_app.command(sub_app)`, ex. `skill`) —
+    `frozenset(_app)` já os inclui automaticamente (um sub-app registrado
+    aparece como um nome comum na iteração do App pai), então um subgrupo
+    esquecido aqui reproduziria o mesmo bug (RFC 0019 §2.1: `todos skill
+    install` sendo despachado como nome de tool antes desta correção).
     """
     app = server_module._app
     registered = frozenset(app) - set(app.help_flags) - set(app.version_flags)
     assert registered == server_module._FIXED_COMMANDS
-    assert registered == {"setup", "set-password"}
+    assert registered == {"setup", "set-password", "skill"}
 
 
 @pytest.mark.parametrize(
@@ -29,6 +34,8 @@ def test_fixed_commands_matches_registered_cyclopts_commands() -> None:
         ([], False),
         (["setup"], False),
         (["set-password"], False),
+        (["skill"], False),
+        (["skill", "install"], False),
         (["--help"], False),
         (["-h"], False),
         (["sei_consultar_processo"], True),
