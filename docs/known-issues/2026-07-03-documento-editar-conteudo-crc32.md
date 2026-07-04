@@ -1,5 +1,5 @@
 ---
-status: aberto
+status: causa-raiz-confirmada
 descoberto_em: 2026-07-03
 instancia: sei.sistemas.ro.gov.br (SEI 5.0.3-2.41.1, sem mod-wssei)
 branch_relacionada: fix/pesquisar-unidades-envio-web
@@ -62,37 +62,65 @@ TypeError: $(...).resizable is not a function
     at onload (...:158:33)
 ```
 
-## Hipóteses (nenhuma confirmada ainda)
+## Causa raiz (confirmada)
 
-1. **Bug genérico do SEI 5.0.3-2.41.1 nesta instância** — reproduziria em
-   qualquer documento, criado pela UI normal ou pelo scraper.
-2. **Específico de documentos criados pelo nosso fluxo via scraper**
-   (`criar_documento_interno_web`) — talvez falte algum campo/estado que o
-   JS client-side espera e que normalmente é preenchido por alguma etapa da
-   UI que pulamos ao ir direto via POST (`documento_escolher_tipo` →
-   `hdnIdSerie` → `hdnFlagDocumentoCadastro=2`).
+**É um bug genérico do SEI 5.0.3-2.41.1 nesta instância — não tem relação
+com como criamos o documento.** Confirmado inspecionando o DOM real:
 
-`seiCrc32` parece calcular um checksum de algum valor (provavelmente de um
-atributo ou hidden field específico) antes de montar a URL assinada da ação
-de editar — e esse valor está `undefined` neste caso.
+```js
+// Ícone do processo (funciona):
+<img src="svg/processo_alterar.svg" title="Consultar/Alterar Processo" alt="Consultar/Alterar Processo">
 
-## Próximos passos sugeridos (nenhum executado ainda)
+// Ícone do documento "Editar Conteúdo" (quebra):
+<img src="svg/documento_editar_conteudo.svg" title=null alt="Editar Conteúdo">
+```
 
-- [ ] Criar um documento do zero **pela UI normal** (sem passar pelo
-      scraper) nesta mesma instância e testar se "Editar Conteúdo" quebra
-      do mesmo jeito. Se sim → bug do SEI, não nosso, considerar reportar
-      upstream ao fornecedor do SEI. Se não → `criar_documento_interno_web`
-      está deixando de configurar algo que a UI configura.
-- [ ] Se for nosso: inspecionar o código-fonte de `seiCrc32`/`crc32GenBytes`
-      em `sei.js` (buscar o argumento passado no handler de clique do link
-      "Editar Conteúdo") e comparar o estado do DOM/cookies entre um
-      documento criado via UI vs. via scraper.
-- [ ] Como contorno independente da causa: já sabemos o padrão de POST
-      (`_post_form_preservando`, mesmo usado em `criar_processo_web` e no
-      fix de hoje para `criar_documento_interno_web`) — dá pra tentar POST
-      direto em `documento_alterar`/ação equivalente para editar seções,
-      sem depender do clique/JS quebrado do navegador. Requer descobrir a
-      ação e os campos do form de conteúdo real (ainda não localizados).
+Os ícones da barra de ferramentas de **documento** só têm atributo `alt`,
+sem `title` — mas `seiAssociarRegistroExibicaoBotoes` (função genérica do
+`sei.js`, usada por toda barra de ferramentas do sistema para registrar
+qual botão o usuário mais usa) sempre lê `img.attr("title")`:
+
+```js
+// sei.js:579-582
+function seiAssociarRegistroExibicaoBotoes(tipo, divId, link){
+  $(document.getElementById(divId)).children().on("click",function () {
+    var img = $(this).find('img:first');
+    var titulo = seiCrc32(img.attr("title"));   // title é null aqui → undefined → crash
+```
+
+Isso quebra **antes** da navegação real acontecer — o clique nunca chega
+no `onclick="editarConteudo('N')"` do link (`editarConteudo` abre uma
+**janela popup** via `infraAbrirJanela`, não navega os iframes).
+
+**Confirmado que `editarConteudo('N')` funciona normalmente quando chamado
+direto** (bypassando o clique/handler quebrado): sem exceção. E, aplicando
+um patch temporário em runtime (`window.seiCrc32 = str => str ?? ''` em
+todos os frames) antes do clique, o clique real passa **sem nenhum erro no
+console**. Não deu pra confirmar se a janela popup do editor efetivamente
+abriu nesse teste — a ferramenta de automação usada (Claude in Chrome)
+não rastreia janelas popup fora do grupo de abas que ela controla, então
+a ausência de uma nova aba visível não é prova de falha.
+
+## Próximos passos sugeridos
+
+- [ ] **Testar num navegador comum** (não via automação): aplicar o mesmo
+      patch runtime no console do DevTools antes de clicar em "Editar
+      Conteúdo", e ver diretamente se a janela popup do editor abre. Isso
+      confirmaria definitivamente que o contorno funciona.
+- [ ] Considerar reportar o bug (`title=null` nos ícones de documento +
+      `seiAssociarRegistroExibicaoBotoes` não trata isso) ao fornecedor/
+      mantenedor do SEI desta instância — é um bug real da aplicação,
+      independente do nosso scraper.
+- [ ] Como contorno client-side permanente (sem depender de reportar e
+      esperar correção): um `content script`/bookmarklet que aplica o
+      mesmo patch (`window.seiCrc32 = str => str ?? ''`) automaticamente
+      ao carregar qualquer página do SEI, para todo mundo que usa o
+      sistema, não só nesta investigação.
+- [ ] Alternativa server-side (scraper): já sabemos o padrão de POST
+      (`_post_form_preservando`) usado nos outros fixes desta branch —
+      ainda vale tentar achar a ação/campos do form de conteúdo real via
+      HTTP puro, sem depender do JS do navegador em nenhuma hipótese,
+      mas ainda não localizamos esse form (documento_alterar não é ele).
 
 ## Ambiente
 
