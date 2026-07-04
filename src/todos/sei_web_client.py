@@ -3420,7 +3420,11 @@ class SEIWebClient:
         if not isinstance(form, Tag):
             msg = "Form frmBlocoLista não encontrado."
             raise SEIParseError(msg)
-        r2 = await self._post_form_preservando(
+        # _post_form_preservando POSTaria de volta pro action PRÓPRIO do form
+        # (a própria bloco_assinatura_listar) — precisa do override explícito
+        # pra ir de fato pra acao_url (bug real encontrado em code review,
+        # 2026-07-04: retornava ok=True sem executar nada).
+        r2 = await self._post_form_com_acao_override(
             form, acao_url, {"hdnInfraItemId": id_bloco}, referer=lista_url
         )
         _check(r2)
@@ -4071,11 +4075,42 @@ class SEIWebClient:
     ) -> httpx.Response:
         """Reenvia um form preservando seu estado atual, sobrescrevendo `overrides`.
 
+        POSTa para a `action` do PRÓPRIO form (resolvida contra `base_url` só
+        para path/host relativos) — correto quando o form já aponta pra ação
+        certa (ex.: `frmBlocoCadastro`/`bloco_assinatura_cadastrar`,
+        `frmRelBlocoProtocoloCadastro`/`rel_bloco_protocolo_alterar`). Para o
+        padrão JS "sobrescreve form.action antes de submeter" (ex.:
+        `acaoExcluir` num form de LISTAGEM cujo `action` próprio é a própria
+        listagem, não a ação de excluir), use `_post_form_com_acao_override`
+        — usar este aqui nesse caso faz o POST voltar pra página de listagem,
+        um no-op silencioso (bug real encontrado e corrigido em code review,
+        2026-07-04: `_executar_acao_bloco_form`/`retirar_documento_bloco_assinatura_web`
+        reportavam sucesso sem executar a ação).
+
         Codifica em ISO-8859-1 (charset do SEI) e força bytes ASCII para evitar
         double-encoding pelo httpx dos separadores `±`/`¥` dos campos multivalor.
         """
         action = _tag_str(form, "action").replace("&amp;", "&")
         post_url = urljoin(base_url, action) if action else base_url
+        dados = _coletar_estado_form(form)
+        dados.update(overrides)
+        return await self._http.post(
+            post_url,
+            content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+            headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+    async def _post_form_com_acao_override(
+        self, form: Tag, post_url: str, overrides: dict[str, str], referer: str
+    ) -> httpx.Response:
+        """Reenvia um form para `post_url`, IGNORANDO o `action` próprio do form.
+
+        Para o padrão JS "sobrescreve `frmX.action` com uma URL de ação
+        específica antes de submeter o mesmo form" (ex.: `acaoExcluir` do
+        SEI num form de listagem cujo `action` próprio é a própria
+        listagem) — `_post_form_preservando` não serve aqui porque ele
+        sempre usa o `action` do form, nunca `post_url`.
+        """
         dados = _coletar_estado_form(form)
         dados.update(overrides)
         return await self._http.post(
@@ -5268,26 +5303,47 @@ class SEIWebClient:
     async def retirar_documento_bloco_assinatura_web(
         self, id_bloco: str, id_documento: str
     ) -> dict:
-        """Retira documento de bloco de assinatura via scraper web."""
+        """Retira documento de bloco de assinatura via scraper web.
+
+        `bloco_assinatura_alterar` (usado anteriormente) é a tela de editar
+        a DESCRIÇÃO do bloco — mesmo bug já corrigido em
+        `listar_documentos_bloco_assinatura_web`. A ação real é
+        `rel_bloco_protocolo_excluir`, disparada por
+        `acaoExcluir(id, desc, tipo)` na própria página
+        `rel_bloco_protocolo_listar`: seta `hdnInfraItemId` com o id
+        COMPOSTO `"{id_documento}-{id_bloco}"` (mesmo formato do checkbox de
+        seleção da linha) e reenvia o form `frmRelBlocoProtocoloLista`.
+        Confirmado em sei.sistemas.ro.gov.br, 2026-07-04.
+        """
         await self.ensure_authenticated()
         sei_base = f"{self.sei_root}/sei/"
-        acao_url = await self._obter_acao_bloco_url(id_bloco, "bloco_assinatura_alterar")
-        r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
+        detail_url = await self._obter_acao_bloco_url(id_bloco, "rel_bloco_protocolo_listar")
+        r = await self._http.get(detail_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
-        pat = re.compile(
-            rf"controlador\.php\?[^\"'\s]*acao=bloco_assinatura_retirar_documento[^\"'\s]*id_documento={re.escape(id_documento)}[^\"'\s]*infra_hash=[a-fA-F0-9]+"
-            rf"|controlador\.php\?[^\"'\s]*id_documento={re.escape(id_documento)}[^\"'\s]*acao=bloco_assinatura_retirar_documento[^\"'\s]*infra_hash=[a-fA-F0-9]+"
+        m = re.search(
+            r"acao=rel_bloco_protocolo_excluir&acao_origem=rel_bloco_protocolo_listar"
+            r"[^\"'\s]*infra_hash=[a-fA-F0-9]+",
+            body,
         )
-        m = pat.search(body)
         if not m:
-            msg = f"Link retirar documento {id_documento} não encontrado no bloco {id_bloco}."
+            msg = f"Ação de retirar documento não encontrada no bloco {id_bloco}."
+            raise SEINotFoundError(msg)
+        acao_url = urljoin(sei_base, "controlador.php?" + m.group().replace("&amp;", "&"))
+        soup = BeautifulSoup(body, "html.parser")
+        form = soup.find("form", {"id": "frmRelBlocoProtocoloLista"})
+        if not isinstance(form, Tag):
+            msg = "Form frmRelBlocoProtocoloLista não encontrado."
             raise SEIParseError(msg)
-        retirar_url = urljoin(sei_base, m.group().replace("&amp;", "&"))
-        r2 = await self._http.get(retirar_url, headers={"Referer": acao_url})
-        if r2.status_code not in (200, 302):
-            msg = f"bloco_assinatura_retirar_documento status={r2.status_code}"
-            raise SEIConnectionError(msg)
+        item_id = f"{id_documento}-{id_bloco}"
+        # _post_form_preservando POSTaria de volta pro action PRÓPRIO do form
+        # (a própria rel_bloco_protocolo_listar) — precisa do override
+        # explícito pra ir de fato pra acao_url (bug real encontrado em code
+        # review, 2026-07-04: retornava ok=True sem retirar o documento).
+        r2 = await self._post_form_com_acao_override(
+            form, acao_url, {"hdnInfraItemId": item_id}, referer=detail_url
+        )
+        _check(r2)
         body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body2)
         if erro:
@@ -5302,49 +5358,54 @@ class SEIWebClient:
     async def anotar_documento_bloco_assinatura_web(
         self, id_bloco: str, id_documento: str, descricao: str
     ) -> dict:
-        """Cria ou altera anotação em documento de bloco via scraper web."""
+        """Cria ou altera anotação em documento de bloco via scraper web.
+
+        `bloco_assinatura_alterar` (usado anteriormente) era a página
+        errada — mesmo bug já corrigido em
+        `retirar_documento_bloco_assinatura_web`/
+        `listar_documentos_bloco_assinatura_web`. O link real
+        (`rel_bloco_protocolo_alterar`) está embutido como string literal
+        no `onclick="acaoAlterar('...')"` do ícone "Anotações" na linha do
+        documento em `rel_bloco_protocolo_listar` — não uma variável JS
+        (2-hop, como `editor_montar`) nem um `<a href>` simples, mas o
+        `id_documento` já aparece como query param nesse link literal, então
+        um regex direto no HTML da página resolve sem precisar localizar a
+        `<tr>` específica. Confirmado em sei.sistemas.ro.gov.br, 2026-07-04.
+        """
         await self.ensure_authenticated()
         sei_base = f"{self.sei_root}/sei/"
-        acao_url = await self._obter_acao_bloco_url(id_bloco, "bloco_assinatura_alterar")
-        r = await self._http.get(acao_url, headers={"Referer": str(self._inbox_url)})
+        detail_url = await self._obter_acao_bloco_url(id_bloco, "rel_bloco_protocolo_listar")
+        r = await self._http.get(detail_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
-        pat = re.compile(
-            rf"controlador\.php\?[^\"'\s]*acao=bloco_assinatura_anotar_documento[^\"'\s]*id_documento={re.escape(id_documento)}[^\"'\s]*infra_hash=[a-fA-F0-9]+"
-            rf"|controlador\.php\?[^\"'\s]*id_documento={re.escape(id_documento)}[^\"'\s]*acao=bloco_assinatura_anotar_documento[^\"'\s]*infra_hash=[a-fA-F0-9]+"
+        m = re.search(
+            rf"acao=rel_bloco_protocolo_alterar[^\"'\s]*id_documento={re.escape(id_documento)}"
+            rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+",
+            body,
         )
-        m = pat.search(body)
         if not m:
             msg = f"Link anotação documento {id_documento} não encontrado no bloco {id_bloco}."
             raise SEIParseError(msg)
-        anotar_url = urljoin(sei_base, m.group().replace("&amp;", "&"))
-        r2 = await self._http.get(anotar_url, headers={"Referer": acao_url})
+        anotar_url = urljoin(sei_base, "controlador.php?" + m.group().replace("&amp;", "&"))
+        r2 = await self._http.get(anotar_url, headers={"Referer": detail_url})
         _check(r2)
         body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(body2)
+        if erro:
+            raise SEIConnectionError(erro)
         soup = BeautifulSoup(body2, "html.parser")
-        form = soup.find("form")
-        if form is None:
-            msg = "Form de anotação não encontrado."
+        form = soup.find("form", {"id": "frmRelBlocoProtocoloCadastro"})
+        if not isinstance(form, Tag):
+            msg = "Form frmRelBlocoProtocoloCadastro não encontrado."
             raise SEIParseError(msg)
-        action = _tag_str(form, "action").replace("&amp;", "&")
-        post_url = urljoin(sei_base, action) if action else anotar_url
-        post_data: list[tuple[str, str]] = []
-        for inp in form.find_all("input", type="hidden"):
-            n = _tag_str(inp, "name")
-            if n:
-                post_data.append((n, _tag_str(inp, "value")))
+        # Campo real é `txtAnotacao`, não `txaDescricao` — confirmado em
+        # sei.sistemas.ro.gov.br, 2026-07-04 (inspeção direta do form).
+        overrides = {"txtAnotacao": descricao}
         sbm = _extrair_submit_btn(form)
         if sbm:
-            post_data.append(sbm)
-        post_data.append(("txaDescricao", descricao))
-        r3 = await self._http.post(
-            post_url,
-            content=urlencode(post_data).encode("iso-8859-1"),
-            headers={"Referer": anotar_url, "Content-Type": "application/x-www-form-urlencoded"},
-        )
-        if r3.status_code not in (200, 302):
-            msg = f"POST anotação bloco status={r3.status_code}"
-            raise SEIConnectionError(msg)
+            overrides[sbm[0]] = sbm[1]
+        r3 = await self._post_form_preservando(form, anotar_url, overrides, referer=anotar_url)
+        _check(r3)
         body3 = _decode_response(r3.content, r3.headers.get("content-type", ""))
         erro = _extrair_erro_sei(body3)
         if erro:

@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from bs4 import BeautifulSoup
 
 from todos.backends.models import SEIWebClientConfig
 from todos.backends.web.blocos import BlocosWeb
@@ -209,3 +210,85 @@ class TestIncluirDocumentoBlocoAssinaturaWebRejeitaMultiplosProcessos:
         web_mixin._web.incluir_documento_bloco_assinatura_web.assert_called_once_with(
             "0020.010296/2026-86", "76858997", "1864524"
         )
+
+
+class TestPostFormComAcaoOverride:
+    """Regressão para o bug real encontrado em 2026-07-04: `excluir_bloco_assinatura_web`
+    e `retirar_documento_bloco_assinatura_web` retornavam `ok: True` sem
+    executar nada, porque `_post_form_preservando` sempre POSTa pro `action`
+    PRÓPRIO do form — que nesses dois casos é a página de LISTAGEM
+    (auto-referente), não a ação de destino (`bloco_excluir`/
+    `rel_bloco_protocolo_excluir`). Confirmado ao vivo: os 3 blocos "excluídos"
+    continuavam existindo até essa correção. `_post_form_com_acao_override`
+    existe especificamente pra esse padrão JS "sobrescreve form.action antes
+    de submeter".
+    """
+
+    def test_post_form_com_acao_override_ignora_action_proprio_do_form(self) -> None:
+        client = make_client()
+        form_html = (
+            '<form id="frmBlocoLista" '
+            'action="controlador.php?acao=bloco_assinatura_listar">'
+            '<input type="hidden" name="hdnInfraItemId" value="">'
+            "</form>"
+        )
+        form = BeautifulSoup(form_html, "html.parser").find("form")
+
+        captured: dict[str, object] = {}
+
+        async def _fake_post(url: str, **_kwargs: object) -> httpx.Response:
+            captured["url"] = url
+            return _resp(content="ok")
+
+        with patch.object(client._http, "post", _fake_post):
+            asyncio.run(
+                client._post_form_com_acao_override(
+                    form,
+                    "http://sei.test/controlador.php?acao=bloco_excluir&infra_hash=abc",
+                    {"hdnInfraItemId": "123"},
+                    referer="http://sei.test/listar",
+                )
+            )
+
+        # O POST precisa ir pra acao=bloco_excluir (o destino real), NÃO pra
+        # acao=bloco_assinatura_listar (o action próprio do <form>, que
+        # _post_form_preservando usaria por engano).
+        assert "acao=bloco_excluir" in captured["url"]
+        assert "acao=bloco_assinatura_listar" not in captured["url"]
+
+    def test_executar_acao_bloco_form_posta_para_acao_de_destino(self) -> None:
+        """Reproduz o bug real: form de listagem auto-referente + ação de destino diferente."""
+        client = make_client()
+        listar_html = (
+            "<html><script>"
+            "function acaoExcluir(id){"
+            "document.getElementById('frmBlocoLista').action="
+            "'controlador.php?acao=bloco_excluir&acao_origem=bloco_assinatura_listar"
+            "&infra_hash=deadbeef';"
+            "}</script>"
+            '<form id="frmBlocoLista" '
+            'action="controlador.php?acao=bloco_assinatura_listar">'
+            '<input type="hidden" name="hdnInfraItemId" value="">'
+            "</form></html>"
+        )
+        captured: dict[str, object] = {}
+
+        async def _fake_post(url: str, **_kwargs: object) -> httpx.Response:
+            captured["url"] = url
+            return _resp(content="<html>excluido</html>")
+
+        with (
+            patch.object(client, "ensure_authenticated", AsyncMock()),
+            patch.object(
+                client, "_obter_link_toolbar", AsyncMock(return_value="http://sei.test/listar")
+            ),
+            patch.object(client._http, "get", AsyncMock(return_value=_resp(content=listar_html))),
+            patch.object(client._http, "post", _fake_post),
+        ):
+            result = asyncio.run(
+                client._executar_acao_bloco_form("999", "bloco_excluir", "Bloco excluído.")
+            )
+
+        assert result == {"ok": True, "idBloco": "999", "mensagem": "Bloco excluído."}
+        assert "acao=bloco_excluir" in captured["url"]
+        assert "acao=bloco_assinatura_listar" not in captured["url"]
