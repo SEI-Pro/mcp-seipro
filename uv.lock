@@ -2937,6 +2937,7 @@ name = "todos-sei"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
+    { name = "cyclopts" },
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "keyring" },
@@ -2947,7 +2948,6 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pytesseract" },
     { name = "rich" },
-    { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -2975,6 +2975,7 @@ eval = [
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4" },
+    { name = "cyclopts", specifier = ">=4.0" },
     { name = "fastmcp", specifier = "==3.4.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "keyring", specifier = ">=25.0.0" },
@@ -2987,7 +2988,6 @@ requires-dist = [
     { name = "pymupdf", marker = "extra == 'llm'", specifier = ">=1.24" },
     { name = "pytesseract", specifier = ">=0.3" },
     { name = "rich", specifier = ">=13.0" },
-    { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 provides-extras = ["llm"]

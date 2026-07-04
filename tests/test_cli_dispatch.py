@@ -1,4 +1,4 @@
-"""Testes para o dispatch `todos <tool> chave=valor` no `_app` Typer (RFC 0018)."""
+"""Testes para o dispatch `todos <tool> chave=valor` no `_app` Cyclopts (RFC 0018)."""
 
 from __future__ import annotations
 
@@ -11,13 +11,14 @@ import todos.server as server_module
 from todos.cli_call import CliArgumentError
 
 
-def test_fixed_commands_matches_registered_typer_commands() -> None:
-    """`_FIXED_COMMANDS` deve ser derivado de `_app.registered_commands`, não hardcoded.
+def test_fixed_commands_matches_registered_cyclopts_commands() -> None:
+    """`_FIXED_COMMANDS` deve ser derivado do `_app` Cyclopts, não hardcoded.
 
     Regressão: um `@_app.command(...)` futuro sem entrada equivalente aqui
     seria despachado como nome de tool por engano — ver RFC 0018 §6.1.
     """
-    registered = {cmd.name for cmd in server_module._app.registered_commands}
+    app = server_module._app
+    registered = frozenset(app) - set(app.help_flags) - set(app.version_flags)
     assert registered == server_module._FIXED_COMMANDS
     assert registered == {"setup", "set-password"}
 
@@ -116,7 +117,7 @@ def test_dispatch_tool_reports_transport_failure(monkeypatch, capsys, exc: Excep
     assert "sei_estilos" in capsys.readouterr().err
 
 
-def test_main_dispatches_tool_invocation_without_starting_typer_app(monkeypatch) -> None:
+def test_main_dispatches_tool_invocation_without_starting_cyclopts_app(monkeypatch) -> None:
     monkeypatch.setattr(server_module.sys, "argv", ["todos", "sei_estilos"])
     monkeypatch.setattr(server_module, "_dispatch_tool", lambda _argv: 0)
     monkeypatch.setattr(
@@ -130,7 +131,7 @@ def test_main_dispatches_tool_invocation_without_starting_typer_app(monkeypatch)
     assert exc_info.value.code == 0
 
 
-def test_main_falls_back_to_typer_app_for_fixed_commands(monkeypatch) -> None:
+def test_main_falls_back_to_cyclopts_app_for_fixed_commands(monkeypatch) -> None:
     monkeypatch.setattr(server_module.sys, "argv", ["todos", "setup"])
     called: dict[str, bool] = {"app": False}
     monkeypatch.setattr(server_module, "_app", lambda: called.__setitem__("app", True))
