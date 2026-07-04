@@ -1,0 +1,120 @@
+/* Constrain wizard to a card width */
+main.container {
+  max-width: 560px;
+  padding-top: 2rem;
+  padding-bottom: 2rem;
+}
+
+/* Timeout bar */
+#timeout-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--pico-primary);
+  margin-bottom: 1rem;
+  transition: width 1s linear, background-color 0.3s;
+  width: 100%;
+}
+
+/* Fieldsets as sections */
+fieldset {
+  margin-bottom: 1.5rem;
+  padding: 1rem 1.25rem 0.5rem;
+  border: 1px solid var(--pico-table-border-color, #334155);
+  border-radius: var(--pico-border-radius, 0.5rem);
+}
+fieldset legend {
+  font-weight: 600;
+  padding: 0 0.4rem;
+  font-size: 0.9rem;
+  color: var(--pico-muted-color);
+}
+
+/* Input + button side by side */
+.field-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: var(--pico-spacing, 1rem);
+}
+.field-row input, .field-row select {
+  flex: 1;
+  margin-bottom: 0;
+}
+.field-row button {
+  flex-shrink: 0;
+  margin-bottom: 0;
+  padding: calc(var(--pico-form-element-spacing-vertical, 0.75rem) - 0.1rem) 1rem;
+  white-space: nowrap;
+}
+
+/* Validation result badge */
+.badge {
+  display: inline-block;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-top: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.badge.hidden { display: none !important; }
+.badge-ok {
+  background: rgba(22, 163, 74, 0.13);
+  color: #4ade80;
+  border: 1px solid rgba(22, 163, 74, 0.35);
+}
+.badge-err {
+  background: rgba(220, 38, 38, 0.13);
+  color: #f87171;
+  border: 1px solid rgba(220, 38, 38, 0.35);
+}
+.badge-warn {
+  background: rgba(202, 138, 4, 0.13);
+  color: #fbbf24;
+  border: 1px solid rgba(202, 138, 4, 0.35);
+}
+
+/* Inline field error (below input) */
+.field-err {
+  display: block;
+  color: var(--pico-del-color, #f87171);
+  font-size: 0.8rem;
+  margin-top: -0.6rem;
+  margin-bottom: 0.75rem;
+}
+.field-err.hidden { display: none; }
+
+/* Required marker */
+.required { color: var(--pico-del-color, #f87171); }
+
+/* Muted notes / warnings */
+.muted-note {
+  color: var(--pico-muted-color);
+  font-size: 0.85rem;
+  margin-top: 0.75rem;
+}
+.warn-note {
+  border-left-color: #f59e0b;
+  color: #fbbf24;
+}
+
+/* Spinner */
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.spinner.hidden { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Success screen */
+.success-icon { font-size: 3rem; text-align: center; margin: 0.5rem 0 1rem; }
+.saved-list { list-style: none; padding: 0; margin: 0.75rem 0; }
+.saved-list li { padding: 0.3rem 0; color: var(--pico-muted-color); font-size: 0.88rem; }
+.saved-list li::before { content: "✓ "; color: #4ade80; font-weight: 700; }

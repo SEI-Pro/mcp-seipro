@@ -99,6 +99,11 @@ ignore = [
 "src/todos/server.py" = [
     "PLR0913",  # MCP tools need ctx + ≥4 business params; grouping into dataclasses hides the MCP schema
 ]
+"src/todos/wizard/server.py" = [
+    # log_message overrides BaseHTTPRequestHandler's stdlib signature
+    # (*args: Any) verbatim to suppress the access log — not our API to retype.
+    "ANN401",
+]
 # per-domain tool modules split out of server.py: same framework-dictated MCP
 # signature constraint — tools need ctx + ≥4 business params, and grouping into
 # dataclasses hides the MCP schema.

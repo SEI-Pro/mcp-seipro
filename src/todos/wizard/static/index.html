@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TOdos — Configuração</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="wizard.css">
+</head>
+<body>
+  <main class="container">
+    <article>
+      <header>
+        <div id="timeout-bar"></div>
+        <hgroup>
+          <h2>📋 TOdos — Configuração</h2>
+          <p>Configure suas credenciais para o SEI (Sistema Eletrônico de Informações).</p>
+        </hgroup>
+      </header>
+
+      <!-- Já configurado -->
+      <section id="already-configured-section" hidden>
+        <p>O MCP <b>todos</b> já está configurado:</p>
+        <ul class="saved-list" id="already_configured_list"></ul>
+        <div class="field-row">
+          <button type="button" onclick="reconfigure()">Reconfigurar mesmo assim</button>
+          <button type="button" class="secondary" onclick="keepAsIs()">Manter como está</button>
+        </div>
+      </section>
+
+      <!-- Formulário único -->
+      <section id="form-section" hidden>
+        <fieldset>
+          <legend>Instância do SEI</legend>
+          <label for="sei_url">URL do SEI <span class="required">*</span></label>
+          <div class="field-row">
+            <input id="sei_url" placeholder="https://sei.orgao.gov.br">
+            <button type="button" class="secondary outline" onclick="detectInstance()">
+              <span id="detect_spin" class="spinner hidden"></span>Detectar
+            </button>
+          </div>
+          <small id="sei_url_err" class="field-err hidden"></small>
+
+          <label for="sei_sigla_orgao">Órgão <span class="required">*</span></label>
+          <select id="sei_sigla_orgao_select" class="hidden"></select>
+          <input id="sei_sigla_orgao" placeholder="Sigla do órgão (ex.: RO)">
+          <small id="sei_sigla_orgao_err" class="field-err hidden"></small>
+
+          <details id="modsei_details" hidden>
+            <summary>Opções avançadas</summary>
+            <label for="rest_url" style="margin-top:0.75rem">URL REST do mod-wssei <small>(vazio = modo web-only)</small></label>
+            <input id="rest_url" placeholder="https://sei.orgao.gov.br/sei/modulos/wssei/...">
+            <small id="modsei_note" class="muted-note"></small>
+          </details>
+        </fieldset>
+
+        <fieldset>
+          <legend>Usuário e senha</legend>
+          <label for="sei_usuario">Usuário</label>
+          <input id="sei_usuario" placeholder="seu.login">
+          <label for="sei_senha">Senha</label>
+          <div class="field-row">
+            <input id="sei_senha" type="password" placeholder="••••••••">
+            <button type="button" class="secondary outline" onclick="testLogin()">
+              <span id="login_spin" class="spinner hidden"></span>Testar
+            </button>
+          </div>
+          <small id="login_badge" class="badge hidden"></small>
+        </fieldset>
+
+        <small id="save_err" class="field-err hidden"></small>
+        <button type="button" onclick="doSave()" style="width:100%">
+          <span id="save_spin" class="spinner hidden"></span>Salvar e Concluir
+        </button>
+      </section>
+
+      <!-- Concluído -->
+      <section id="step-done" hidden>
+        <div class="success-icon">✅</div>
+        <h3 style="text-align:center">TOdos configurado!</h3>
+        <ul id="saved_list" class="saved-list"></ul>
+        <blockquote>
+          Reinicie o Claude Desktop, Codex ou Antigravity para ativar as <b>127 ferramentas SEI</b>.
+        </blockquote>
+        <p style="text-align:center"><small>Esta janela pode ser fechada.</small></p>
+      </section>
+    </article>
+  </main>
+  <script src="wizard.js"></script>
+</body>
+</html>
