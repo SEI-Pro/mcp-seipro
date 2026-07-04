@@ -25,6 +25,7 @@ import time
 import warnings
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -438,6 +439,14 @@ class _ReauthTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._wrapped.aclose()
+
+
+@dataclass(frozen=True, slots=True)
+class _ArquivoGerado:
+    """Resultado bruto de um PDF/ZIP gerado pelo SEI (uso interno de _gerar_arquivo_processo)."""
+
+    conteudo: bytes
+    content_type: str
 
 
 class SEIWebClient:
@@ -2605,7 +2614,7 @@ class SEIWebClient:
 
     async def _gerar_arquivo_processo(
         self, protocolo_formatado: str, acao: str, *, _relogin: bool = True
-    ) -> bytes:
+    ) -> _ArquivoGerado:
         """Generate a PDF or ZIP archive for a process (shared by gerar_pdf/zip_processo).
 
         Five-step flow (identical for PDF and ZIP):
@@ -2630,7 +2639,7 @@ class SEIWebClient:
                     return v
             return None
 
-        async def _reauth_and_retry() -> bytes:
+        async def _reauth_and_retry() -> _ArquivoGerado:
             if not _relogin:
                 msg = (
                     f"Sessão SEI expirou após re-login ao gerar {acao} "
@@ -2758,7 +2767,7 @@ class SEIWebClient:
         if _peek_is_login_page(r5.content):
             return await _reauth_and_retry()
 
-        return r5.content
+        return _ArquivoGerado(conteudo=r5.content, content_type=r5.headers.get("content-type", ""))
 
     async def gerar_pdf_processo(self, protocolo_formatado: str) -> bytes:
         """Gera e baixa o PDF consolidado de um processo SEI.
@@ -2767,9 +2776,12 @@ class SEIWebClient:
         Retorna os bytes brutos do PDF.
         """
         await self.ensure_authenticated()
-        content = await self._gerar_arquivo_processo(protocolo_formatado, "procedimento_gerar_pdf")
+        resultado = await self._gerar_arquivo_processo(
+            protocolo_formatado, "procedimento_gerar_pdf"
+        )
+        content = resultado.conteudo
         if not content.startswith(b"%PDF") and b"pdf" not in content[:32].lower():
-            ct = "(desconhecido)"
+            ct = resultado.content_type or "(vazio)"
             msg = f"Esperado PDF mas recebeu Content-Type: {ct}"
             raise SEIParseError(msg)
         return content
@@ -2781,7 +2793,10 @@ class SEIWebClient:
         Retorna os bytes brutos do arquivo ZIP.
         """
         await self.ensure_authenticated()
-        return await self._gerar_arquivo_processo(protocolo_formatado, "procedimento_gerar_zip")
+        resultado = await self._gerar_arquivo_processo(
+            protocolo_formatado, "procedimento_gerar_zip"
+        )
+        return resultado.conteudo
 
     async def listar_atividades(self, protocolo_formatado: str, tipo_historico: str = "R") -> dict:
         """Lista andamentos/atividades de um processo via web scraper.

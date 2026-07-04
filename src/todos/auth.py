@@ -92,24 +92,29 @@ def _is_ip_bloqueado(host: str) -> str | None:
 
 
 def _resolvido_bloqueado(host: str) -> str | None:
-    """Resolve ``host`` via DNS and return the first blocked address, or None."""
+    """Resolve ``host`` via DNS and return the first blocked address, or None.
+
+    None means every resolved address is outside the blocked ranges.
+
+    Raises ``OSError`` (``socket.gaierror`` is a subclass) if resolution
+    itself fails — a genuine infrastructure failure, not a "safe" outcome.
+    The caller must treat that as "could not verify, reject" (fail-closed),
+    not as "verified safe".
+    """
     blocked: str | None = None
-    try:
-        results = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        for _, _, _, _, sockaddr in results:
-            resolved = str(sockaddr[0])
-            try:
-                addr = ipaddress.ip_address(resolved)
-            except ValueError:
-                continue
-            for net in _REDES_BLOQUEADAS:
-                if addr in net:
-                    blocked = resolved
-                    break
-            if blocked is not None:
+    results = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    for _, _, _, _, sockaddr in results:
+        resolved = str(sockaddr[0])
+        try:
+            addr = ipaddress.ip_address(resolved)
+        except ValueError:
+            continue
+        for net in _REDES_BLOQUEADAS:
+            if addr in net:
+                blocked = resolved
                 break
-    except (socket.gaierror, OSError) as exc:
-        logger.debug("DNS resolution failed for SSRF pre-check of %r: %s", host, exc)
+        if blocked is not None:
+            break
     return blocked
 
 
@@ -128,7 +133,17 @@ async def _validar_url_sei(url: str, campo: str) -> None:
     host = parsed.hostname or ""
     ip_result = _is_ip_bloqueado(host)
     if ip_result is None:
-        blocked = await asyncio.to_thread(_resolvido_bloqueado, host)
+        try:
+            blocked = await asyncio.to_thread(_resolvido_bloqueado, host)
+        except OSError as exc:
+            logger.exception(
+                "Falha ao resolver hostname %r para validação SSRF — recusando por precaução", host
+            )
+            msg = (
+                f"{campo}: não foi possível resolver o hostname {host!r} para "
+                "validar segurança — recusado por precaução."
+            )
+            raise ValueError(msg) from exc
         if blocked is not None:
             msg = f"{campo}: hostname {host!r} resolve para endereço bloqueado ({blocked})."
             raise ValueError(msg)
