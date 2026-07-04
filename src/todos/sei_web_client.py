@@ -1288,8 +1288,11 @@ class SEIWebClient:
         - `detalhada=True`: força a visualização Detalhada via POST
           `hdnTipoVisualizacao=D`. A primeira chamada precisa de um GET prévio
           para descobrir o form action; chamadas subsequentes reaproveitam o cache.
-        - `pagina=N>0`: POST com `hdnInfraPaginaAtual=N` + `hdnInfraHashCriterios`
-          (cacheado da resposta anterior).
+        - `pagina=N>0`: POST com o(s) campo(s) hidden reais de paginação do form
+          (`hdn{Layout}PaginaAtual`, ex.: `hdnDetalhadoPaginaAtual` na
+          visualização Detalhada) setados para N — descobertos dinamicamente
+          no form cacheado, mais os demais hidden fields (hash de critérios
+          etc.) já cacheados da resposta anterior.
         - `apenas_meus=True`: POST `hdnMeusProcessos=M` (TA_MINHAS) — retorna
           apenas processos atribuídos ao usuário logado. Sempre passa o valor
           explicitamente (T ou M) para não herdar de chamadas anteriores.
@@ -1342,7 +1345,28 @@ class SEIWebClient:
         # T=TODAS, M=MINHAS, D=DEFINIDAS, E=ESPECIFICAS.
         post_data["hdnMeusProcessos"] = "M" if apenas_meus else "T"
         if pagina > 0:
-            post_data["hdnInfraPaginaAtual"] = str(pagina)
+            # O campo real de paginação de procedimento_controlar.php é
+            # hdn{Layout}PaginaAtual (ex: hdnDetalhadoPaginaAtual na visualização
+            # Detalhada; hdnRecebidosPaginaAtual/hdnGeradosPaginaAtual na
+            # Resumida) — NÃO existe um "hdnInfraPaginaAtual" genérico nesse
+            # form (esse nome vem do padrão usado em outras páginas, como
+            # procedimento_consultar_historico.php). Setar um campo inexistente
+            # é um no-op silencioso: o servidor ignora o POST e devolve a
+            # página 0 de novo, com o mesmo conteúdo — foi exatamente o bug
+            # observado (proximo_cursor avançava, mas os processos retornados
+            # eram idênticos). Detectamos os campos reais dinamicamente a
+            # partir do próprio form_hidden cacheado, em vez de fixar um nome.
+            pagina_fields = [k for k in post_data if k.endswith("PaginaAtual")]
+            if not pagina_fields:
+                logger.warning(
+                    "fetch_inbox: pedido pagina=%d mas nenhum campo hidden "
+                    "'*PaginaAtual' encontrado no form (layout=%s) — a "
+                    "paginação pode não avançar de verdade.",
+                    pagina,
+                    "detalhada" if detalhada else "resumida",
+                )
+            for campo in pagina_fields:
+                post_data[campo] = str(pagina)
 
         resp = await self._http.post(
             post_url,
