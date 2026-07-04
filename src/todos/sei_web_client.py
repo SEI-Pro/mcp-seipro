@@ -243,6 +243,27 @@ def _parse_unidades_envio_xml(xml_text: str) -> list[dict]:
     return resultados
 
 
+def _extrair_link_enviar_processo(html_arvore: str, sei_base: str, protocolo: str) -> str:
+    """Localiza a URL assinada da ação "Enviar Processo" na árvore do processo.
+
+    O nome da ação varia por instância/versão do SEI: algumas chamam
+    "procedimento_tramitar", outras (confirmado em sei.sistemas.ro.gov.br,
+    2026-07-03) chamam "procedimento_enviar" — aceitamos os dois.
+    """
+    m = re.search(
+        r"controlador\.php\?acao=(?:procedimento_enviar|procedimento_tramitar)"
+        r"[^\"'\s]*infra_hash=[a-fA-F0-9]+",
+        html_arvore,
+    )
+    if not m:
+        msg = (
+            f"Ação de enviar/tramitar processo não encontrada na árvore de {protocolo}. "
+            "Verifique permissão de tramitação neste processo."
+        )
+        raise SEINotFoundError(msg)
+    return urljoin(sei_base, m.group(0).replace("&amp;", "&"))
+
+
 def _extrair_submit_btn(form: Tag) -> tuple[str, str] | None:
     """Extrai o par (name, value) do botão submit de um form.
 
@@ -2992,22 +3013,15 @@ class SEIWebClient:
         html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
         sei_base = f"{self.sei_root}/sei/"
 
-        m_enviar = re.search(
-            r"controlador\.php\?acao=(?:procedimento_enviar|procedimento_tramitar)"
-            r"[^\"'\s]*infra_hash=[a-fA-F0-9]+",
-            html_arvore,
-        )
-        if not m_enviar:
-            msg = (
-                f"Ação de enviar processo não encontrada na árvore de {protocolo}. "
-                "Verifique permissão de tramitação neste processo."
-            )
-            raise SEINotFoundError(msg)
-        enviar_url = urljoin(sei_base, m_enviar.group(0).replace("&amp;", "&"))
+        enviar_url = _extrair_link_enviar_processo(html_arvore, sei_base, protocolo)
 
         r1 = await self._http.get(enviar_url, headers={"Referer": url_arvore})
         _check(r1)
         html_enviar = _decode_response(r1.content, r1.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(html_enviar)
+        if erro:
+            msg = f"Enviar Processo: {erro}"
+            raise SEIConnectionError(msg)
 
         m_ajax = re.search(
             r"controlador_ajax\.php\?acao_ajax=unidade_auto_completar_envio_processo"
@@ -3019,7 +3033,11 @@ class SEIWebClient:
             raise SEIParseError(msg)
         ajax_url = urljoin(sei_base, m_ajax.group(0).replace("&amp;", "&"))
 
-        body = urlencode({"palavras_pesquisa": termo, "id_orgao": "", "unidade_atual": "0"})
+        body = urlencode(
+            {"palavras_pesquisa": termo, "id_orgao": "", "unidade_atual": "0"},
+            encoding="iso-8859-1",
+            errors="replace",
+        ).encode("ascii")
         r2 = await self._http.post(
             ajax_url,
             content=body,
@@ -3053,19 +3071,7 @@ class SEIWebClient:
         html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
         sei_base = f"{self.sei_root}/sei/"
 
-        m = re.search(
-            r"(controlador\.php\?acao=(?:procedimento_enviar|procedimento_tramitar)"
-            r"[^\"'\s]*infra_hash=[a-fA-F0-9]+)",
-            html_arvore,
-        )
-        if not m:
-            msg = (
-                f"Ação de enviar/tramitar processo não encontrada na árvore de {protocolo}. "
-                "Verifique permissão de tramitação neste processo."
-            )
-            raise SEINotFoundError(msg)
-
-        tramitar_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
+        tramitar_url = _extrair_link_enviar_processo(html_arvore, sei_base, protocolo)
         r = await self._http.get(tramitar_url, headers={"Referer": url_arvore})
         _check(r)
 

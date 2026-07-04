@@ -173,7 +173,7 @@ class DocumentosRest(_RestMixin):
         id_documento: str,
         cargo: str = "",
         orgao: str = "",
-        processo: str | None = None,  # noqa: ARG002 — REST resolve via Solr, não precisa do protocolo
+        processo: str | None = None,
     ) -> dict:
         """Assina um documento com o cargo informado.
 
@@ -181,6 +181,7 @@ class DocumentosRest(_RestMixin):
         documento errado quando recebe um `protocoloFormatado`. Se a sessão não
         trouxer o `IdUsuario`, busca-o por login via `listar_usuarios`.
         """
+        del processo  # REST resolve via Solr, não precisa do protocolo
         doc_id, _ = await self._resolver_documento(id_documento)
         login = self._rest.usuario
         id_usuario = await self._rest.garantir_autenticacao()

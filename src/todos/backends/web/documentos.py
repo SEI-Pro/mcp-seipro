@@ -191,7 +191,7 @@ class DocumentosWeb(_WebMixin):
         exige reenvio de senha; a submissão real nunca foi disparada nesta
         sessão de desenvolvimento).
         """
-        if processo is None:
+        if not processo:
             msg = (
                 "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
                 "para assinar documento."
