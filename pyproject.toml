@@ -23,7 +23,7 @@ dependencies = [
     "fastmcp==3.4.2",
     "keyring>=25.0.0",
     "rich>=13.0",
-    "typer>=0.12",
+    "cyclopts>=4.0",
 ]
 
 [project.optional-dependencies]

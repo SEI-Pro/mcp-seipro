@@ -1,7 +1,7 @@
 ---
 name: ruff-strict-compliance
 description: >-
-  Enforces strict compliance with Ruff linting and formatting rules. Stops agents from using '# noqa' comments, dismissing warnings as "stylistic," or claiming rules do not apply to CLI tools like Typer.
+  Enforces strict compliance with Ruff linting and formatting rules. Stops agents from using '# noqa' comments, dismissing warnings as "stylistic," or claiming rules do not apply to CLI tools like Cyclopts (or Typer).
 ---
 
 # Ruff Strict Compliance
@@ -28,40 +28,40 @@ This skill enforces **strict, zero-warning compliance** with the Ruff linter and
 
 ## Refactoring Recipes for Common Rules
 
-### 1. Typer CLI (Resolving B008, F841, etc.)
+### 1. Cyclopts / Typer CLI (Resolving B008, F841, etc.)
 
-**The Problem:** In Typer, developers often write CLI options using `typer.Option(...)` or `typer.Argument(...)` directly in function signatures as default values. This triggers Ruff rule **B008** (Do not perform function call `typer.Option` in argument defaults). 
+**The Problem:** In Cyclopts (and Typer before it), developers often write CLI options using `cyclopts.Parameter(...)` / `typer.Option(...)` directly in function signatures as default values. This triggers Ruff rule **B008** (Do not perform function call in argument defaults).
 
 To bypass this, lazy agents write `# noqa: B008` or `# noqa: F841`.
 
-**The Right Way (Typer with Annotated):**
-Use Python's `typing.Annotated` (or `typing_extensions.Annotated` for Python < 3.9) to define options and arguments. This completely avoids B008 and is the modern, type-safe standard recommended by Typer.
+**The Right Way (Annotated):**
+Use Python's `typing.Annotated` to define options and arguments. This completely avoids B008 and is the modern, type-safe standard recommended by both frameworks. Note that `@app.command(name=...)` needs `name=` as a keyword — passing the name positionally (`@app.command("setup")`) is interpreted as the object to decorate, not the command name, and breaks at runtime.
 
 ```python
 # ❌ INCORRECT (Triggers B008 and F841)
-import typer
+import cyclopts
 
-app = typer.Typer()
+app = cyclopts.App()
 
-@app.command()
+@app.command
 def main(
-    name: str = typer.Option("World", help="Who to greet"), # B008 triggered here
-    verbose: bool = typer.Option(False, "--verbose", "-v") # B008 triggered here
+    name: str = cyclopts.Parameter("World", help="Who to greet"), # B008 triggered here
+    verbose: bool = cyclopts.Parameter(False, "--verbose", "-v") # B008 triggered here
 ):
     print(f"Hello {name}")
 ```
 
 ```python
 #  CORRECT (Modern Type-Safe Pattern - 0 Ruff Warnings)
-import typer
+import cyclopts
 from typing import Annotated
 
-app = typer.Typer()
+app = cyclopts.App()
 
-@app.command()
+@app.command
 def main(
-    name: Annotated[str, typer.Option(help="Who to greet")] = "World",
-    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False
+    name: Annotated[str, cyclopts.Parameter(help="Who to greet")] = "World",
+    verbose: Annotated[bool, cyclopts.Parameter(name="--verbose")] = False
 ):
     print(f"Hello {name}")
 ```

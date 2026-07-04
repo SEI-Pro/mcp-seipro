@@ -209,3 +209,32 @@ Correções aplicadas após revisão adversarial do PR:
   conteúdo não-textual quando `--json` está ativo — mantém a saída
   parseável mesmo nesse caso hoje inatingível (nenhuma das 127 tools
   devolve algo além de `TextContent`).
+
+### 6.2 Migração Typer → Cyclopts (2026-07-04)
+
+`_app` deixou de ser um `typer.Typer` e passou a ser um `cyclopts.App`
+(`src/todos/server.py`). Motivação: reduzir dependências (Typer embrulha
+Click; Cyclopts não tem essa camada extra) e simplificar o callback padrão —
+`@app.default` do Cyclopts só é invocado quando nenhum subcomando bate, então
+o `if ctx.invoked_subcommand is not None: return` do Typer virou desnecessário.
+
+Pontos de atenção para quem for portar mais comandos:
+
+- `@_app.command(name="setup")` precisa do `name=` como keyword — chamar
+  `@_app.command("setup")` posicionalmente trata a string como o parâmetro
+  `obj` (função a decorar), não como nome do comando, e quebra em runtime.
+- `typer.Option(...)` virou `cyclopts.Parameter(...)`, mesmo uso dentro de
+  `Annotated[...]` — nenhuma mudança de padrão para B008 (ver skill
+  `ruff-strict-compliance`).
+- `_FIXED_COMMANDS` agora itera `_app` diretamente (`for name in _app`) em vez
+  de `_app.registered_commands` — Cyclopts expõe nomes de comando (incluindo
+  `--help`/`-h`/`--version`, filtrados por `not name.startswith("-")`) via
+  `__iter__`, não um atributo `registered_commands`.
+- `cyclopts.App(...)` precisa de `name="todos"` explícito — sem isso, o help
+  de subcomandos (`todos setup --help`) mostra um prog name incorreto
+  derivado do nome da função `@app.default` em vez de `todos`.
+- `no_args_is_help=False`/`add_completion=False`/`pretty_exceptions_show_locals=False`/
+  `rich_markup_mode="rich"` do Typer não têm equivalente necessário no
+  Cyclopts: `@app.default` já cobre o primeiro, completion shell é opt-in
+  (método `register_install_completion_command`, nunca chamado), e Cyclopts
+  não instala um excepthook rich com locals para começo de conversa.

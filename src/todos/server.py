@@ -7,8 +7,8 @@ from collections.abc import Callable
 from typing import Annotated, TypeAlias, TypedDict, TypeGuard
 
 import anyio
+import cyclopts
 import httpx
-import typer as _typer
 from fastmcp import Context
 from mcp.shared.exceptions import McpError
 
@@ -727,21 +727,16 @@ async def sei_sobrestar_processo(
     return _json(result)
 
 
-_app = _typer.Typer(
-    no_args_is_help=False,
-    add_completion=False,
-    pretty_exceptions_show_locals=False,
-    rich_markup_mode="rich",
-)
+_app = cyclopts.App(name="todos")
 
 
-@_app.command("setup")
+@_app.command(name="setup")
 def _cmd_setup(
     *,
     force: Annotated[
         bool,
-        _typer.Option(
-            "--force", help="Reconfigurar do zero, sobrescrevendo a configuração existente."
+        cyclopts.Parameter(
+            name="--force", help="Reconfigurar do zero, sobrescrevendo a configuração existente."
         ),
     ] = False,
 ) -> None:
@@ -749,14 +744,14 @@ def _cmd_setup(
     run_setup_wizard(force=force)
 
 
-@_app.command("set-password")
+@_app.command(name="set-password")
 def _cmd_set_password() -> None:
     """Atualizar apenas a senha no Keyring sem alterar a configuração MCP."""
     run_set_password()
 
 
-@_app.callback(invoke_without_command=True)
-def _cmd_default(ctx: _typer.Context) -> None:
+@_app.default
+def _cmd_default() -> None:
     """MCP Server para o SEI — 127 tools, scraper HTTP + REST híbrido.
 
     Sem subcomando, sobe o servidor MCP (stdio ou HTTP conforme $PORT).
@@ -765,18 +760,17 @@ def _cmd_default(ctx: _typer.Context) -> None:
     (RFC 0018) — veja `sei_pesquisar_tipos_documento`/`sei_estilos` etc. no
     catálogo completo em CLAUDE.md.
     """
-    if ctx.invoked_subcommand is not None:
-        return
     if _http_mode:
         run_remote(mcp, port=_http_port)
     else:
         mcp.run(transport="stdio", show_banner=False)
 
 
-# Derivado de `_app.registered_commands` (não hardcoded) para nunca desalinhar
-# de um novo `@_app.command(...)` — sem isso, um comando fixo futuro sem
-# entrada aqui seria despachado como nome de tool por engano.
-_FIXED_COMMANDS = frozenset(cmd.name for cmd in _app.registered_commands if cmd.name)
+# Derivado de `_app` (não hardcoded) para nunca desalinhar de um novo
+# `@_app.command(...)` — sem isso, um comando fixo futuro sem entrada aqui
+# seria despachado como nome de tool por engano. Os nomes com "-" (--help,
+# -h, --version) são subapps internos do Cyclopts, não comandos fixos nossos.
+_FIXED_COMMANDS = frozenset(name for name in _app if not name.startswith("-"))
 
 
 def _is_tool_invocation(argv: list[str]) -> bool:
