@@ -2107,43 +2107,37 @@ class SEIWebClient:
         # Busca genérica: qualquer URL com acao=X e id_documento=Y
         # (?=&|&amp;|["'\s]) âncora o fim do id para evitar match por prefixo
         # (ex: id=287 não deve casar com id=2874369)
-        # O nome da ação de editar seções varia por instância: "editor_montar"
-        # em algumas, "documento_alterar" nesta (confirmado em
-        # sei.sistemas.ro.gov.br, 2026-07-03) — tenta as duas variantes.
+        # NOTA: "editor_montar" (conteúdo do documento) não é resolvível por
+        # esta busca genérica nesta instância — a URL só existe como a
+        # variável JS `linkEditarConteudo` na página `arvore_visualizar`, não
+        # em `Nos[].acoes`. Use `_get_editor_montar_url` para essa ação.
         _id_anchor = r"(?=&(?:amp;)?|[\"'\s])"
-        acao_candidatos = [acao]
-        if acao == "editor_montar":
-            acao_candidatos.append("documento_alterar")
-        elif acao == "documento_alterar":
-            acao_candidatos.append("editor_montar")
+        pattern = (
+            rf"(controlador\.php\?acao={re.escape(acao)}"
+            rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
+            rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+)"
+        )
+        pattern2 = (
+            rf"(controlador\.php\?acao={re.escape(acao)}"
+            rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+"
+            rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
+            rf"[^\"'\s]*)"
+        )
 
-        for acao_tentada in acao_candidatos:
-            pattern = (
-                rf"(controlador\.php\?acao={re.escape(acao_tentada)}"
-                rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
-                rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+)"
-            )
-            pattern2 = (
-                rf"(controlador\.php\?acao={re.escape(acao_tentada)}"
-                rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+"
-                rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
-                rf"[^\"'\s]*)"
-            )
-
-            # Tenta buscar primeiro nas ações específicas do próprio nó
-            if no_alvo and no_alvo.get("acoes_html"):
-                m = re.search(pattern, no_alvo["acoes_html"])
-                if not m:
-                    m = re.search(pattern2, no_alvo["acoes_html"])
-                if m:
-                    return urljoin(sei_base, m.group(1).replace("&amp;", "&")), url_arvore
-
-            # Fallback para busca genérica no HTML inteiro da árvore
-            m = re.search(pattern, html_arvore)
+        # Tenta buscar primeiro nas ações específicas do próprio nó
+        if no_alvo and no_alvo.get("acoes_html"):
+            m = re.search(pattern, no_alvo["acoes_html"])
             if not m:
-                m = re.search(pattern2, html_arvore)
+                m = re.search(pattern2, no_alvo["acoes_html"])
             if m:
                 return urljoin(sei_base, m.group(1).replace("&amp;", "&")), url_arvore
+
+        # Fallback para busca genérica no HTML inteiro da árvore
+        m = re.search(pattern, html_arvore)
+        if not m:
+            m = re.search(pattern2, html_arvore)
+        if m:
+            return urljoin(sei_base, m.group(1).replace("&amp;", "&")), url_arvore
 
         msg = (
             f"Ação '{acao}' não encontrada para o documento {id_documento} "
@@ -2242,12 +2236,62 @@ class SEIWebClient:
             raise SEIConnectionError(msg)
         return r.content
 
+    async def _get_editor_montar_url(self, protocolo: str, id_documento: str) -> tuple[str, str]:
+        """Retorna (signed_url, referer) para editor_montar de um documento.
+
+        `editor_montar` não aparece em `Nos[].acoes` (a lista de ações usada
+        por `_get_doc_signed_url` para outras ações) — a URL assinada só
+        existe como a variável JS `linkEditarConteudo`, embutida na página
+        `arvore_visualizar` que carrega quando o nó do documento é selecionado
+        na árvore (`Nos[].link`, não `Nos[].acoes`). É uma resolução em dois
+        passos: buscar essa página primeiro, depois extrair a variável dela —
+        confirmado em sei.sistemas.ro.gov.br, 2026-07-03 (ver
+        docs/known-issues/2026-07-03-documento-editar-conteudo-crc32.md
+        para o contexto completo, incluindo por que o clique na UI quebra
+        e como esse caminho HTTP puro evita o bug de JS do próprio SEI).
+        """
+        html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
+        sei_base = f"{self.sei_root}/sei/"
+        nos = parse_arvore_nos(html_arvore)
+        no_alvo = next((no for no in nos[1:] if no.get("id") == id_documento), None)
+        if no_alvo is None:
+            no_alvo = next(
+                (
+                    no
+                    for no in nos[1:]
+                    if _parse_doc_label(no.get("label", "")).get("numero_sei") == id_documento
+                ),
+                None,
+            )
+        if no_alvo is None or not no_alvo.get("link"):
+            msg = f"Nó do documento {id_documento} não encontrado na árvore de {protocolo}."
+            raise SEIParseError(msg)
+
+        arvore_visualizar_url = urljoin(
+            sei_base, str(no_alvo["link"]).replace("&amp;", "&")
+        )
+        r = await self._http.get(arvore_visualizar_url, headers={"Referer": url_arvore})
+        _check(r)
+        html = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(html)
+        if erro:
+            msg = f"arvore_visualizar: {erro}"
+            raise SEIConnectionError(msg)
+
+        m = re.search(r"linkEditarConteudo\s*=\s*[\"']([^\"']+)[\"']", html)
+        if not m:
+            msg = (
+                f"Variável linkEditarConteudo não encontrada para o documento "
+                f"{id_documento} — verifique permissão de edição neste documento."
+            )
+            raise SEIParseError(msg)
+        editor_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
+        return editor_url, arvore_visualizar_url
+
     async def listar_secoes_web(self, protocolo: str, id_documento: str) -> dict:
         """Lista seções editáveis de um documento interno via editor_montar."""
         await self.ensure_authenticated()
-        editor_url, referer = await self._get_doc_signed_url(
-            protocolo, id_documento, "editor_montar"
-        )
+        editor_url, referer = await self._get_editor_montar_url(protocolo, id_documento)
         r = await self._http.get(editor_url, headers={"Referer": referer})
         _check(r)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
@@ -2277,9 +2321,7 @@ class SEIWebClient:
         """Edita seções de um documento interno via editor_montar POST."""
         await self.ensure_authenticated()
         sei_base = f"{self.sei_root}/sei/"
-        editor_url, referer = await self._get_doc_signed_url(
-            protocolo, id_documento, "editor_montar"
-        )
+        editor_url, referer = await self._get_editor_montar_url(protocolo, id_documento)
         r = await self._http.get(editor_url, headers={"Referer": referer})
         _check(r)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
