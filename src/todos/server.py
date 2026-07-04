@@ -12,8 +12,9 @@ import cyclopts
 import httpx
 from fastmcp import Context
 from mcp.shared.exceptions import McpError
+from rich.markup import escape
 
-from todos import cli_call
+from todos import cli_call, output
 from todos.backends import EnvioProcesso
 from todos.backends.choice import requires_backend
 from todos.backends.models import FiltroListagemProcessos, FiltrosPesquisaProcessos
@@ -871,13 +872,15 @@ def _dispatch_tool(argv: list[str]) -> int:
     try:
         return asyncio.run(cli_call.run(tool_name, rest, as_json=as_json))
     except cli_call.CliArgumentError as exc:
-        sys.stderr.write(f"Erro: {exc}\n")
+        output.emit_human(f"[bold red]Erro:[/] {escape(str(exc))}")
         return 1
     except McpError as exc:
-        sys.stderr.write(f"Erro ao chamar '{tool_name}': {exc}\n")
+        output.emit_human(f"[bold red]Erro ao chamar[/] '{escape(tool_name)}': {escape(str(exc))}")
         return 1
     except (OSError, anyio.BrokenResourceError, anyio.ClosedResourceError) as exc:
-        sys.stderr.write(f"Erro ao conectar ao servidor '{tool_name}': {exc}\n")
+        output.emit_human(
+            f"[bold red]Erro ao conectar ao servidor[/] '{escape(tool_name)}': {escape(str(exc))}"
+        )
         return 1
 
 

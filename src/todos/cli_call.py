@@ -18,6 +18,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult, TextContent
 
+from todos.output import emit_result
+
 
 class CliArgumentError(ValueError):
     """Argumento de linha de comando malformado (não é `chave=valor`)."""
@@ -100,5 +102,5 @@ async def run(tool_name: str, args: list[str], *, as_json: bool = False) -> int:
     validate_tool_name(tool_name)
     kwargs = parse_kwargs(args)
     result = await call_tool(tool_name, kwargs)
-    sys.stdout.write(format_result(result, as_json=as_json) + "\n")
+    emit_result(format_result(result, as_json=as_json))
     return 1 if result.isError else 0
