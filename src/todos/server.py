@@ -59,6 +59,7 @@ from todos.tools import (
     configuracao,
     credenciamento,
     documentos,
+    generico,
     marcadores,
     processos,
     unidades,
@@ -79,6 +80,7 @@ _TOOL_MODULES = (
     configuracao,
     credenciamento,
     documentos,
+    generico,
     marcadores,
     processos,
     unidades,
@@ -908,7 +910,7 @@ def _cmd_skill_install(
 
 @_app.default
 def _cmd_default() -> None:
-    """MCP Server para o SEI — 129 tools, scraper HTTP + REST híbrido.
+    """MCP Server para o SEI — 131 tools, scraper HTTP + REST híbrido.
 
     Sem subcomando, sobe o servidor MCP (stdio ou HTTP conforme $PORT).
     Além de `setup`/`set-password`, qualquer outro nome vira uma chamada de

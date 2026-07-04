@@ -70,6 +70,7 @@ except ImportError:
 # o TTL curto limita apenas a janela de staleness do conteúdo da árvore)
 _ARVORE_CACHE_TTL = 30.0
 SEI_WEB_PAGE_SIZE = 10
+_MAX_SALTOS_REDIRECT = 10  # limite de saltos manuais em _enviar_mesma_origem (RFC 0020)
 
 # ---------------------------------------------------------------------------
 # Nomes de campos do form frmProcedimentoCadastro (criar/alterar processo).
@@ -265,6 +266,147 @@ def _extrair_link_enviar_processo(html_arvore: str, sei_base: str, protocolo: st
     return urljoin(sei_base, m.group(0).replace("&amp;", "&"))
 
 
+def _parse_form_info(form: Tag, base_url: str) -> dict:
+    """Extrai id, action, campos (com valor atual), ocultos e botões de um `<form>`.
+
+    Usado por `inspecionar_pagina_web`/`submeter_form_web` (RFC 0020) para
+    descrever um form genericamente, sem conhecimento prévio da ação SEI
+    específica que ele representa. `action` é normalizado pra absoluto
+    contra `base_url` — o SEI devolve `action` relativo
+    (`controlador.php?...`), e o chamador (agente) não tem como resolver
+    isso sozinho sem repetir a mesma base que o scraper já conhece.
+    """
+    campos: list[dict] = []
+    escondidos: dict[str, str] = {}
+    for inp in form.find_all(["input", "select", "textarea"]):
+        name = _tag_str(inp, "name")
+        if not name:
+            continue
+        itype = _tag_str(inp, "type", "text").lower() if inp.name == "input" else inp.name
+        if itype == "hidden":
+            escondidos[name] = _tag_str(inp, "value")
+            continue
+        campo: dict = {"nome": name, "tipo": itype}
+        if inp.name == "select":
+            opcoes_tags = inp.find_all("option")
+            campo["opcoes"] = [
+                {"valor": _tag_str(opt, "value"), "texto": opt.get_text(strip=True)}
+                for opt in opcoes_tags
+            ]
+            # Sem <option selected>, o navegador seleciona a primeira opção
+            # por padrão (semântica HTML) — não "nenhuma" (bug real apontado em
+            # code review: aqui e em `_coletar_estado_form` isso devolvia "").
+            selecionada = inp.find("option", selected=True) or inp.find("option")
+            campo["valor_atual"] = _tag_str(selecionada, "value") if selecionada else ""
+        elif inp.name == "textarea":
+            campo["valor_atual"] = inp.get_text()
+        else:
+            campo["valor_atual"] = _tag_str(inp, "value")
+        campos.append(campo)
+
+    botoes: list[dict] = []
+    for btn in form.find_all(["button", "input"]):
+        btype = _tag_str(btn, "type").lower()
+        if btn.name == "input" and btype not in ("submit", "button"):
+            continue
+        if btn.name == "button" and not btype:
+            btype = "submit"  # default HTML: <button> sem type é submit
+        onclick = _tag_str(btn, "onclick")
+        fn_match = re.match(r"^(\w+)\(", onclick)
+        botoes.append(
+            {
+                "nome": _tag_str(btn, "name"),
+                "valor": _tag_str(btn, "value") or btn.get_text(strip=True),
+                "tipo": btype,
+                "onclick_funcao": fn_match.group(1) if fn_match else None,
+            }
+        )
+
+    return {
+        "id": form.get("id"),
+        "action": urljoin(base_url, _tag_str(form, "action").replace("&amp;", "&")),
+        "campos": campos,
+        "escondidos": escondidos,
+        "botoes": botoes,
+    }
+
+
+def _descobrir_acoes(html: str, base_url: str) -> list[dict]:
+    """Descobre ocorrências de `acao=X` na página (RFC 0020).
+
+    Classifica por origem:
+    - `href`: `<a href="...acao=X...">` — link direto, resolvível sem
+      passo intermediário.
+    - `js_variable`: atribuição JS tipo `linkEditarConteudo =
+      "controlador.php?acao=X...";` — precisa de GET adicional na URL
+      extraída pra chegar na ação de verdade (padrão de `editor_montar`/
+      `documento_assinar`).
+    - `js_function`: dentro do corpo de uma função JS (ex.: `function
+      acaoExcluir(id){... .action='controlador.php?acao=X...'; ...}`) —
+      geralmente dispara ao clicar um botão/ícone cujo `onclick` chama essa
+      função (ver `botoes[].onclick_funcao` em `_parse_form_info`).
+
+    Não executa JS de verdade — tudo via regex sobre o texto estático da
+    resposta, mesma filosofia "sem browser" do resto do scraper.
+
+    `url` em cada ação é normalizada pra absoluta contra `base_url` (o SEI
+    devolve URLs relativas tipo `controlador.php?...` — sem isso o agente
+    teria que reconstruir a base sozinho antes de usar em
+    `submeter_form_web`).
+    """
+    acoes: list[dict] = []
+    vistas: set[tuple[str, str, str]] = set()
+
+    soup = BeautifulSoup(html, "html.parser")
+    for a in soup.find_all("a", href=True):
+        href = str(a["href"])
+        m = re.search(r"acao=(\w+)", href)
+        if not m:
+            continue
+        url = urljoin(base_url, href.replace("&amp;", "&"))
+        chave = (m.group(1), "href", url)
+        if chave in vistas:
+            continue
+        vistas.add(chave)
+        acoes.append({"nome_acao": m.group(1), "origem": "href", "url": url})
+
+    for m in re.finditer(r'(\w*[Ll]ink\w*)\s*=\s*["\']([^"\']*acao=(\w+)[^"\']*)["\']', html):
+        var_nome, url_bruta, acao_nome = m.group(1), m.group(2), m.group(3)
+        url = urljoin(base_url, url_bruta.replace("&amp;", "&"))
+        chave = (acao_nome, "js_variable", url)
+        if chave in vistas:
+            continue
+        vistas.add(chave)
+        acoes.append(
+            {"nome_acao": acao_nome, "origem": "js_variable", "url": url, "variavel": var_nome}
+        )
+
+    for m in re.finditer(r"function\s+(\w+)\s*\([^)]*\)\s*\{", html):
+        fn_nome = m.group(1)
+        corpo = html[m.end() : m.end() + 2000]
+        limite = corpo.find("\nfunction ")
+        if limite != -1:
+            corpo = corpo[:limite]
+        acao_m = re.search(r"acao=(\w+)", corpo)
+        if not acao_m:
+            continue
+        url_m = re.search(rf'["\']([^"\']*acao={re.escape(acao_m.group(1))}[^"\']*)["\']', corpo)
+        chave = (acao_m.group(1), "js_function", fn_nome)
+        if chave in vistas:
+            continue
+        vistas.add(chave)
+        acoes.append(
+            {
+                "nome_acao": acao_m.group(1),
+                "origem": "js_function",
+                "funcao": fn_nome,
+                "url": urljoin(base_url, url_m.group(1).replace("&amp;", "&")) if url_m else None,
+            }
+        )
+
+    return acoes
+
+
 def _extrair_ids_bloco(html: str) -> set[str]:
     """Extrai os ids de bloco presentes numa página `bloco_assinatura_listar`.
 
@@ -315,7 +457,13 @@ def _coletar_estado_form(form: Tag) -> dict[str, str]:
         name = _tag_str(sel, "name")
         if not name:
             continue
+        # Sem <option selected>, HTML padrão (e o próprio browser) trata a
+        # PRIMEIRA opção como selecionada, não "nenhuma" — reenviar "" nesse
+        # caso divergiria do que o navegador realmente submeteria.
         opt = sel.find("option", selected=True)
+        if not isinstance(opt, Tag):
+            primeira = sel.find("option")
+            opt = primeira if isinstance(primeira, Tag) else None
         estado[name] = _tag_str(opt, "value") if isinstance(opt, Tag) else ""
     for ta in form.find_all("textarea"):
         name = _tag_str(ta, "name")
@@ -4104,15 +4252,24 @@ class SEIWebClient:
 
         Codifica em ISO-8859-1 (charset do SEI) e força bytes ASCII para evitar
         double-encoding pelo httpx dos separadores `±`/`¥` dos campos multivalor.
+
+        POSTa via `_enviar_mesma_origem` (RFC 0020 — hardening de SSRF
+        estendido aqui, embora `post_url` já seja sempre derivado
+        internamente pelo próprio scraper, nunca de parâmetro externo do
+        agente): garante que nem uma resolução interna equivocada nem um
+        redirect do servidor escapem da instância SEI configurada.
         """
         action = _tag_str(form, "action").replace("&amp;", "&")
         post_url = urljoin(base_url, action) if action else base_url
         dados = _coletar_estado_form(form)
         dados.update(overrides)
-        return await self._http.post(
-            post_url,
-            content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
-            headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+        return await self._enviar_mesma_origem(
+            self._http.build_request(
+                "POST",
+                post_url,
+                content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+                headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+            )
         )
 
     async def _post_form_com_acao_override(
@@ -4125,14 +4282,175 @@ class SEIWebClient:
         SEI num form de listagem cujo `action` próprio é a própria
         listagem) — `_post_form_preservando` não serve aqui porque ele
         sempre usa o `action` do form, nunca `post_url`.
+
+        POSTa via `_enviar_mesma_origem` (RFC 0020 — mesmo hardening de
+        `_post_form_preservando`, ver docstring lá).
         """
         dados = _coletar_estado_form(form)
         dados.update(overrides)
-        return await self._http.post(
-            post_url,
-            content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
-            headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+        return await self._enviar_mesma_origem(
+            self._http.build_request(
+                "POST",
+                post_url,
+                content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+                headers={"Referer": referer, "Content-Type": "application/x-www-form-urlencoded"},
+            )
         )
+
+    def _validar_mesma_origem(self, url: str, *, base: str | None = None) -> str:
+        """Resolve `url` (absoluta ou relativa) e garante mesma origem do SEI configurado.
+
+        Previne SSRF: sem isso, uma `url`/`url_pagina`/`url_destino` externa
+        passada a `inspecionar_pagina_web`/`submeter_form_web` — ou um
+        `action` de form / redirect apontando pra fora — faria a sessão
+        autenticada (cookies, Referer assinado, payload de formulário)
+        vazar pra fora da instância SEI configurada em `self.sei_root`.
+        """
+        absoluta = urljoin(base or f"{self.sei_root}/sei/", url)
+        esperado = urlparse(self.sei_root)
+        obtido = urlparse(absoluta)
+        if (obtido.scheme, obtido.netloc) != (esperado.scheme, esperado.netloc):
+            msg = f"URL fora da instância SEI configurada ({self.sei_root}): {absoluta}"
+            raise SEIValidationError(msg)
+        return absoluta
+
+    async def _enviar_mesma_origem(self, request: httpx.Request) -> httpx.Response:
+        """Envia `request` seguindo redirects manualmente, validando a origem.
+
+        Hardening de SSRF pedido em code review (RFC 0020). Usa
+        `response.next_request` (populado pelo httpx quando
+        `follow_redirects=False`) em vez de reimplementar a semântica de
+        redirect por status code (301/302/303 vs 307/308) — só valida a
+        origem de cada salto antes de segui-lo.
+        """
+        self._validar_mesma_origem(str(request.url))
+        resposta = await self._http.send(request, follow_redirects=False)
+        saltos = 0
+        while resposta.next_request is not None and saltos < _MAX_SALTOS_REDIRECT:
+            saltos += 1
+            self._validar_mesma_origem(str(resposta.next_request.url))
+            resposta = await self._http.send(resposta.next_request, follow_redirects=False)
+        return resposta
+
+    async def inspecionar_pagina_web(self, url: str, *, incluir_raw: bool = False) -> dict:
+        """Busca uma URL e devolve forms + ações descobertas (RFC 0020).
+
+        Leitura pura — nenhum POST é feito. `url` deve ser absoluta e já
+        assinada (com `infra_hash`), obtida de outra tool ou de uma resposta
+        anterior desta mesma tool/`submeter_form_web`. Validada como sendo
+        da mesma origem do SEI configurado antes de qualquer request —
+        assim como cada salto de redirect — pra não vazar a sessão
+        autenticada (cookies/Referer) pra fora da instância SEI.
+
+        `incluir_raw=True` devolve também o HTML/JS bruto da página — útil
+        quando o parsing automático (`formularios`/`acoes_descobertas`) não
+        captura algo que o agente precisa ver com os próprios olhos (ex.: um
+        padrão de ação novo, não coberto pelos três formatos que
+        `_descobrir_acoes` reconhece hoje: `href`, `js_variable`,
+        `js_function`).
+        """
+        await self.ensure_authenticated()
+        url_validada = self._validar_mesma_origem(url)
+        r = await self._enviar_mesma_origem(
+            self._http.build_request("GET", url_validada, headers={"Referer": str(self._inbox_url)})
+        )
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(body)
+        soup = BeautifulSoup(body, "html.parser")
+        url_final = str(r.url)
+        resultado = {
+            "url": url_final,
+            "erro": erro,
+            "formularios": [_parse_form_info(f, url_final) for f in soup.find_all("form")],
+            "acoes_descobertas": _descobrir_acoes(body, url_final),
+        }
+        if incluir_raw:
+            resultado["raw_html"] = body
+        return resultado
+
+    async def submeter_form_web(
+        self,
+        url_pagina: str,
+        form_id: str,
+        overrides: dict[str, str],
+        url_destino: str | None = None,
+        *,
+        incluir_raw: bool = False,
+    ) -> dict:
+        """Rebusca `url_pagina`, localiza o form `form_id`, sobrescreve campos e submete.
+
+        RFC 0020. Rebusca em vez de reusar um form já obtido antes porque
+        campos ocultos/hashes do SEI costumam ser de uso único ou
+        específicos da sessão — uma cópia obtida antes pode estar stale.
+
+        Se `url_destino` for informado, POSTa lá IGNORANDO o `action` próprio
+        do form — necessário para o padrão JS "sobrescreve `form.action`
+        antes de submeter o mesmo form auto-referente" (ex.:
+        excluir/disponibilizar bloco de assinatura). Sem `url_destino`, usa
+        o `action` do próprio form — correto quando o form já está na
+        página certa (ex.: criar bloco, anotar documento).
+
+        `url_pagina`, `url_destino` e o `action` resolvido do form são todos
+        validados como mesma origem do SEI configurado antes de qualquer
+        request — assim como cada salto de redirect — pra não vazar a
+        sessão autenticada pra fora da instância SEI (nem por um
+        `url_destino` externo passado pelo agente, nem por um `action`
+        comprometido no HTML).
+
+        NÃO tenta verificar sucesso sozinha — "sem erro" não significa "deu
+        certo" (ver RFC 0020 §2.2, bug real do PR #129 onde um POST pro
+        lugar errado retornava 200 sem erro mas não executava nada). Cabe
+        ao agente chamador comparar o estado antes/depois usando
+        `inspecionar_pagina_web` ou outra tool de leitura.
+        """
+        await self.ensure_authenticated()
+        url_pagina_validada = self._validar_mesma_origem(url_pagina)
+        r = await self._enviar_mesma_origem(
+            self._http.build_request(
+                "GET", url_pagina_validada, headers={"Referer": str(self._inbox_url)}
+            )
+        )
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        soup = BeautifulSoup(body, "html.parser")
+        form = soup.find("form", {"id": form_id})
+        if not isinstance(form, Tag):
+            msg = f"Form '{form_id}' não encontrado em {url_pagina}."
+            raise SEIParseError(msg)
+
+        if url_destino:
+            post_url = self._validar_mesma_origem(url_destino)
+        else:
+            post_url = self._validar_mesma_origem(_tag_str(form, "action"), base=str(r.url))
+
+        dados = _coletar_estado_form(form)
+        dados.update(overrides)
+        r2 = await self._enviar_mesma_origem(
+            self._http.build_request(
+                "POST",
+                post_url,
+                content=urlencode(dados, encoding="iso-8859-1", errors="replace").encode("ascii"),
+                headers={
+                    "Referer": str(r.url),
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+        )
+        _check(r2)
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro2 = _extrair_erro_sei(body2)
+        soup2 = BeautifulSoup(body2, "html.parser")
+        url2_final = str(r2.url)
+        resultado = {
+            "status_code": r2.status_code,
+            "url_final": url2_final,
+            "erro": erro2,
+            "formularios_apos": [_parse_form_info(f, url2_final) for f in soup2.find_all("form")],
+        }
+        if incluir_raw:
+            resultado["raw_html"] = body2
+        return resultado
 
     async def _abrir_form_cadastro_processo(self, tipo_processo: str) -> tuple[Tag, str]:
         """Navega até o form `frmProcedimentoCadastro` retornando (form, url_atual).

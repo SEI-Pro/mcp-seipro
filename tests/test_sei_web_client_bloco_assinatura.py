@@ -97,7 +97,7 @@ async def _run_criar(*, antes_html: str, depois_html: str, descricao: str) -> di
                 ]
             ),
         ),
-        patch.object(client._http, "post", AsyncMock(return_value=_resp(content=depois_html))),
+        patch.object(client._http, "send", AsyncMock(return_value=_resp(content=depois_html))),
     ):
         return await client.criar_bloco_assinatura_web(descricao)
 
@@ -236,11 +236,11 @@ class TestPostFormComAcaoOverride:
 
         captured: dict[str, object] = {}
 
-        async def _fake_post(url: str, **_kwargs: object) -> httpx.Response:
-            captured["url"] = url
+        async def _fake_send(request: httpx.Request, **_kwargs: object) -> httpx.Response:
+            captured["url"] = str(request.url)
             return _resp(content="ok")
 
-        with patch.object(client._http, "post", _fake_post):
+        with patch.object(client._http, "send", _fake_send):
             asyncio.run(
                 client._post_form_com_acao_override(
                     form,
@@ -273,8 +273,8 @@ class TestPostFormComAcaoOverride:
         )
         captured: dict[str, object] = {}
 
-        async def _fake_post(url: str, **_kwargs: object) -> httpx.Response:
-            captured["url"] = url
+        async def _fake_send(request: httpx.Request, **_kwargs: object) -> httpx.Response:
+            captured["url"] = str(request.url)
             return _resp(content="<html>excluido</html>")
 
         with (
@@ -283,7 +283,7 @@ class TestPostFormComAcaoOverride:
                 client, "_obter_link_toolbar", AsyncMock(return_value="http://sei.test/listar")
             ),
             patch.object(client._http, "get", AsyncMock(return_value=_resp(content=listar_html))),
-            patch.object(client._http, "post", _fake_post),
+            patch.object(client._http, "send", _fake_send),
         ):
             result = asyncio.run(
                 client._executar_acao_bloco_form("999", "bloco_excluir", "Bloco excluído.")

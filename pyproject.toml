@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "todos-sei"
 dynamic = ["version"]
-description = "TOdos Domina O Sei — MCP server para o SEI com 129 tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
+description = "TOdos Domina O Sei — MCP server para o SEI com 131 tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -120,6 +120,9 @@ ignore = [
     "PLR0913",  # sei_criar_documento/sei_ler_documento/sei_alterar_documento_externo/
                 # sei_criar_documento_externo/sei_incluir_documento_externo: MCP API needs all
                 # fields individually; _ler_documento_via_backend still has 7 params
+]
+"src/todos/tools/generico.py" = [
+    "PLR0913",  # sei_submeter_form: url_pagina+form_id+overrides+url_destino+ctx+incluir_raw = 6 MCP params
 ]
 "src/todos/tools/processos.py" = [
     "PLR0913",  # sei_criar_processo (7 business fields) + sei_alterar_processo: MCP API surface

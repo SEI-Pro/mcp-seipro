@@ -711,3 +711,25 @@ class SEIBackend:
     async def cassar_credenciamento(self, processo: str, id_usuario: str) -> dict:
         """Cassa o credenciamento de um usuário em um processo sigiloso."""
         raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Genérico (RFC 0020) — inspeção e submissão de formulário arbitrário.
+    # Só o backend web implementa (não há equivalente REST — o mod-wssei
+    # não expõe HTML pra inspecionar).
+    # ------------------------------------------------------------------
+
+    async def inspecionar_pagina(self, url: str, *, incluir_raw: bool = False) -> dict:
+        """Busca uma URL e devolve forms + ações descobertas na página."""
+        raise NotImplementedError
+
+    async def submeter_form(
+        self,
+        url_pagina: str,
+        form_id: str,
+        overrides: dict[str, str],
+        url_destino: str | None = None,
+        *,
+        incluir_raw: bool = False,
+    ) -> dict:
+        """Submete um form arbitrário, com overrides de campo e URL de destino opcional."""
+        raise NotImplementedError
