@@ -751,7 +751,9 @@ def _cmd_set_password() -> None:
     run_set_password()
 
 
-_skill_app = cyclopts.App(name="skill", help="Gera e instala a SKILL.md das tools MCP no path do agente.")
+_skill_app = cyclopts.App(
+    name="skill", help="Gera e instala a SKILL.md das tools MCP no path do agente."
+)
 _app.command(_skill_app)
 
 
@@ -773,7 +775,9 @@ def _cmd_skill_install(
     ] = "global",
     target: Annotated[
         Path | None,
-        cyclopts.Parameter(name="--target", help="Override do diretório raiz (ignora --agent/--scope)"),
+        cyclopts.Parameter(
+            name="--target", help="Override do diretório raiz (ignora --agent/--scope)"
+        ),
     ] = None,
 ) -> None:
     """Instala ``todos/SKILL.md`` no path padrão do agente — equivale a ``npx skills add``.

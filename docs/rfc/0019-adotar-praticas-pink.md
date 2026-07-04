@@ -41,7 +41,7 @@ instalado. Falta só o gerador de skill e o subcomando de instalação.
   `generate_skill_content("todos", ...)`, e transforma a saída para a sintaxe
   `todos <tool> campo=valor` (o transform do pink já faz exatamente esse tipo
   de conversão — adaptar, não reescrever do zero).
-- Novo subcomando `todos skill install` no `_app` typer já existente em
+- Novo subcomando `todos skill install` no `_app` Cyclopts já existente em
   `server.py` (mesmo padrão de `setup`/`set-password`, já registrados via
   `@_app.command(...)`), com os mesmos flags `--agent`/`--scope`/`--target`
   do pink.
@@ -50,15 +50,18 @@ instalado. Falta só o gerador de skill e o subcomando de instalação.
 
 > **Atualização (2026-07-04):** implementado nesta mesma PR —
 > `src/todos/skill.py`, `todos skill install` (`server.py`),
-> `scripts/regen_mcp_skill.py` e `tests/test_skill_install.py`. Correção
-> junto: `_FIXED_COMMANDS` só olhava `registered_commands`, não
-> `registered_groups` — o subgrupo `skill` (`add_typer`) era despachado
-> como nome de tool por engano (`todos skill install` virava uma chamada
-> de tool "skill"); corrigido + teste de regressão em
-> `tests/test_cli_dispatch.py`. Não há CI drift-check via `git diff`
-> — `.agents/` é gitignored neste repo (e no pink também não existe esse
-> check hoje, apesar do que a docstring original sugeria; a verificação
-> real do pink é via testes end-to-end, mesmo padrão adotado aqui).
+> `scripts/regen_mcp_skill.py` e `tests/test_skill_install.py`. `skill` é
+> registrado como sub-app Cyclopts (`_app.command(_skill_app)`);
+> `frozenset(_app)` (já usado por `_FIXED_COMMANDS`, RFC 0018) inclui
+> sub-apps automaticamente, então não há o risco de `todos skill install`
+> ser despachado como nome de tool por engano — confirmado por teste de
+> regressão em `tests/test_cli_dispatch.py`. (Nota: esta PR foi escrita
+> originalmente contra o CLI baseado em Typer; rebaseada em 2026-07-04
+> contra a migração para Cyclopts que já estava em `main`.) Não há CI
+> drift-check via `git diff` — `.agents/` é gitignored neste repo (e no
+> pink também não existe esse check hoje, apesar do que a docstring
+> original sugeria; a verificação real do pink é via testes end-to-end,
+> mesmo padrão adotado aqui).
 
 ### 2.2 (Alta) `cache_status`/`cache_clear` como tools MCP
 
