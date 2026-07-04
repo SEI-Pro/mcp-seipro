@@ -168,13 +168,20 @@ class DocumentosRest(_RestMixin):
         """Lista os blocos que contêm um documento."""
         return await self._rest.listar_blocos_documento(id_documento)
 
-    async def assinar_documento(self, id_documento: str, cargo: str = "", orgao: str = "") -> dict:
+    async def assinar_documento(
+        self,
+        id_documento: str,
+        cargo: str = "",
+        orgao: str = "",
+        processo: str | None = None,
+    ) -> dict:
         """Assina um documento com o cargo informado.
 
         Resolve número SEI → id interno (como `dar_ciencia`), evitando assinar o
         documento errado quando recebe um `protocoloFormatado`. Se a sessão não
         trouxer o `IdUsuario`, busca-o por login via `listar_usuarios`.
         """
+        del processo  # REST resolve via Solr, não precisa do protocolo
         doc_id, _ = await self._resolver_documento(id_documento)
         login = self._rest.usuario
         id_usuario = await self._rest.garantir_autenticacao()

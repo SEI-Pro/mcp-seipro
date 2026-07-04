@@ -23,6 +23,7 @@ import mimetypes
 import re
 import time
 import warnings
+import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -218,6 +219,49 @@ def _extrair_erro_sei(html: str) -> str | None:
         if m:
             return m.group(1)
     return None
+
+
+def _parse_unidades_envio_xml(xml_text: str) -> list[dict]:
+    """Parseia a resposta de `unidade_auto_completar_envio_processo`.
+
+    Formato: ``<itens><item id="123" descricao="SIGLA - Nome da unidade"/></itens>``.
+    `descricao` sempre vem como "SIGLA - Nome" (separador " - " literal).
+    """
+    try:
+        # XML vem da própria instância SEI autenticada, não de entrada de
+        # usuário/terceiro — mesma justificativa do S314 já ignorado para
+        # este arquivo em pyproject.toml (ver [tool.ruff.lint.per-file-ignores]).
+        root = ET.fromstring(xml_text)  # nosec B314
+    except ET.ParseError:
+        logger.warning("pesquisar_unidades_envio: resposta XML inválida: %r", xml_text[:200])
+        return []
+    resultados = []
+    for item in root.findall("item"):
+        descricao = item.get("descricao", "")
+        sigla, _, nome = descricao.partition(" - ")
+        resultados.append({"id": item.get("id", ""), "sigla": sigla.strip(), "nome": nome.strip()})
+    return resultados
+
+
+def _extrair_link_enviar_processo(html_arvore: str, sei_base: str, protocolo: str) -> str:
+    """Localiza a URL assinada da ação "Enviar Processo" na árvore do processo.
+
+    O nome da ação varia por instância/versão do SEI: algumas chamam
+    "procedimento_tramitar", outras (confirmado em sei.sistemas.ro.gov.br,
+    2026-07-03) chamam "procedimento_enviar" — aceitamos os dois.
+    """
+    m = re.search(
+        r"controlador\.php\?acao=(?:procedimento_enviar|procedimento_tramitar)"
+        r"[^\"'\s]*infra_hash=[a-fA-F0-9]+",
+        html_arvore,
+    )
+    if not m:
+        msg = (
+            f"Ação de enviar/tramitar processo não encontrada na árvore de {protocolo}. "
+            "Verifique permissão de tramitação neste processo."
+        )
+        raise SEINotFoundError(msg)
+    return urljoin(sei_base, m.group(0).replace("&amp;", "&"))
 
 
 def _extrair_submit_btn(form: Tag) -> tuple[str, str] | None:
@@ -2087,6 +2131,10 @@ class SEIWebClient:
         # Busca genérica: qualquer URL com acao=X e id_documento=Y
         # (?=&|&amp;|["'\s]) âncora o fim do id para evitar match por prefixo
         # (ex: id=287 não deve casar com id=2874369)
+        # NOTA: "editor_montar" (conteúdo do documento) não é resolvível por
+        # esta busca genérica nesta instância — a URL só existe como a
+        # variável JS `linkEditarConteudo` na página `arvore_visualizar`, não
+        # em `Nos[].acoes`. Use `_get_editor_montar_url` para essa ação.
         _id_anchor = r"(?=&(?:amp;)?|[\"'\s])"
         pattern = (
             rf"(controlador\.php\?acao={re.escape(acao)}"
@@ -2112,13 +2160,14 @@ class SEIWebClient:
         m = re.search(pattern, html_arvore)
         if not m:
             m = re.search(pattern2, html_arvore)
-        if not m:
-            msg = (
-                f"Ação '{acao}' não encontrada para o documento {id_documento} "
-                f"na árvore do processo {protocolo}."
-            )
-            raise SEIParseError(msg)
-        return urljoin(sei_base, m.group(1).replace("&amp;", "&")), url_arvore
+        if m:
+            return urljoin(sei_base, m.group(1).replace("&amp;", "&")), url_arvore
+
+        msg = (
+            f"Ação '{acao}' não encontrada para o documento {id_documento} "
+            f"na árvore do processo {protocolo}."
+        )
+        raise SEIParseError(msg)
 
     async def consultar_documento_web(self, protocolo: str, id_documento: str) -> dict:
         """Scrape dos metadados de documento_consultar (tipo, data, assinaturas, etc.)."""
@@ -2211,12 +2260,140 @@ class SEIWebClient:
             raise SEIConnectionError(msg)
         return r.content
 
+    async def _get_arvore_visualizar_link_var(
+        self, protocolo: str, id_documento: str, nome_variavel: str
+    ) -> tuple[str, str]:
+        """Retorna (signed_url, referer) de uma variável JS `linkX` de um documento.
+
+        Várias ações de documento (`editor_montar`, `documento_assinar`, ...)
+        não aparecem em `Nos[].acoes` (a lista de ações usada por
+        `_get_doc_signed_url` para outras ações) — a URL assinada só existe
+        como uma variável JS (`linkEditarConteudo`, `linkAssinarDocumento`,
+        etc.), embutida na página `arvore_visualizar` que carrega quando o
+        nó do documento é selecionado na árvore (`Nos[].link`, não
+        `Nos[].acoes`). É uma resolução em dois passos: buscar essa página
+        primeiro, depois extrair a variável dela — confirmado em
+        sei.sistemas.ro.gov.br, 2026-07-03 (ver
+        docs/known-issues/2026-07-03-documento-editar-conteudo-crc32.md
+        para o contexto completo, incluindo por que o clique na UI quebra
+        e como esse caminho HTTP puro evita o bug de JS do próprio SEI).
+        """
+        html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
+        sei_base = f"{self.sei_root}/sei/"
+        nos = parse_arvore_nos(html_arvore)
+        no_alvo = next((no for no in nos[1:] if no.get("id") == id_documento), None)
+        if no_alvo is None:
+            no_alvo = next(
+                (
+                    no
+                    for no in nos[1:]
+                    if _parse_doc_label(no.get("label", "")).get("numero_sei") == id_documento
+                ),
+                None,
+            )
+        if no_alvo is None or not no_alvo.get("link"):
+            msg = f"Nó do documento {id_documento} não encontrado na árvore de {protocolo}."
+            raise SEIParseError(msg)
+
+        arvore_visualizar_url = urljoin(sei_base, str(no_alvo["link"]).replace("&amp;", "&"))
+        r = await self._http.get(arvore_visualizar_url, headers={"Referer": url_arvore})
+        _check(r)
+        html = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(html)
+        if erro:
+            msg = f"arvore_visualizar: {erro}"
+            raise SEIConnectionError(msg)
+
+        m = re.search(rf"{re.escape(nome_variavel)}\s*=\s*[\"']([^\"']+)[\"']", html)
+        if not m:
+            msg = (
+                f"Variável {nome_variavel} não encontrada para o documento "
+                f"{id_documento} — verifique permissão neste documento."
+            )
+            raise SEIParseError(msg)
+        link_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
+        return link_url, arvore_visualizar_url
+
+    async def _get_editor_montar_url(self, protocolo: str, id_documento: str) -> tuple[str, str]:
+        """Retorna (signed_url, referer) para editor_montar de um documento."""
+        return await self._get_arvore_visualizar_link_var(
+            protocolo, id_documento, "linkEditarConteudo"
+        )
+
+    async def assinar_documento_web(
+        self,
+        protocolo: str,
+        id_documento: str,
+        cargo: str = "",
+        orgao: str = "",
+    ) -> dict:
+        """Assina um documento interno via o form ``frmAssinaturas`` (documento_assinar).
+
+        Resolvido pelo mesmo padrão de ``_get_arvore_visualizar_link_var``
+        usado para editor_montar: a URL assinada só existe como a variável
+        JS ``linkAssinarDocumento`` na página ``arvore_visualizar``, não em
+        ``Nos[].acoes``. NÃO IMPLEMENTADO/TESTADO CONTRA A INSTÂNCIA REAL —
+        escrito por especificação de código (form + campos confirmados via
+        inspeção manual do DOM em sei.sistemas.ro.gov.br, 2026-07-03), mas a
+        submissão final (POST com senha) nunca foi executada nesta sessão:
+        cada assinatura é um ato jurídico real e irreversível, e a política
+        de segurança do agente que escreveu isto proíbe manipular senha de
+        usuário mesmo vinda do keyring — ver
+        docs/known-issues/2026-07-03-documento-editar-conteudo-crc32.md
+        para o contexto da descoberta do padrão `linkX`.
+
+        O form já vem com valores padrão sensatos pré-selecionados pelo
+        próprio SEI (órgão do usuário logado, cargo mais comumente usado) —
+        ``cargo``/``orgao`` só precisam ser informados para sobrescrever
+        esse padrão. A senha é lida de ``self._senha`` (mesma fonte usada
+        no login — keyring ou ``SEI_SENHA``), nunca logada nem incluída em
+        mensagens de erro.
+        """
+        if not self._senha:
+            msg = (
+                "Nenhuma senha disponível (nem SEI_SENHA nem keyring) — "
+                "necessária para assinar via o backend web nesta instância "
+                "(o form de assinatura exige reautenticação por senha)."
+            )
+            raise SEIValidationError(msg)
+
+        await self.ensure_authenticated()
+        assinar_url, referer = await self._get_arvore_visualizar_link_var(
+            protocolo, id_documento, "linkAssinarDocumento"
+        )
+        r = await self._http.get(assinar_url, headers={"Referer": referer})
+        _check(r)
+        html = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(html)
+        if erro:
+            msg = f"documento_assinar: {erro}"
+            raise SEIConnectionError(msg)
+
+        soup = BeautifulSoup(html, "html.parser")
+        form = soup.find("form", {"id": "frmAssinaturas"})
+        if not isinstance(form, Tag):
+            msg = f"Form frmAssinaturas não encontrado para o documento {id_documento}."
+            raise SEIParseError(msg)
+
+        overrides = {"pwdSenha": self._senha, "btnAssinar": "Assinar"}
+        if cargo:
+            overrides["selCargoFuncao"] = cargo
+        if orgao:
+            overrides["selOrgaoAssinante"] = orgao
+
+        r2 = await self._post_form_preservando(form, str(r.url), overrides, referer=str(r.url))
+        _check(r2)
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro2 = _extrair_erro_sei(body2)
+        if erro2:
+            msg = f"documento_assinar: {erro2}"
+            raise SEIConnectionError(msg)
+        return {"status": "ok", "id_documento": id_documento}
+
     async def listar_secoes_web(self, protocolo: str, id_documento: str) -> dict:
         """Lista seções editáveis de um documento interno via editor_montar."""
         await self.ensure_authenticated()
-        editor_url, referer = await self._get_doc_signed_url(
-            protocolo, id_documento, "editor_montar"
-        )
+        editor_url, referer = await self._get_editor_montar_url(protocolo, id_documento)
         r = await self._http.get(editor_url, headers={"Referer": referer})
         _check(r)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
@@ -2246,9 +2423,7 @@ class SEIWebClient:
         """Edita seções de um documento interno via editor_montar POST."""
         await self.ensure_authenticated()
         sei_base = f"{self.sei_root}/sei/"
-        editor_url, referer = await self._get_doc_signed_url(
-            protocolo, id_documento, "editor_montar"
-        )
+        editor_url, referer = await self._get_editor_montar_url(protocolo, id_documento)
         r = await self._http.get(editor_url, headers={"Referer": referer})
         _check(r)
         body = _decode_response(r.content, r.headers.get("content-type", ""))
@@ -2819,42 +2994,61 @@ class SEIWebClient:
     # Complex forms — PR #5
     # ------------------------------------------------------------------
 
-    async def autocomplete_unidades(self, termo: str) -> list[dict]:
-        """Resolve sigla/nome de unidade via AJAX autocomplete do SEI.
+    async def pesquisar_unidades_envio(self, protocolo: str, termo: str) -> list[dict]:
+        """Pesquisa unidades destino para tramitação de um `protocolo` específico.
+
+        O link para a tela "Enviar Processo" (`acao=procedimento_enviar`, com seu
+        próprio `infra_hash`) já vem embutido no HTML da árvore do processo — é
+        só procurar pelo nome de ação certo (versões antigas deste cliente
+        procuravam por "procedimento_tramitar", que não existe nesta instância).
+        Dentro dessa página, o SEI expõe a URL completa (com um SEGUNDO
+        `infra_hash`, próprio do autocomplete, distinto do hash da própria
+        página) como literal JavaScript:
+        ``new infraAjaxAutoCompletar('hdnIdUnidade','txtUnidade','controlador_ajax.php?acao_ajax=unidade_auto_completar_envio_processo&...&infra_hash=...')``.
+        Bastam duas requisições HTTP simples — sem navegador.
 
         Retorna lista de {"id": str, "sigla": str, "nome": str}.
         """
         await self.ensure_authenticated()
+        html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
         sei_base = f"{self.sei_root}/sei/"
-        r = await self._http.get(
-            f"{sei_base}controlador_ajax.php",
-            params={"acao_ajax": "unidade_auto_completar", "termo": termo},
-            headers={"Referer": str(self._inbox_url)},
+
+        enviar_url = _extrair_link_enviar_processo(html_arvore, sei_base, protocolo)
+
+        r1 = await self._http.get(enviar_url, headers={"Referer": url_arvore})
+        _check(r1)
+        html_enviar = _decode_response(r1.content, r1.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(html_enviar)
+        if erro:
+            msg = f"Enviar Processo: {erro}"
+            raise SEIConnectionError(msg)
+
+        m_ajax = re.search(
+            r"controlador_ajax\.php\?acao_ajax=unidade_auto_completar_envio_processo"
+            r"[^'\"]*infra_hash=[a-fA-F0-9]+",
+            html_enviar,
         )
-        if not r.is_success:
-            logger.warning("autocomplete_unidades: HTTP %s para termo=%r", r.status_code, termo)
-            return []
-        try:
-            raw = r.json()
-        except ValueError:
-            logger.warning(
-                "autocomplete_unidades: resposta não-JSON (HTTP %s) para termo=%r",
-                r.status_code,
-                termo,
-            )
-            return []
-        results = []
-        for item in raw if isinstance(raw, list) else []:
-            if not isinstance(item, dict):
-                continue
-            results.append(
-                {
-                    "id": str(item.get("id", item.get("value", ""))),
-                    "sigla": str(item.get("sigla", item.get("label", ""))),
-                    "nome": str(item.get("nome", item.get("descricao", ""))),
-                }
-            )
-        return results
+        if not m_ajax:
+            msg = f"Campo de busca de unidade não encontrado na tela de envio de {protocolo}."
+            raise SEIParseError(msg)
+        ajax_url = urljoin(sei_base, m_ajax.group(0).replace("&amp;", "&"))
+
+        body = urlencode(
+            {"palavras_pesquisa": termo, "id_orgao": "", "unidade_atual": "0"},
+            encoding="iso-8859-1",
+            errors="replace",
+        ).encode("ascii")
+        r2 = await self._http.post(
+            ajax_url,
+            content=body,
+            headers={
+                "Referer": str(r1.url),
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        _check(r2)
+        xml_text = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        return _parse_unidades_envio_xml(xml_text)
 
     async def enviar_processo_web(
         self,
@@ -2864,8 +3058,12 @@ class SEIWebClient:
     ) -> dict:
         """Envia (tramita) um processo via scraper web do SEI.
 
-        Fluxo: trabalhar → arvore → link(procedimento_tramitar) → GET form → POST.
+        Fluxo: trabalhar → arvore → link(procedimento_enviar) → GET form → POST.
         As `unidades_ids` devem ser IDs numéricos já resolvidos.
+
+        O nome da ação varia por instância/versão do SEI: algumas chamam
+        "procedimento_tramitar", outras (confirmado em sei.sistemas.ro.gov.br,
+        2026-07-03) chamam "procedimento_enviar" — aceitamos os dois.
         """
         _op = opcoes or OpcoesTramitacaoWeb()
         await self.ensure_authenticated()
@@ -2873,18 +3071,7 @@ class SEIWebClient:
         html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
         sei_base = f"{self.sei_root}/sei/"
 
-        m = re.search(
-            r"(controlador\.php\?acao=procedimento_tramitar[^\"'\s]*infra_hash=[a-fA-F0-9]+)",
-            html_arvore,
-        )
-        if not m:
-            msg = (
-                f"Ação 'procedimento_tramitar' não encontrada na árvore de {protocolo}. "
-                "Verifique permissão de tramitação neste processo."
-            )
-            raise SEINotFoundError(msg)
-
-        tramitar_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
+        tramitar_url = _extrair_link_enviar_processo(html_arvore, sei_base, protocolo)
         r = await self._http.get(tramitar_url, headers={"Referer": url_arvore})
         _check(r)
 
@@ -2974,8 +3161,53 @@ class SEIWebClient:
         return urljoin(sei_base, m.group(1).replace("&amp;", "&"))
 
     async def pesquisar_tipos_processo_web(self, filtro: str = "") -> dict:
-        """Extrai tipos de processo do select selTipoProcedimento em procedimento_cadastrar."""
+        """Extrai tipos de processo disponíveis para iniciar um novo processo.
+
+        Lida com os dois fluxos do SEI (mesma dualidade de `_abrir_form_cadastro_processo`):
+        - `procedimento_escolher_tipo` (SEI moderno): os tipos vêm em
+          `#tblTipoProcedimento`, uma linha por tipo com `<a onclick="escolher(ID)">Nome</a>`
+          — POST com `hdnFiltroTipoProcedimento='T'` mostra todos, não só os favoritos;
+        - `procedimento_cadastrar` (instâncias antigas): os tipos vêm num
+          `<select name="selTipoProcedimento">` direto no form.
+        """
         await self.ensure_authenticated()
+
+        try:
+            escolher_url = await self._obter_link_toolbar("procedimento_escolher_tipo")
+        except SEINotFoundError:
+            escolher_url = None
+
+        tipos: list[dict[str, str]] = []
+        if escolher_url is not None:
+            r = await self._http.get(escolher_url, headers={"Referer": str(self._inbox_url)})
+            _check(r)
+            soup = BeautifulSoup(
+                _decode_response(r.content, r.headers.get("content-type", "")), "html.parser"
+            )
+            form = soup.find("form", id="frmProcedimentoEscolherTipo")
+            if form is None:
+                msg = "Form procedimento_escolher_tipo não encontrado."
+                raise SEIParseError(msg)
+            r2 = await self._post_form_preservando(
+                form,
+                str(r.url),
+                {_FIELD_FILTRO_TIPO_PROC: "T", _FIELD_ID_TIPO_PROC: ""},
+                str(r.url),
+            )
+            soup2 = BeautifulSoup(
+                _decode_response(r2.content, r2.headers.get("content-type", "")), "html.parser"
+            )
+            table = soup2.find(id="tblTipoProcedimento")
+            for a in table.find_all("a", onclick=True) if table else []:
+                m = re.match(r"escolher\((\d+)\)", _tag_str(a, "onclick"))
+                if not m:
+                    continue
+                nome = a.get_text(strip=True)
+                if filtro and filtro.lower() not in nome.lower():
+                    continue
+                tipos.append({"id": m.group(1), "nome": nome})
+            return {"tipos": tipos, "total_itens": len(tipos)}
+
         cadastrar_url = await self._obter_link_toolbar("procedimento_cadastrar")
         r = await self._http.get(cadastrar_url, headers={"Referer": str(self._inbox_url)})
         _check(r)
@@ -2984,7 +3216,6 @@ class SEIWebClient:
         sel = soup.find("select", {"name": re.compile(r"selTipoProcedimento", re.IGNORECASE)})
         if sel is None:
             sel = soup.find("select", id=re.compile(r"selTipoProcedimento", re.IGNORECASE))
-        tipos: list[dict[str, str]] = []
         if sel is not None:
             for opt in sel.find_all("option"):
                 v = _tag_str(opt, "value")
@@ -3088,10 +3319,16 @@ class SEIWebClient:
             "tem_proxima": len(blocos) >= limit,
         }
 
-    async def pesquisar_outras_unidades_web(self, filtro: str = "", limit: int = 50) -> dict:
-        """Pesquisa unidades via AJAX autocomplete (unidade_auto_completar).
+    async def pesquisar_outras_unidades_web(
+        self, filtro: str = "", limit: int = 50, protocolo: str = ""
+    ) -> dict:
+        """Pesquisa unidades via AJAX autocomplete (unidade_auto_completar_envio_processo).
 
-        Requer filtro não-vazio — o endpoint AJAX não retorna resultados sem termo.
+        Requer `filtro` não-vazio e um `protocolo` de referência — o autocomplete
+        do SEI só responde dentro do contexto de uma tela "Enviar Processo" já
+        aberta para esse processo específico (ver pesquisar_unidades_envio).
+        Sem `protocolo`, esta busca é estruturalmente impossível no backend web
+        (diferente do REST, que lista órgãos/unidades sem esse contexto).
         """
         if not filtro:
             msg = (
@@ -3099,7 +3336,15 @@ class SEIWebClient:
                 "Informe pelo menos 1 caractere (sigla ou nome da unidade)."
             )
             raise SEIValidationError(msg)
-        resultados = await self.autocomplete_unidades(filtro)
+        if not protocolo:
+            msg = (
+                "Em modo web (sem mod-wssei), pesquisar unidades exige um `protocolo` de "
+                "referência — o autocomplete do SEI só funciona dentro do contexto de uma "
+                "tela 'Enviar Processo' já aberta para esse processo. Informe o protocolo "
+                "de qualquer processo ao qual você tenha acesso de tramitação."
+            )
+            raise SEIValidationError(msg)
+        resultados = await self.pesquisar_unidades_envio(protocolo, filtro)
         resultados = resultados[:limit]
         return {"unidades": resultados, "total_itens": len(resultados)}
 
@@ -3479,7 +3724,16 @@ class SEIWebClient:
         }
 
     async def pesquisar_hipoteses_legais_web(self, filtro: str = "") -> dict:
-        """Extrai hipóteses legais do select selHipoteseLegal em procedimento_cadastrar."""
+        """Extrai hipóteses legais do select selHipoteseLegal em procedimento_cadastrar.
+
+        LIMITAÇÃO CONHECIDA: em instâncias modernas do SEI (fluxo
+        `procedimento_escolher_tipo`, ver `pesquisar_tipos_processo_web`),
+        `selHipoteseLegal` só existe no form final `frmProcedimentoCadastro`
+        — depois de já ter escolhido um tipo de processo — não no toolbar da
+        inbox. Esta função ainda assume o fluxo antigo direto e vai levantar
+        `SEINotFoundError` nessas instâncias. Só afeta criar processo com
+        `nivel_acesso` restrito/sigiloso (público não precisa de hipótese legal).
+        """
         await self.ensure_authenticated()
         cadastrar_url = await self._obter_link_toolbar("procedimento_cadastrar")
         r = await self._http.get(cadastrar_url, headers={"Referer": str(self._inbox_url)})
@@ -4008,8 +4262,25 @@ class SEIWebClient:
         sei_base = f"{self.sei_root}/sei/"
 
         # --- Step 1: encontrar link documento_escolher_tipo na árvore ---
+        # As ações do nó raiz (`Nos[0].acoes`) vêm como HTML *escapado dentro de
+        # uma string JS* (`Nos[0].acoes = '<a href="...">...'`), não como <a> de
+        # verdade no DOM da página — por isso soup.find_all("a", ...) na árvore
+        # inteira não enxerga esse link; é preciso extrair a string primeiro.
         incluir_href: str | None = None
-        soup_acoes = BeautifulSoup(html_arvore, "html.parser")
+        for pat in (
+            r"(?s)Nos\[0\]\.acoes\s*=\s*'((?:[^'\\]|\\.)*)'",
+            r'(?s)Nos\[0\]\.acoes\s*=\s*"((?:[^"\\]|\\.)*)"',
+        ):
+            m_acoes = re.search(pat, html_arvore)
+            if m_acoes:
+                acoes_html = (
+                    m_acoes.group(1).replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
+                )
+                break
+        else:
+            acoes_html = ""
+
+        soup_acoes = BeautifulSoup(acoes_html or html_arvore, "html.parser")
         for a in soup_acoes.find_all("a", href=re.compile(r"documento_escolher_tipo")):
             incluir_href = _tag_str(a, "href").replace("&amp;", "&")
             break
@@ -4024,6 +4295,15 @@ class SEIWebClient:
                     if pa and "documento_escolher_tipo" in _tag_str(pa, "href"):
                         incluir_href = _tag_str(pa, "href").replace("&amp;", "&")
                         break
+        if not incluir_href:
+            # Último recurso: regex direto no HTML bruto (cobre instâncias onde
+            # nem Nos[0].acoes existe mas o link aparece solto em outro script).
+            m_href = re.search(
+                r"controlador\.php\?acao=documento_escolher_tipo[^\"'\s]*infra_hash=[a-fA-F0-9]+",
+                html_arvore,
+            )
+            if m_href:
+                incluir_href = m_href.group(0)
 
         if not incluir_href:
             msg = "Link 'Incluir Documento' não encontrado nas ações do processo."
@@ -4040,40 +4320,43 @@ class SEIWebClient:
         if erro3:
             raise SEIConnectionError(erro3)
 
-        # Se id_serie não fornecido — retorna lista de tipos disponíveis
+        # Se id_serie não fornecido — retorna lista de tipos disponíveis.
+        # Nesta instância os tipos vêm como linhas de tabela com
+        # <a onclick="escolher(ID)">Nome</a> (mesmo padrão de
+        # pesquisar_tipos_processo_web para tipo de processo), não como
+        # <a href="...id_serie=...">.
         if not id_serie:
             soup3 = BeautifulSoup(body3, "html.parser")
             tipos = []
-            for a in soup3.find_all("a", href=re.compile(r"id_serie=")):
-                href = _tag_str(a, "href")
-                m_s = re.search(r"id_serie=(\d+)", href)
+            for a in soup3.find_all("a", onclick=re.compile(r"^escolher\(")):
+                m_s = re.match(r"escolher\((\d+)\)", _tag_str(a, "onclick"))
                 if m_s:
                     tipos.append({"id_serie": m_s.group(1), "nome": a.get_text(strip=True)})
+            if not tipos:
+                for a in soup3.find_all("a", href=re.compile(r"id_serie=")):
+                    href = _tag_str(a, "href")
+                    m_s = re.search(r"id_serie=(\d+)", href)
+                    if m_s:
+                        tipos.append({"id_serie": m_s.group(1), "nome": a.get_text(strip=True)})
             return {"tipos_disponiveis": tipos}
 
-        # Encontra o link do editor para este id_serie
-        m_editor = re.search(
-            rf"(controlador\.php[^\"'\s]*acao=editor_montar[^\"'\s]*id_serie={re.escape(id_serie)}[^\"'\s]*infra_hash=[a-fA-F0-9]+)",
-            body3,
-        )
-        if not m_editor:
-            # Try reverse order: infra_hash before id_serie
-            m_editor = re.search(
-                rf"(controlador\.php[^\"'\s]*acao=editor_montar[^\"'\s]*infra_hash=[a-fA-F0-9]+[^\"'\s]*id_serie={re.escape(id_serie)}[^\"'\s]*)",
-                body3,
-            )
-        if not m_editor:
+        # Escolhe o tipo: o link acima só abre a tela de escolha (mesma que
+        # lista os `tipos_disponiveis`) — a seleção em si é um POST do form
+        # frmDocumentoEscolherTipo com hdnIdSerie=<id_serie> (JS `escolher()`),
+        # não um GET direto com id_serie na querystring do editor.
+        soup3_form = BeautifulSoup(body3, "html.parser")
+        form3 = soup3_form.find("form", id="frmDocumentoEscolherTipo")
+        if form3 is None:
             msg = (
-                f"Link editor_montar para id_serie={id_serie} não encontrado. "
+                f"Form frmDocumentoEscolherTipo não encontrado para id_serie={id_serie}. "
                 "Use id_serie='' para listar os tipos disponíveis."
             )
             raise SEINotFoundError(msg)
-
-        editor_url = urljoin(sei_base, m_editor.group(1).replace("&amp;", "&"))
-
-        # --- Step 3: GET editor_montar ---
-        r4 = await self._http.get(editor_url, headers={"Referer": str(r3.url)})
+        r4 = await self._post_form_preservando(
+            form3, str(r3.url), {"hdnIdSerie": id_serie}, str(r3.url)
+        )
         _check(r4)
+        editor_url = str(r4.url)
 
         body4 = _decode_response(r4.content, r4.headers.get("content-type", ""))
         erro4 = _extrair_erro_sei(body4)
@@ -4083,7 +4366,7 @@ class SEIWebClient:
         soup4 = BeautifulSoup(body4, "html.parser")
         form4 = soup4.find("form")
         if form4 is None:
-            msg = "Form editor_montar não encontrado."
+            msg = f"Form editor_montar não encontrado para id_serie={id_serie}."
             raise SEINotFoundError(msg)
 
         action4 = _tag_str(form4, "action").replace("&amp;", "&")
@@ -4101,9 +4384,20 @@ class SEIWebClient:
         if sbm4:
             post_data4.append(sbm4)
 
+        # O JS vira essa flag de '1'->'2' antes de submeter (mesmo padrão de
+        # hdnFlagProcedimentoCadastro em criar_processo_web); com '1' o servidor
+        # apenas re-exibe o form do editor sem salvar nada — sem erro, sem
+        # idDocumento, o que antes desta correção virava um falso "aparentemente
+        # criado". Repetir a chave no final vale como override (urlencode/$_POST
+        # usam a última ocorrência).
+        post_data4.append((_FIELD_FLAG_DOC_CADASTRO, "2"))
+
         if descricao:
             post_data4.append(("txtDescricao", descricao))
-        post_data4.append(("selNivelAcesso", nivel_acesso))
+        # rdoNivelAcesso (radio), não selNivelAcesso — mesmo campo usado em
+        # criar_processo_web/alterar_processo_web; o nome antigo aqui gerava
+        # "Nível de acesso local não informado" do servidor.
+        post_data4.append((_FIELD_NIVEL_ACESSO, nivel_acesso))
         if hipotese_legal and nivel_acesso in ("1", "2"):
             post_data4.append(("selHipoteseLegal", hipotese_legal))
 

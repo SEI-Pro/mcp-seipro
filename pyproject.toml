@@ -93,6 +93,8 @@ ignore = [
 "src/todos/sei_web_client.py" = [
     # Scraper methods are inherently complex (multi-step web flows, branching HTML layouts)
     "C901", "PLR0912", "PLR0915",
+    # XML retornado pela própria instância SEI autenticada (não é entrada de usuário/terceiro)
+    "S314",
 ]
 "src/todos/server.py" = [
     "PLR0913",  # MCP tools need ctx + ≥4 business params; grouping into dataclasses hides the MCP schema

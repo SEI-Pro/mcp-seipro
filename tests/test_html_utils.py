@@ -88,6 +88,23 @@ class TestCleanMarkdownTables:
 
 
 # ---------------------------------------------------------------------------
+# _align_to_separator
+# ---------------------------------------------------------------------------
+
+
+class TestAlignToSeparator:
+    def test_right_align(self) -> None:
+        assert hu._align_to_separator("right") == "---:"
+
+    def test_center_align(self) -> None:
+        assert hu._align_to_separator("center") == ":---:"
+
+    def test_left_and_none_default_to_plain_dashes(self) -> None:
+        assert hu._align_to_separator("left") == "---"
+        assert hu._align_to_separator(None) == "---"
+
+
+# ---------------------------------------------------------------------------
 # html_to_markdown
 # ---------------------------------------------------------------------------
 
@@ -115,6 +132,15 @@ class TestHtmlToMarkdown:
     def test_unescapes_before_converting(self) -> None:
         out = hu.html_to_markdown("&lt;strong&gt;X&lt;/strong&gt;")
         assert "**X**" in out
+
+    def test_table_header_align_becomes_separator(self) -> None:
+        html = (
+            "<table><tr><th align='right'>A</th><th align='center'>B</th></tr>"
+            "<tr><td>1</td><td>2</td></tr></table>"
+        )
+        out = hu.html_to_markdown(html)
+        assert "---:" in out
+        assert ":---:" in out
 
 
 # ---------------------------------------------------------------------------

@@ -82,12 +82,19 @@ async def sei_pesquisar_unidades(
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     cursor: str = "",
+    protocolo: str = "",
     ctx: Context | None = None,
 ) -> PaginadoGenerico[UnidadeSEI]:
     """Pesquisa unidades disponíveis no SEI por nome ou sigla.
 
-    Útil para encontrar o ID de uma unidade destino ao tramitar processos.
-    Em instâncias sem mod-wssei, requer filtro não-vazio (busca via autocomplete AJAX).
+    Útil para encontrar o ID de uma unidade destino ao tramitar processos —
+    inclusive de outro órgão (ex: uma unidade do IPERON vista a partir da PGE).
+
+    Em instâncias sem mod-wssei, requer filtro não-vazio (busca via autocomplete AJAX)
+    e também um `protocolo` de referência: o autocomplete do SEI só responde dentro
+    do contexto de uma tela "Enviar Processo" já aberta para um processo específico
+    — informe o protocolo de qualquer processo ao qual você tenha acesso de
+    tramitação (não precisa ser o processo que você pretende enviar de fato).
 
     Paginação: passe `cursor` = `proximo_cursor` da resposta anterior, ou use
     `pagina` (0-indexado) para acesso direto.
@@ -98,11 +105,16 @@ async def sei_pesquisar_unidades(
         pagina = decoded.get("p", pagina)
         filtro = decoded.get("filtro", filtro)
         limit = decoded.get("limit", limit)
+        protocolo = decoded.get("protocolo", protocolo)
     backend = await _backend(ctx)
-    result = await backend.pesquisar_unidades(filtro=filtro, limit=limit, pagina=pagina)
+    result = await backend.pesquisar_unidades(
+        filtro=filtro, limit=limit, pagina=pagina, protocolo=protocolo
+    )
     extra: dict = {}
     if filtro:
         extra["filtro"] = filtro
+    if protocolo:
+        extra["protocolo"] = protocolo
     extra["limit"] = limit
     result["itens"] = result.pop("unidades", [])
     return PaginadoGenerico[UnidadeSEI].model_validate(
@@ -240,6 +252,7 @@ async def sei_pesquisar_outras_unidades(
     limit: int = _DEFAULT_LIMIT,
     pagina: int = 0,
     cursor: str = "",
+    protocolo: str = "",
     ctx: Context | None = None,
 ) -> PaginadoGenerico[UnidadeSEI]:
     """Pesquisa unidades excluindo a unidade atual.
@@ -247,6 +260,9 @@ async def sei_pesquisar_outras_unidades(
     Útil para tramitação — já filtra a unidade do usuário.
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
+
+    Em instâncias sem mod-wssei, exige `filtro` e também um `protocolo` de
+    referência — mesma exigência de sei_pesquisar_unidades (ver seu docstring).
 
     Paginação: passe `cursor` = `proximo_cursor` da resposta anterior.
 
@@ -256,11 +272,16 @@ async def sei_pesquisar_outras_unidades(
         pagina = decoded.get("p", pagina)
         filtro = decoded.get("filtro", filtro)
         limit = decoded.get("limit", limit)
+        protocolo = decoded.get("protocolo", protocolo)
     backend = await _backend(ctx)
-    result = await backend.pesquisar_outras_unidades(filtro=filtro, limit=limit, pagina=pagina)
+    result = await backend.pesquisar_outras_unidades(
+        filtro=filtro, limit=limit, pagina=pagina, protocolo=protocolo
+    )
     extra: dict = {}
     if filtro:
         extra["filtro"] = filtro
+    if protocolo:
+        extra["protocolo"] = protocolo
     extra["limit"] = limit
     result["itens"] = result.pop("unidades", [])
     return PaginadoGenerico[UnidadeSEI].model_validate(

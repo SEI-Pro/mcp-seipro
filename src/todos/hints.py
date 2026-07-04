@@ -31,6 +31,9 @@ def get_hints() -> list[str]:
             parsed = json.loads(raw)
             if isinstance(parsed, list):
                 return [str(h) for h in parsed if str(h)]
+            logger.warning(
+                "SEI_HINTS não é uma lista JSON (%s) — usando hints padrão", type(parsed).__name__
+            )
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("SEI_HINTS inválido — usando hints padrão: %s", exc)
     return _DEFAULT_HINTS
