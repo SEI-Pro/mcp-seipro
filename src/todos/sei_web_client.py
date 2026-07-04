@@ -266,6 +266,59 @@ def _extrair_link_enviar_processo(html_arvore: str, sei_base: str, protocolo: st
     return urljoin(sei_base, m.group(0).replace("&amp;", "&"))
 
 
+def _extrair_incluir_documento_href(html_arvore: str) -> str | None:
+    """Localiza o href de "Incluir Documento" (`documento_escolher_tipo`) na árvore.
+
+    As ações do nó raiz (`Nos[0].acoes`) vêm como HTML *escapado dentro de
+    uma string JS* (`Nos[0].acoes = '<a href="...">...'`), não como `<a>` de
+    verdade no DOM da página — por isso `soup.find_all("a", ...)` direto na
+    árvore inteira nunca enxerga esse link; é preciso extrair a string
+    primeiro. Compartilhado entre `criar_documento_interno_web`,
+    `incluir_documento_externo` e `_obter_soup_documento_receber` (bug
+    original: só o primeiro tinha essa correção, os outros dois falhavam
+    sempre — ver changelog).
+
+    Retorna `None` se o link não for encontrado por nenhuma das estratégias
+    (o chamador decide a mensagem de erro apropriada ao contexto).
+    """
+    acoes_html = ""
+    for pat in (
+        r"(?s)Nos\[0\]\.acoes\s*=\s*'((?:[^'\\]|\\.)*)'",
+        r'(?s)Nos\[0\]\.acoes\s*=\s*"((?:[^"\\]|\\.)*)"',
+    ):
+        m_acoes = re.search(pat, html_arvore)
+        if m_acoes:
+            acoes_html = (
+                m_acoes.group(1).replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
+            )
+            break
+
+    soup_acoes = BeautifulSoup(acoes_html or html_arvore, "html.parser")
+    incluir_href: str | None = None
+    for a in soup_acoes.find_all("a", href=re.compile(r"documento_escolher_tipo")):
+        incluir_href = _tag_str(a, "href").replace("&amp;", "&")
+        break
+    if not incluir_href:
+        for img in soup_acoes.find_all("img"):
+            if "Incluir" in (img.get("title", "") or "") or "incluir" in (img.get("src", "") or ""):
+                pa = img.find_parent("a")
+                # Confirma que o link pai aponta para documento_escolher_tipo,
+                # não "Incluir em Bloco" ou outra ação de toolbar com "incluir".
+                if pa and "documento_escolher_tipo" in _tag_str(pa, "href"):
+                    incluir_href = _tag_str(pa, "href").replace("&amp;", "&")
+                    break
+    if not incluir_href:
+        # Último recurso: regex direto no HTML bruto (cobre instâncias onde
+        # nem Nos[0].acoes existe mas o link aparece solto em outro script).
+        m_href = re.search(
+            r"controlador\.php\?acao=documento_escolher_tipo[^\"'\s]*infra_hash=[a-fA-F0-9]+",
+            html_arvore,
+        )
+        if m_href:
+            incluir_href = m_href.group(0)
+    return incluir_href
+
+
 def _parse_form_info(form: Tag, base_url: str) -> dict:
     """Extrai id, action, campos (com valor atual), ocultos e botões de um `<form>`.
 
@@ -4152,11 +4205,7 @@ class SEIWebClient:
         html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
         sei_base = f"{self.sei_root}/sei/"
 
-        soup_arvore = BeautifulSoup(html_arvore, "html.parser")
-        incluir_href: str | None = None
-        for a in soup_arvore.find_all("a", href=re.compile(r"documento_escolher_tipo")):
-            incluir_href = _tag_str(a, "href").replace("&amp;", "&")
-            break
+        incluir_href = _extrair_incluir_documento_href(html_arvore)
         if not incluir_href:
             msg = "Link documento_escolher_tipo não encontrado nas ações do processo."
             raise SEIParseError(msg)
@@ -4777,49 +4826,7 @@ class SEIWebClient:
         sei_base = f"{self.sei_root}/sei/"
 
         # --- Step 1: encontrar link documento_escolher_tipo na árvore ---
-        # As ações do nó raiz (`Nos[0].acoes`) vêm como HTML *escapado dentro de
-        # uma string JS* (`Nos[0].acoes = '<a href="...">...'`), não como <a> de
-        # verdade no DOM da página — por isso soup.find_all("a", ...) na árvore
-        # inteira não enxerga esse link; é preciso extrair a string primeiro.
-        incluir_href: str | None = None
-        for pat in (
-            r"(?s)Nos\[0\]\.acoes\s*=\s*'((?:[^'\\]|\\.)*)'",
-            r'(?s)Nos\[0\]\.acoes\s*=\s*"((?:[^"\\]|\\.)*)"',
-        ):
-            m_acoes = re.search(pat, html_arvore)
-            if m_acoes:
-                acoes_html = (
-                    m_acoes.group(1).replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
-                )
-                break
-        else:
-            acoes_html = ""
-
-        soup_acoes = BeautifulSoup(acoes_html or html_arvore, "html.parser")
-        for a in soup_acoes.find_all("a", href=re.compile(r"documento_escolher_tipo")):
-            incluir_href = _tag_str(a, "href").replace("&amp;", "&")
-            break
-        if not incluir_href:
-            for img in soup_acoes.find_all("img"):
-                if "Incluir" in (img.get("title", "") or "") or "incluir" in (
-                    img.get("src", "") or ""
-                ):
-                    pa = img.find_parent("a")
-                    # Confirm the parent link points to documento_escolher_tipo,
-                    # not "Incluir em Bloco" or other "incluir" toolbar actions.
-                    if pa and "documento_escolher_tipo" in _tag_str(pa, "href"):
-                        incluir_href = _tag_str(pa, "href").replace("&amp;", "&")
-                        break
-        if not incluir_href:
-            # Último recurso: regex direto no HTML bruto (cobre instâncias onde
-            # nem Nos[0].acoes existe mas o link aparece solto em outro script).
-            m_href = re.search(
-                r"controlador\.php\?acao=documento_escolher_tipo[^\"'\s]*infra_hash=[a-fA-F0-9]+",
-                html_arvore,
-            )
-            if m_href:
-                incluir_href = m_href.group(0)
-
+        incluir_href = _extrair_incluir_documento_href(html_arvore)
         if not incluir_href:
             msg = "Link 'Incluir Documento' não encontrado nas ações do processo."
             raise SEIParseError(msg)
