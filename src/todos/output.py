@@ -24,4 +24,4 @@ def emit_result(text: str) -> None:
 
 def emit_human(message: str) -> None:
     """Escreve uma mensagem de status/erro em stderr, com markup Rich, para o usuário."""
-    _console.print(message)
+    _console.print(message, soft_wrap=True)

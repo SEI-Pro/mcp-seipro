@@ -83,6 +83,28 @@ def test_dispatch_tool_reports_cli_argument_error(monkeypatch, capsys) -> None:
     assert "chave=valor obrigatório" in capsys.readouterr().err
 
 
+def test_dispatch_tool_reports_cli_argument_error_with_bracket_payload(monkeypatch, capsys) -> None:
+    """Erros que ecoam texto com colchetes não podem virar `rich.errors.MarkupError`.
+
+    Regressão: `output.emit_human` interpreta `[...]` como markup Rich; sem
+    escapar `str(exc)`/`tool_name`, um colchete de fechamento sem par (comum
+    em argumentos de CLI mal formados ou mensagens de erro arbitrárias) faz o
+    próprio caminho de tratamento de erro lançar uma exceção não capturada.
+    """
+
+    async def fake_run(tool_name: str, args: list[str], *, as_json: bool) -> int:
+        del tool_name, args, as_json
+        msg = "Argumento inválido (esperado chave=valor): '[/oops]'"
+        raise CliArgumentError(msg)
+
+    monkeypatch.setattr(server_module.cli_call, "run", fake_run)
+
+    exit_code = server_module._dispatch_tool(["sei_qualquer", "[/oops]"])
+
+    assert exit_code == 1
+    assert "[/oops]" in capsys.readouterr().err
+
+
 def test_dispatch_tool_reports_mcp_error(monkeypatch, capsys) -> None:
     """Cobre falhas reais de protocolo/transporte MCP (não o caso de tool desconhecida:
     a FastMCP devolve isso como `CallToolResult(isError=True)`, tratado no caminho
