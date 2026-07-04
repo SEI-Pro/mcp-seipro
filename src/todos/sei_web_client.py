@@ -4244,9 +4244,20 @@ class SEIWebClient:
         if sbm4:
             post_data4.append(sbm4)
 
+        # O JS vira essa flag de '1'->'2' antes de submeter (mesmo padrão de
+        # hdnFlagProcedimentoCadastro em criar_processo_web); com '1' o servidor
+        # apenas re-exibe o form do editor sem salvar nada — sem erro, sem
+        # idDocumento, o que antes desta correção virava um falso "aparentemente
+        # criado". Repetir a chave no final vale como override (urlencode/$_POST
+        # usam a última ocorrência).
+        post_data4.append((_FIELD_FLAG_DOC_CADASTRO, "2"))
+
         if descricao:
             post_data4.append(("txtDescricao", descricao))
-        post_data4.append(("selNivelAcesso", nivel_acesso))
+        # rdoNivelAcesso (radio), não selNivelAcesso — mesmo campo usado em
+        # criar_processo_web/alterar_processo_web; o nome antigo aqui gerava
+        # "Nível de acesso local não informado" do servidor.
+        post_data4.append((_FIELD_NIVEL_ACESSO, nivel_acesso))
         if hipotese_legal and nivel_acesso in ("1", "2"):
             post_data4.append(("selHipoteseLegal", hipotese_legal))
 
