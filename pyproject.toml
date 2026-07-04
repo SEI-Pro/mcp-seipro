@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "todos-sei"
 dynamic = ["version"]
-description = "TOdos Domina O Sei — MCP server para o SEI com 131 tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
+description = "TOdos Domina O Sei — MCP server para o SEI com 129 tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

@@ -12,14 +12,11 @@ import subprocess as _sp
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import keyring as _keyring
 from bs4 import BeautifulSoup
-from pydantic import Field, TypeAdapter
-from pydantic_core import SchemaError as _PydanticSchemaError
 from rich import box
 from rich.console import Console
 from rich.markup import escape
@@ -111,7 +108,6 @@ class _SEIInstanceConfig:
     sigla_sistema: str
     orgao_id: str
     verify_ssl_disabled: bool
-    protocolo_pattern: str = ""
 
 
 @dataclass
@@ -694,35 +690,6 @@ def _detect_modsei_url(sei_root: str, *, verify_ssl: bool) -> _ModseiDetection:
 
 
 # ── Etapas do wizard ─────────────────────────────────────────────────────────
-def _setup_protocolo_pattern() -> str:
-    """Solicita opcionalmente um regex de validação do número de processo."""
-    _console.print()
-    _console.rule("[dim]Padrão do número de processo [i](opcional)[/][/]", characters="·")
-    _console.print()
-    _console.print(
-        "  Cada instância SEI usa um formato diferente. Informe um regex para\n"
-        "  rejeitar entradas malformadas, ou pressione Enter para pular.\n\n"
-        "  [dim]Federal/ANTAQ (5 dígitos):  [cyan]^\\d{5}\\.\\d{6}/\\d{4}-\\d{2}$[/]\n"
-        "  Estadual/RO (4 dígitos):     [cyan]^\\d{4}\\.\\d{6}/\\d{4}-\\d{2}$[/]\n"
-        "  Qualquer SEI (4-6 dig.):     [cyan]^\\d{4,6}\\.\\d{6}/\\d{4}-\\d{2}$[/][/]"
-    )
-    while True:
-        raw = Prompt.ask(
-            "  Regex do protocolo",
-            default="",
-            show_default=False,
-            console=_console,
-        )
-        if not raw:
-            return ""
-        try:
-            TypeAdapter(Annotated[str, Field(pattern=raw)])
-        except _PydanticSchemaError as exc:
-            first_line = str(exc).split("\n")[0]
-            _err(f"Padrão rejeitado: {first_line}. Tente novamente.")
-            continue
-        _ok(f"Padrão configurado: [cyan]{raw}[/]")
-        return raw
 
 
 def _detect_organs_with_ssl_fallback(
@@ -850,8 +817,6 @@ def _setup_sei_instance() -> _SEIInstanceConfig:
         detection = _detect_modsei_url(sei_root, verify_ssl=not verify_ssl_disabled)
     rest_url = _resolve_modsei_url(detection)
 
-    protocolo_pattern = _setup_protocolo_pattern()
-
     return _SEIInstanceConfig(
         sei_root=sei_root,
         rest_url=rest_url,
@@ -860,7 +825,6 @@ def _setup_sei_instance() -> _SEIInstanceConfig:
         sigla_sistema=sigla_sistema,
         orgao_id=orgao_id,
         verify_ssl_disabled=verify_ssl_disabled,
-        protocolo_pattern=protocolo_pattern,
     )
 
 
@@ -908,8 +872,6 @@ def _build_mcp_env(
     }
     if inst.verify_ssl_disabled:
         mcp_env["SEI_VERIFY_SSL"] = "false"
-    if inst.protocolo_pattern:
-        mcp_env["SEI_PROTOCOLO_PATTERN"] = inst.protocolo_pattern
     using_plaintext = bool(mcp_env["SEI_SENHA"])
 
     vars_table = Table(box=box.SIMPLE, padding=(0, 1), show_header=False)
@@ -953,8 +915,6 @@ def _show_config_summary(
     summary.add_row("Usuário", usuario)
     senha_label = "[green]Keyring[/]" if not using_plaintext_password else "[yellow]texto claro[/]"
     summary.add_row("Senha", senha_label)
-    if inst.protocolo_pattern:
-        summary.add_row("Protocolo", f"[cyan]{inst.protocolo_pattern}[/]")
     _console.print(
         Panel(
             summary,

@@ -6,8 +6,6 @@ no live SEI server required.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 from bs4 import BeautifulSoup, Tag
 
@@ -20,13 +18,10 @@ from todos.sei_web_client import (
     parse_arvore_nos,
     parse_inbox,
 )
-from todos.settings import get_settings
 from todos.tools.configuracao import (
-    _CANONICAL_PROTOCOLO_RE,
-    _compilar_pattern,
-    _inferir_padrao_protocolo,
-    _keyring_pattern_key,
-    _resolver_pattern_sync,
+    _CNJ_PROTOCOLO_RE,
+    _SEI_PROTOCOLO_RE,
+    _formato_protocolo,
     _validar_protocolo,
 )
 
@@ -314,114 +309,58 @@ class TestParseArvoreNos:
 
 
 # ---------------------------------------------------------------------------
-# _inferir_padrao_protocolo (RFC 0010)
+# _formato_protocolo / _validar_protocolo — regex fixo, sem descoberta nem
+# keyring (RFC 0010/0017 revogadas em favor de dois formatos fixos + fallback
+# permissivo).
 # ---------------------------------------------------------------------------
 
 
-class TestInferirPadraoProtocolo:
-    def test_uniform_prefix_5_digits(self) -> None:
-        amostras = [f"50300.{i:06d}/2024-01" for i in range(10)]
-        padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
-        assert min_len == max_len == 5
-        assert r"\d{5}" in padrao
-        assert "/\\d{4}-\\d{2}$" in padrao
+class TestFormatoProtocolo:
+    def test_formato_sei_prefixo_5_digitos(self) -> None:
+        assert _formato_protocolo("50300.000123/2025-00") == "sei"
 
-    def test_uniform_prefix_4_digits(self) -> None:
-        amostras = [f"0007.{i:06d}/2025-00" for i in range(10)]
-        padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
-        assert min_len == max_len == 4
-        assert r"\d{4}" in padrao
+    def test_formato_sei_prefixo_4_digitos(self) -> None:
+        assert _formato_protocolo("0016.441115/2021-14") == "sei"
 
-    def test_variable_prefix_range(self) -> None:
-        amostras = [f"50300.{i:06d}/2024-01" for i in range(8)] + [
-            f"0007.{i:06d}/2024-01" for i in range(2)
-        ]
-        padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
-        assert min_len == 4
-        assert max_len == 5
-        assert r"\d{4,5}" in padrao
+    def test_formato_sei_prefixo_6_digitos(self) -> None:
+        assert _formato_protocolo("500300.007186/2026-69") == "sei"
 
-    def test_no_valid_samples_raises(self) -> None:
-        with pytest.raises(SEIValidationError, match="Nenhum protocolo"):
-            _inferir_padrao_protocolo(["garbage", "no-match"])
+    def test_formato_cnj(self) -> None:
+        assert _formato_protocolo("7002098-94.2026.8.22.0014") == "cnj"
 
-    def test_mixed_valid_and_invalid(self) -> None:
-        amostras = [f"50300.{i:06d}/2024-01" for i in range(10)] + [
-            "garbage",
-            "not-a-protocol",
-        ]
-        _padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
-        assert min_len == max_len == 5
+    def test_formato_desconhecido_retorna_none(self) -> None:
+        assert _formato_protocolo("qualquer-coisa") is None
+        assert _formato_protocolo("123") is None
 
-    def test_canonical_re_filters_non_protocol_strings(self) -> None:
-        # Simulate what sei_detectar_formato_protocolo does: filter before counting
-        todas = [f"50300.{i:06d}/2024-01" for i in range(10)] + [
-            "garbage",
-            "legacy-row",
-            "123",
-        ]
-        amostras = [s for s in todas if _CANONICAL_PROTOCOLO_RE.match(s)]
-        assert len(amostras) == 10
-        _padrao, min_len, max_len = _inferir_padrao_protocolo(amostras)
-        assert min_len == max_len == 5
+    def test_sei_prefixo_fora_do_intervalo_nao_bate(self) -> None:
+        # 3 dígitos de prefixo: fora do intervalo 4-6 documentado na RFC 0010.
+        assert _formato_protocolo("007.000123/2025-00") is None
 
-    def test_key_format(self) -> None:
-        key = _keyring_pattern_key("sei.orgao.gov.br")
-        assert key == "SEI_PROTOCOLO_PATTERN@sei.orgao.gov.br"
-
-
-# ---------------------------------------------------------------------------
-# Validação lazy de protocolo_formatado (RFC 0017)
-# ---------------------------------------------------------------------------
+    def test_regexes_sao_mutuamente_exclusivos_nas_amostras(self) -> None:
+        assert _SEI_PROTOCOLO_RE.fullmatch("7002098-94.2026.8.22.0014") is None
+        assert _CNJ_PROTOCOLO_RE.fullmatch("50300.000123/2025-00") is None
 
 
 class TestValidarProtocolo:
-    """A validação lê o padrão de get_settings() a cada chamada (lazy)."""
+    """Regex fixo (SEI ou CNJ) com fallback permissivo obrigatório."""
 
-    def test_compilar_pattern_valido(self) -> None:
-        compiled = _compilar_pattern(r"^\d{5}\.\d{6}/\d{4}-\d{2}$")
-        assert compiled is not None
-        assert compiled.fullmatch("50300.000123/2025-00")
+    def test_formato_sei_passa(self) -> None:
+        _validar_protocolo("50300.000123/2025-00")
 
-    def test_compilar_pattern_invalido_retorna_none(self) -> None:
-        # Regex malformado não derruba o processo — retorna None (constraint ignorado).
-        assert _compilar_pattern(r"[invalid(regex") is None
+    def test_formato_cnj_passa(self) -> None:
+        _validar_protocolo("7002098-94.2026.8.22.0014")
 
-    def test_resolver_prioriza_env_sobre_keyring(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SEI_PROTOCOLO_PATTERN", r"^\d{5}\.\d{6}/\d{4}-\d{2}$")
-        get_settings.cache_clear()
-        pattern = _resolver_pattern_sync("qualquer.host")
-        assert pattern is not None
-        assert pattern.pattern == r"^\d{5}\.\d{6}/\d{4}-\d{2}$"
+    def test_formato_desconhecido_passa_pelo_fallback_permissivo(self) -> None:
+        """Requisito central: formato não mapeado nunca é bloqueado."""
+        _validar_protocolo("formato-totalmente-desconhecido-123")
 
-    def test_sem_padrao_e_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("SEI_PROTOCOLO_PATTERN", raising=False)
-        get_settings.cache_clear()
-        # host vazio → keyring não é consultado; nenhum padrão → validação não levanta.
-        asyncio.run(_validar_protocolo("qualquer-coisa", ctx=None))
+    def test_protocolo_vazio_levanta(self) -> None:
+        with pytest.raises(SEIValidationError, match="não pode ser vazio"):
+            _validar_protocolo("")
 
-    def test_protocolo_valido_passa(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SEI_PROTOCOLO_PATTERN", r"^\d{5}\.\d{6}/\d{4}-\d{2}$")
-        get_settings.cache_clear()
-        asyncio.run(_validar_protocolo("50300.000123/2025-00", ctx=None))
-
-    def test_protocolo_invalido_levanta(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SEI_PROTOCOLO_PATTERN", r"^\d{5}\.\d{6}/\d{4}-\d{2}$")
-        get_settings.cache_clear()
-        with pytest.raises(SEIValidationError, match="não bate no padrão"):
-            asyncio.run(_validar_protocolo("formato-errado", ctx=None))
-
-    def test_mudanca_de_env_vale_apos_cache_clear(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """O cerne do RFC 0017: alterar o padrão em runtime passa a valer (era impossível antes)."""
-        monkeypatch.setenv("SEI_PROTOCOLO_PATTERN", r"^\d{5}\.\d{6}/\d{4}-\d{2}$")
-        get_settings.cache_clear()
-        # "00.000001/2024-99" (prefixo de 2 dígitos) não bate no padrão de 5 dígitos.
-        with pytest.raises(SEIValidationError):
-            asyncio.run(_validar_protocolo("00.000001/2024-99", ctx=None))
-        # Troca o padrão para aceitar prefixos de 2 a 5 dígitos — agora deve passar.
-        monkeypatch.setenv("SEI_PROTOCOLO_PATTERN", r"^\d{2,5}\.\d{6}/\d{4}-\d{2}$")
-        get_settings.cache_clear()
-        asyncio.run(_validar_protocolo("00.000001/2024-99", ctx=None))
+    def test_protocolo_so_espacos_levanta(self) -> None:
+        with pytest.raises(SEIValidationError, match="não pode ser vazio"):
+            _validar_protocolo("   ")
 
 
 # ---------------------------------------------------------------------------

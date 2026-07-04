@@ -1,9 +1,20 @@
 # RFC 0010 — Descoberta Automática do Formato de Protocolo pelo Agente
 
-**Status**: Proposta · **Atualizado**: 2026-06-18  
+**Status**: ❌ Revogada (2026-07-04) — substituída por regex fixo com fallback permissivo, sem descoberta nem keyring. Ver `changelog/0.6.14.md` e RFC 0017.  
+**Atualizado**: 2026-06-18  
 **Data**: 2026-06-18  
 **Autores**: Franklin Baldo (com Claude Code)  
 **RFCs relacionados**: RFC 0002 (armazenamento seguro via keyring), RFC 0008 (structured output / schema constraints)
+
+> **Nota de revogação**: a infraestrutura descrita neste RFC (keyring com
+> `ThreadPoolExecutor`+timeout, cache global por host, tools
+> `sei_detectar_formato_protocolo`/`sei_redefinir_formato_protocolo`) foi
+> removida — desproporcional ao problema real, que afeta só 3 das ~28 tools
+> que recebem `protocolo_formatado`. A validação agora é um regex fixo com
+> dois formatos conhecidos (SEI administrativo e CNJ) tentados em sequência,
+> com fallback permissivo obrigatório para formatos não mapeados. Ver
+> `src/todos/tools/configuracao.py` e `changelog/0.6.14.md`. O texto abaixo é
+> mantido só como histórico de design.
 
 ---
 

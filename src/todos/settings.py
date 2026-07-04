@@ -74,8 +74,7 @@ class TodosSettings(BaseSettings):
     todos_cache_dir: str = ""
     sei_upload_dir: str = ""
 
-    # -- Protocolo e OCR (Phase 2) --------------------------------------------
-    sei_protocolo_pattern: str = ""
+    # -- OCR (Phase 2) ---------------------------------------------------------
     sei_ocr_lang: str = "por"
 
     # -- Hints para agentes (Phase 2) -----------------------------------------
