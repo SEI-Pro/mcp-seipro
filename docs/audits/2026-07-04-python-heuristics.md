@@ -20,6 +20,12 @@ morar, exceção vs. retorno tipado, funções e fluxo, TDD vs. BDD, e ferrament
 > simplicidade do código em vez de melhorá-la (ver ressalvas inline nos itens
 > 3 e 4).
 
+> **Status de remediação — Fase 1 (PR #130, 2026-07-04).** Os três bugs
+> listados em "Achados que são bugs reais" foram verificados contra o código
+> atual antes de qualquer correção. Resultado: 2 reais e corrigidos (com
+> teste-primeiro), 1 falso positivo retratado abaixo. Ver anotações inline
+> nos itens.
+
 ## Metodologia
 
 - 55 arquivos em `src/todos/` (~23.000 linhas) e 30 arquivos em `tests/`
@@ -89,18 +95,23 @@ arquivo no resumo, só nos capítulos)
 
 ### Achados que são bugs reais, não só desvio de estilo
 
-- **`ConsentRecusadoError` nunca é capturada** — quando o usuário recusa
-  explicitamente o consentimento de acesso a um documento restrito, a
-  exceção escapa como `ToolError` cru em vez de virar um payload estruturado
-  (só `GateBloqueadoError` é tratada). Ver capítulos de `mcp_app.py` e
-  `tools/documentos.py`.
+- ~~**`ConsentRecusadoError` nunca é capturada**~~ — **falso positivo,
+  retratado (PR #130).** `ConsentRecusadoError` é subclasse de
+  `GateBloqueadoError`, e `except access_control.GateBloqueadoError`
+  (`tools/documentos.py:213,361`) já captura instâncias da subclasse — Python
+  faz isso por padrão. O audit original não checou a relação de herança.
+  Nada foi alterado neste item.
 - **`auth.py` — guard de SSRF falha aberto em erro de DNS**, logado apenas em
   `debug`: se a resolução de hostname falhar, a função devolve
   `blocked=None`, que é interpretado como "não bloqueado" (`_resolvido_bloqueado`,
-  `_validar_url_sei`).
+  `_validar_url_sei`). **Corrigido em PR #130** — falha de resolução agora
+  propaga e a URL é recusada por precaução (fail-closed), com
+  `logger.exception`.
 - **`sei_web_client.py::gerar_pdf_processo`** monta uma mensagem de erro que
   promete relatar o Content-Type recebido, mas usa uma string hardcoded
   `"(desconhecido)"` em vez do valor real — diagnóstico sempre inútil.
+  **Corrigido em PR #130** — `_gerar_arquivo_processo` agora devolve
+  conteúdo + content-type real.
 - **`backends/protocols.py` parece ser código morto**: nenhuma classe do
   arquivo é importada em nenhum outro lugar do repositório; o contrato
   realmente usado é `backends/base.py`.
@@ -601,9 +612,19 @@ Fora esse ponto, não há violações adicionais: os acessos a atributos privado
 
 ## Priorização sugerida
 
-1. **Corrigir o bug de `ConsentRecusadoError` não capturada** (`mcp_app.py`, `tools/documentos.py`) — usuário recusando consentimento hoje vira erro cru, não um payload estruturado.
-2. **Revisar o fail-open de SSRF em `auth.py`** quando a resolução DNS falha — hoje é tratado como "não bloqueado" e logado só em debug.
+1. ~~Corrigir o bug de `ConsentRecusadoError` não capturada~~ — **falso
+   positivo** (ver anotação em "Achados que são bugs reais"); nada a corrigir.
+2. ~~Revisar o fail-open de SSRF em `auth.py`~~ — **corrigido em PR #130.**
+   ~~Revisar o placeholder de Content-Type em `gerar_pdf_processo`~~ —
+   **corrigido em PR #130** (não estava nesta lista original, mas era o
+   terceiro bug real do audit).
 3. **Padronizar exceções com atributos estruturados** — maior volume de ocorrências (`sei_client.py`, `sei_web_client.py`, praticamente todos os backends `rest/`/`web/`), mas mecânico e paralelizável arquivo a arquivo.
-4. **Introduzir modelos tipados nas fronteiras de retorno dos backends** (`backends/rest/*.py`, `backends/web/*.py`, `sei_client.py`, `sei_web_client.py`) — é o padrão mais disseminado da codebase; convém tratar por família de domínio (processos, documentos, marcadores, blocos) em vez de arquivo a arquivo, já que o mesmo shape de dado atravessa REST e web.
-5. **Decidir o destino de `backends/protocols.py`** (remover ou adotar de fato) antes de investir na correção 4, já que ele duplica as assinaturas de `base.py` sem uso real.
-6. **Migrar backends de herança múltipla de mixins para composição** — mudança estrutural maior; fazer depois dos itens tipados acima, pois toca as mesmas classes.
+4. **Introduzir modelos tipados nas fronteiras de retorno dos backends** (`backends/rest/*.py`, `backends/web/*.py`, `sei_client.py`, `sei_web_client.py`) — é o padrão mais disseminado da codebase; convém tratar por família de domínio (processos, documentos, marcadores, blocos) em vez de arquivo a arquivo, já que o mesmo shape de dado atravessa REST e web. **Nota:** `docs/rfc/0015-return-contract.md` já cobre esse mesmo problema com decisões de design tomadas (Pydantic `BaseModel` frozen por padrão, `raise` para anomalia, sem envelopes manuais) e seu próprio plano de migração — seguir as decisões da RFC 0015 em vez de reinventar o formato aqui.
+5. **Decidir o destino de `backends/protocols.py`** (remover ou adotar de fato) antes de investir na correção 4, já que ele duplica as assinaturas de `base.py` sem uso real. **Confirmado por `docs/rfc/0006-backend-abstrato.md`**: a RFC declara `base.py` explicitamente como "a fonte única da interface" e não menciona `protocols.py` — reforça que o arquivo é vestigial.
+6. ~~Migrar backends de herança múltipla de mixins para composição~~ —
+   **não é mandamento**: `docs/rfc/0006-backend-abstrato.md` documenta que o
+   padrão de mixins por domínio (`__init__.py` compõe a classe concreta via
+   herança múltipla) foi uma **decisão deliberada** para evitar ~100 métodos
+   de delegação idênticos, não um acidente de design. Migrar para composição
+   contradiria essa RFC — não fazer sem rediscutir a decisão com o Franklin
+   primeiro.
