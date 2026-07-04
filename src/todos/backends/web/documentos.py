@@ -177,6 +177,28 @@ class DocumentosWeb(_WebMixin):
         ]
         return await self._web.alterar_secoes_web(processo, id_documento, secoes_sanitizadas)
 
+    async def assinar_documento(
+        self,
+        id_documento: str,
+        cargo: str = "",
+        orgao: str = "",
+        processo: str | None = None,
+    ) -> dict:
+        """Assina um documento interno via o form frmAssinaturas (documento_assinar).
+
+        NÃO EXECUTADO/TESTADO contra uma instância real — ver docstring de
+        ``SEIWebClient.assinar_documento_web`` para o porquê (assinatura
+        exige reenvio de senha; a submissão real nunca foi disparada nesta
+        sessão de desenvolvimento).
+        """
+        if processo is None:
+            msg = (
+                "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
+                "para assinar documento."
+            )
+            raise SEINotImplementedError(msg)
+        return await self._web.assinar_documento_web(processo, id_documento, cargo, orgao)
+
     async def alterar_documento_interno(
         self,
         id_documento: str,

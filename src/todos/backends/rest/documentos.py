@@ -168,7 +168,13 @@ class DocumentosRest(_RestMixin):
         """Lista os blocos que contêm um documento."""
         return await self._rest.listar_blocos_documento(id_documento)
 
-    async def assinar_documento(self, id_documento: str, cargo: str = "", orgao: str = "") -> dict:
+    async def assinar_documento(
+        self,
+        id_documento: str,
+        cargo: str = "",
+        orgao: str = "",
+        processo: str | None = None,  # noqa: ARG002 — REST resolve via Solr, não precisa do protocolo
+    ) -> dict:
         """Assina um documento com o cargo informado.
 
         Resolve número SEI → id interno (como `dar_ciencia`), evitando assinar o

@@ -2239,16 +2239,20 @@ class SEIWebClient:
             raise SEIConnectionError(msg)
         return r.content
 
-    async def _get_editor_montar_url(self, protocolo: str, id_documento: str) -> tuple[str, str]:
-        """Retorna (signed_url, referer) para editor_montar de um documento.
+    async def _get_arvore_visualizar_link_var(
+        self, protocolo: str, id_documento: str, nome_variavel: str
+    ) -> tuple[str, str]:
+        """Retorna (signed_url, referer) de uma variável JS `linkX` de um documento.
 
-        `editor_montar` não aparece em `Nos[].acoes` (a lista de ações usada
-        por `_get_doc_signed_url` para outras ações) — a URL assinada só
-        existe como a variável JS `linkEditarConteudo`, embutida na página
-        `arvore_visualizar` que carrega quando o nó do documento é selecionado
-        na árvore (`Nos[].link`, não `Nos[].acoes`). É uma resolução em dois
-        passos: buscar essa página primeiro, depois extrair a variável dela —
-        confirmado em sei.sistemas.ro.gov.br, 2026-07-03 (ver
+        Várias ações de documento (`editor_montar`, `documento_assinar`, ...)
+        não aparecem em `Nos[].acoes` (a lista de ações usada por
+        `_get_doc_signed_url` para outras ações) — a URL assinada só existe
+        como uma variável JS (`linkEditarConteudo`, `linkAssinarDocumento`,
+        etc.), embutida na página `arvore_visualizar` que carrega quando o
+        nó do documento é selecionado na árvore (`Nos[].link`, não
+        `Nos[].acoes`). É uma resolução em dois passos: buscar essa página
+        primeiro, depois extrair a variável dela — confirmado em
+        sei.sistemas.ro.gov.br, 2026-07-03 (ver
         docs/known-issues/2026-07-03-documento-editar-conteudo-crc32.md
         para o contexto completo, incluindo por que o clique na UI quebra
         e como esse caminho HTTP puro evita o bug de JS do próprio SEI).
@@ -2279,15 +2283,91 @@ class SEIWebClient:
             msg = f"arvore_visualizar: {erro}"
             raise SEIConnectionError(msg)
 
-        m = re.search(r"linkEditarConteudo\s*=\s*[\"']([^\"']+)[\"']", html)
+        m = re.search(rf"{re.escape(nome_variavel)}\s*=\s*[\"']([^\"']+)[\"']", html)
         if not m:
             msg = (
-                f"Variável linkEditarConteudo não encontrada para o documento "
-                f"{id_documento} — verifique permissão de edição neste documento."
+                f"Variável {nome_variavel} não encontrada para o documento "
+                f"{id_documento} — verifique permissão neste documento."
             )
             raise SEIParseError(msg)
-        editor_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
-        return editor_url, arvore_visualizar_url
+        link_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
+        return link_url, arvore_visualizar_url
+
+    async def _get_editor_montar_url(self, protocolo: str, id_documento: str) -> tuple[str, str]:
+        """Retorna (signed_url, referer) para editor_montar de um documento."""
+        return await self._get_arvore_visualizar_link_var(
+            protocolo, id_documento, "linkEditarConteudo"
+        )
+
+    async def assinar_documento_web(
+        self,
+        protocolo: str,
+        id_documento: str,
+        cargo: str = "",
+        orgao: str = "",
+    ) -> dict:
+        """Assina um documento interno via o form ``frmAssinaturas`` (documento_assinar).
+
+        Resolvido pelo mesmo padrão de ``_get_arvore_visualizar_link_var``
+        usado para editor_montar: a URL assinada só existe como a variável
+        JS ``linkAssinarDocumento`` na página ``arvore_visualizar``, não em
+        ``Nos[].acoes``. NÃO IMPLEMENTADO/TESTADO CONTRA A INSTÂNCIA REAL —
+        escrito por especificação de código (form + campos confirmados via
+        inspeção manual do DOM em sei.sistemas.ro.gov.br, 2026-07-03), mas a
+        submissão final (POST com senha) nunca foi executada nesta sessão:
+        cada assinatura é um ato jurídico real e irreversível, e a política
+        de segurança do agente que escreveu isto proíbe manipular senha de
+        usuário mesmo vinda do keyring — ver
+        docs/known-issues/2026-07-03-documento-editar-conteudo-crc32.md
+        para o contexto da descoberta do padrão `linkX`.
+
+        O form já vem com valores padrão sensatos pré-selecionados pelo
+        próprio SEI (órgão do usuário logado, cargo mais comumente usado) —
+        ``cargo``/``orgao`` só precisam ser informados para sobrescrever
+        esse padrão. A senha é lida de ``self._senha`` (mesma fonte usada
+        no login — keyring ou ``SEI_SENHA``), nunca logada nem incluída em
+        mensagens de erro.
+        """
+        if not self._senha:
+            msg = (
+                "Nenhuma senha disponível (nem SEI_SENHA nem keyring) — "
+                "necessária para assinar via o backend web nesta instância "
+                "(o form de assinatura exige reautenticação por senha)."
+            )
+            raise SEIValidationError(msg)
+
+        await self.ensure_authenticated()
+        assinar_url, referer = await self._get_arvore_visualizar_link_var(
+            protocolo, id_documento, "linkAssinarDocumento"
+        )
+        r = await self._http.get(assinar_url, headers={"Referer": referer})
+        _check(r)
+        html = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(html)
+        if erro:
+            msg = f"documento_assinar: {erro}"
+            raise SEIConnectionError(msg)
+
+        soup = BeautifulSoup(html, "html.parser")
+        form = soup.find("form", {"id": "frmAssinaturas"})
+        if not isinstance(form, Tag):
+            msg = f"Form frmAssinaturas não encontrado para o documento {id_documento}."
+            raise SEIParseError(msg)
+
+        overrides = {"pwdSenha": self._senha, "btnAssinar": "Assinar"}
+        if cargo:
+            overrides["selCargoFuncao"] = cargo
+        if orgao:
+            overrides["selOrgaoAssinante"] = orgao
+
+        r2 = await self._post_form_preservando(form, str(r.url), overrides, referer=str(r.url))
+        _check(r2)
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro2 = _extrair_erro_sei(body2)
+        if erro2:
+            msg = f"documento_assinar: {erro2}"
+            raise SEIConnectionError(msg)
+        return {"status": "ok", "id_documento": id_documento}
 
     async def listar_secoes_web(self, protocolo: str, id_documento: str) -> dict:
         """Lista seções editáveis de um documento interno via editor_montar."""

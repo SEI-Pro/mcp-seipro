@@ -380,7 +380,13 @@ class SEIBackend:
         """Lista os blocos que contêm um documento."""
         raise NotImplementedError
 
-    async def assinar_documento(self, id_documento: str, cargo: str = "", orgao: str = "") -> dict:
+    async def assinar_documento(
+        self,
+        id_documento: str,
+        cargo: str = "",
+        orgao: str = "",
+        processo: str | None = None,
+    ) -> dict:
         """Assina um documento com o cargo informado."""
         raise NotImplementedError
 

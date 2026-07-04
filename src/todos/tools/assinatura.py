@@ -49,10 +49,21 @@ def _exigir_cargo(cargos: object) -> SEIValidationError:
 
 
 async def _validar_cargo(backend: "SEIBackend", cargo: str) -> None:
-    """Valida que cargo não está vazio; levanta SEIValidationError com lista de opções."""
+    """Valida que cargo não está vazio; levanta SEIValidationError com lista de opções.
+
+    No backend web, ``listar_assinantes`` não está implementado (não existe
+    endpoint equivalente ao REST) e o form de assinatura já vem com um cargo
+    padrão pré-selecionado pelo próprio SEI — então cargo vazio ali não é
+    erro, é "use o padrão do form". Só o REST exige cargo explícito.
+    """
     if not cargo:
         try:
             cargos = await backend.listar_assinantes()
+        except NotImplementedError:
+            logger.debug(
+                "_validar_cargo: listar_assinantes não implementado neste backend — pulando validação"
+            )
+            return
         except SEIConnectionError:
             raise
         except (SEIError, httpx.HTTPError) as exc:
@@ -132,31 +143,46 @@ async def sei_cancelar_assinatura(
 
 
 @mcp.tool(annotations=_DEST)
+@requires_backend
 async def sei_assinar_documento(
     id_documento: str,
     cargo: str = "",
     orgao: str = "",
+    processo: str | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Assina eletronicamente um documento no SEI.
 
     A autenticação é automática — basta informar o documento e o cargo.
 
-    IMPORTANTE: o parâmetro `cargo` é OBRIGATÓRIO. Sem ele a assinatura falha.
-    Se não souber o cargo, chame sem cargo para obter a lista de opções.
-    Pergunte ao usuário qual cargo usar e chame novamente com o cargo escolhido.
-    Grave o cargo escolhido para reutilizar nas próximas assinaturas.
+    No backend REST, o parâmetro `cargo` é OBRIGATÓRIO — sem ele a assinatura
+    falha. Se não souber o cargo, chame sem cargo para obter a lista de
+    opções, pergunte ao usuário qual usar e chame de novo com o cargo
+    escolhido. Grave o cargo escolhido para reutilizar nas próximas
+    assinaturas.
+
+    No backend web (instâncias sem mod-wssei), `cargo`/`orgao` são
+    OPCIONAIS — o próprio formulário de assinatura do SEI já vem com um
+    cargo e órgão padrão pré-selecionados para o usuário logado; omitir
+    esses parâmetros usa esse padrão.
+
+    IMPORTANTE (backend web): esta implementação foi escrita e revisada
+    (lint/type-check) mas NUNCA foi executada contra uma instância real —
+    a submissão exige reenviar a senha do usuário no próprio POST do form
+    do SEI, e nenhuma sessão de desenvolvimento chegou a testá-la de fato.
+    Trate o primeiro uso real com cautela e confirme o resultado no SEI.
 
     Parâmetros:
     - id_documento: ID interno do documento ou número SEI (protocoloFormatado).
-      Se for número SEI, resolve automaticamente via pesquisa Solr.
+      Se for número SEI, resolve automaticamente via pesquisa Solr (REST).
     - cargo: cargo/função para assinatura (ex: "Agente Público").
-      OBRIGATÓRIO. Se omitido, retorna a lista de cargos disponíveis.
+      Obrigatório no REST; opcional no web.
     - orgao: código do órgão (usa o padrão se omitido)
+    - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
     """
-    backend = await _rest_backend(ctx)
+    backend = await _backend(ctx)
     await _validar_cargo(backend, cargo)
-    result = await backend.assinar_documento(id_documento, cargo=cargo, orgao=orgao)
+    result = await backend.assinar_documento(id_documento, cargo=cargo, orgao=orgao, processo=processo)
     return _json(result)
 
 
