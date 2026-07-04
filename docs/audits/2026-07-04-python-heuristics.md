@@ -1,9 +1,24 @@
 # Auditoria de Heurísticas Python — 2026-07-04
 
-Relatório de violações da codebase `todos` contra as heurísticas absolutas de
-design/estilo de Franklin (skill `python-heuristics`): tipos e estrutura,
-onde a lógica deve morar, exceção vs. retorno tipado, funções e fluxo, TDD vs.
-BDD, e ferramental (`ruff`, logging).
+**Commit auditado:** `5495383` (branch `claude/python-heuristics-franklin-hbixtx`,
+`main` em `3547e2c8`). Achados citam arquivo + linha desse commit específico —
+o código já pode ter mudado desde então; confira a linha antes de agir.
+
+Relatório de achados da codebase `todos` contra as heurísticas de design/estilo
+de Franklin (skill `python-heuristics`): tipos e estrutura, onde a lógica deve
+morar, exceção vs. retorno tipado, funções e fluxo, TDD vs. BDD, e ferramental
+(`ruff`, logging).
+
+> **Como usar este documento.** Isto é um backlog de hipóteses priorizadas
+> para investigação, não uma lista de violações que devem virar PR
+> automaticamente. Cada achado foi verificado por leitura direta do código no
+> commit acima, mas a heurística que o motivou pode não se aplicar
+> integralmente ao caso concreto — use julgamento de engenharia antes de
+> corrigir, principalmente nos "Padrões transversais" abaixo: alguns descrevem
+> um princípio geral (ex. "prefira retorno tipado a dict solto") cuja aplicação
+> mecânica item-por-item, sem avaliar o trade-off local, pode piorar a
+> simplicidade do código em vez de melhorá-la (ver ressalvas inline nos itens
+> 3 e 4).
 
 ## Metodologia
 
@@ -13,9 +28,10 @@ BDD, e ferramental (`ruff`, logging).
 - Cada achado abaixo cita arquivo e número de linha e foi verificado por
   leitura direta do código — não é inferido a partir de nomes de arquivo ou
   suposições.
-- Achados são reportados por violação, não por severidade de segurança (para
-  isso já existe `docs/audits/2026-06-25-security-review.md`). Alguns achados
-  aqui coincidem com bugs reais e são sinalizados como **[bug]** no resumo.
+- Achados são reportados por desvio das heurísticas, não por severidade de
+  segurança (para isso já existe `docs/audits/2026-06-25-security-review.md`).
+  Alguns achados aqui coincidem com bugs reais e são sinalizados como **[bug]**
+  no resumo.
 - "Nenhuma violação relevante encontrada" significa que o arquivo foi lido
   por completo e não apresentou desvio das heurísticas — não que não foi
   auditado.
@@ -53,6 +69,13 @@ arquivo no resumo, só nos capítulos)
    Passar o objeto da exceção manualmente como argumento de formatação
    aparece em `hints.py`, `catalog_cache.py`, `backends/rest/_session.py`,
    `backends/rest/blocos.py`, `sei_client.py`, `auth.py`.
+   **Ressalva:** `logger.exception(...)` força nível `ERROR` com traceback —
+   não é um substituto mecânico 1:1 de `logger.warning(..., exc)` em todo
+   ponto listado. Onde o nível `WARNING` já é a escolha deliberada (evento
+   recuperável, não uma falha do sistema), o fix correto é
+   `logger.warning(msg, exc_info=True)` (mantém o nível, ganha o traceback);
+   `logger.exception(...)` só é o fix certo nos pontos que já mereceriam ser
+   `ERROR`. Avaliar caso a caso antes de trocar em massa.
 5. **Comentários "essa parte faz X" sinalizando função grande demais.**
    Recorrente em `sei_web_client.py` (`criar_documento_interno_web`,
    `incluir_documento_externo`, `_arvore_do_processo`, `_login_impl`),
@@ -151,6 +174,14 @@ O uso de `ConfigDict(extra="allow")` como padrão em quase todos os modelos de c
 ### `src/todos/sei_styles.py`
 
 - **[dict solto cruzando módulo]** linhas 9-284 (`SEI_STYLES`) e 288-329 (`STYLE_SHORTCUTS`): dois catálogos de configuração expostos como dicts soltos no nível de módulo, importados por outras partes do sistema — dado de configuração atravessando fronteira de módulo sem `dataclass`/`pydantic`. O dict é heterogêneo (alguns itens têm `recuo`, outros `autonumeracao`, outros `contexto`/`uso`). → Definir `class SeiStyle(BaseModel|dataclass)` com campos opcionais e um `dict[str, SeiStyle]`/lista de instâncias no lugar do dict cru.
+  **Ressalva:** diferente dos dicts de retorno de API/scraper (item 1 do
+  resumo), `SEI_STYLES`/`STYLE_SHORTCUTS` são dados estáticos autorados no
+  próprio código, não parseados de input externo/não confiável — não há
+  fronteira real de validação a ganhar aqui (o guard de drift na linha
+  335-341 já cobre a única invariante que importa). Converter os 39 itens
+  para instâncias de classe é mais cerimônia sem uma correspondente redução
+  de risco; tratar como item de prioridade baixa, não como o mesmo tipo de
+  achado que os dicts de retorno de API/scraper.
 
 O guard de import-time (linhas 335-341) que valida drift entre os dois catálogos é um bom uso de exceção para invariante violado — não é uma violação.
 
