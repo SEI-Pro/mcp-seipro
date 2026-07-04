@@ -622,7 +622,9 @@ class SEIBackend:
         """Cria um bloco de assinatura."""
         raise NotImplementedError
 
-    async def incluir_documento_bloco_assinatura(self, id_bloco: str, documentos: str) -> dict:
+    async def incluir_documento_bloco_assinatura(
+        self, id_bloco: str, documentos: str, processo: str | None = None
+    ) -> dict:
         """Inclui documentos em um bloco de assinatura."""
         raise NotImplementedError
 

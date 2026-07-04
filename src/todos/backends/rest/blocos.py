@@ -86,8 +86,18 @@ class BlocosRest(_RestMixin):
         """Cria um bloco de assinatura."""
         return await self._rest.criar_bloco_assinatura(descricao, unidades)
 
-    async def incluir_documento_bloco_assinatura(self, id_bloco: str, documentos: str) -> dict:
-        """Inclui documentos em um bloco de assinatura."""
+    async def incluir_documento_bloco_assinatura(
+        self,
+        id_bloco: str,
+        documentos: str,
+        _processo: str | None = None,
+    ) -> dict:
+        """Inclui documentos em um bloco de assinatura.
+
+        `_processo` é ignorado neste backend: o REST resolve cada documento
+        via Solr sem precisar do protocolo do processo (diferente do backend
+        web, que exige um único processo por chamada — ver `BlocosWeb`).
+        """
         return await self._rest.incluir_documento_bloco_assinatura(id_bloco, documentos)
 
     async def disponibilizar_bloco_assinatura(self, id_bloco: str) -> dict:
