@@ -226,10 +226,15 @@ Pontos de atenção para quem for portar mais comandos:
 - `typer.Option(...)` virou `cyclopts.Parameter(...)`, mesmo uso dentro de
   `Annotated[...]` — nenhuma mudança de padrão para B008 (ver skill
   `ruff-strict-compliance`).
-- `_FIXED_COMMANDS` agora itera `_app` diretamente (`for name in _app`) em vez
+- `_FIXED_COMMANDS` agora itera `_app` diretamente (`frozenset(_app)`) em vez
   de `_app.registered_commands` — Cyclopts expõe nomes de comando (incluindo
-  `--help`/`-h`/`--version`, filtrados por `not name.startswith("-")`) via
-  `__iter__`, não um atributo `registered_commands`.
+  `--help`/`-h`/`--version`) via `__iter__`, não um atributo
+  `registered_commands`. Os subapps internos são removidos com
+  `- set(_app.help_flags) - set(_app.version_flags)` (propriedades públicas do
+  Cyclopts) em vez de um filtro de prefixo `not name.startswith("-")` —
+  encontrado em revisão de código como um heurística frágil: nada garante que
+  todo nome interno do Cyclopts comece com `-`, nem que um comando nosso nunca
+  comece com `-`.
 - `cyclopts.App(...)` precisa de `name="todos"` explícito — sem isso, o help
   de subcomandos (`todos setup --help`) mostra um prog name incorreto
   derivado do nome da função `@app.default` em vez de `todos`.

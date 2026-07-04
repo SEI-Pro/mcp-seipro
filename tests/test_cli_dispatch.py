@@ -17,7 +17,8 @@ def test_fixed_commands_matches_registered_cyclopts_commands() -> None:
     Regressão: um `@_app.command(...)` futuro sem entrada equivalente aqui
     seria despachado como nome de tool por engano — ver RFC 0018 §6.1.
     """
-    registered = {name for name in server_module._app if not name.startswith("-")}
+    app = server_module._app
+    registered = frozenset(app) - set(app.help_flags) - set(app.version_flags)
     assert registered == server_module._FIXED_COMMANDS
     assert registered == {"setup", "set-password"}
 

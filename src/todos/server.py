@@ -768,9 +768,11 @@ def _cmd_default() -> None:
 
 # Derivado de `_app` (não hardcoded) para nunca desalinhar de um novo
 # `@_app.command(...)` — sem isso, um comando fixo futuro sem entrada aqui
-# seria despachado como nome de tool por engano. Os nomes com "-" (--help,
-# -h, --version) são subapps internos do Cyclopts, não comandos fixos nossos.
-_FIXED_COMMANDS = frozenset(name for name in _app if not name.startswith("-"))
+# seria despachado como nome de tool por engano. `help_flags`/`version_flags`
+# são as próprias listas do Cyclopts para os subapps internos (--help, -h,
+# --version) — usar essas propriedades em vez de checar prefixo "-" evita
+# depender de uma convenção de nome que o Cyclopts não garante.
+_FIXED_COMMANDS = frozenset(_app) - set(_app.help_flags) - set(_app.version_flags)
 
 
 def _is_tool_invocation(argv: list[str]) -> bool:
