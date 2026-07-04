@@ -2107,38 +2107,49 @@ class SEIWebClient:
         # Busca genérica: qualquer URL com acao=X e id_documento=Y
         # (?=&|&amp;|["'\s]) âncora o fim do id para evitar match por prefixo
         # (ex: id=287 não deve casar com id=2874369)
+        # O nome da ação de editar seções varia por instância: "editor_montar"
+        # em algumas, "documento_alterar" nesta (confirmado em
+        # sei.sistemas.ro.gov.br, 2026-07-03) — tenta as duas variantes.
         _id_anchor = r"(?=&(?:amp;)?|[\"'\s])"
-        pattern = (
-            rf"(controlador\.php\?acao={re.escape(acao)}"
-            rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
-            rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+)"
-        )
-        pattern2 = (
-            rf"(controlador\.php\?acao={re.escape(acao)}"
-            rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+"
-            rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
-            rf"[^\"'\s]*)"
-        )
+        acao_candidatos = [acao]
+        if acao == "editor_montar":
+            acao_candidatos.append("documento_alterar")
+        elif acao == "documento_alterar":
+            acao_candidatos.append("editor_montar")
 
-        # Tenta buscar primeiro nas ações específicas do próprio nó
-        if no_alvo and no_alvo.get("acoes_html"):
-            m = re.search(pattern, no_alvo["acoes_html"])
+        for acao_tentada in acao_candidatos:
+            pattern = (
+                rf"(controlador\.php\?acao={re.escape(acao_tentada)}"
+                rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
+                rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+)"
+            )
+            pattern2 = (
+                rf"(controlador\.php\?acao={re.escape(acao_tentada)}"
+                rf"[^\"'\s]*infra_hash=[a-fA-F0-9]+"
+                rf"[^\"'\s]*id_documento={re.escape(id_interno)}{_id_anchor}"
+                rf"[^\"'\s]*)"
+            )
+
+            # Tenta buscar primeiro nas ações específicas do próprio nó
+            if no_alvo and no_alvo.get("acoes_html"):
+                m = re.search(pattern, no_alvo["acoes_html"])
+                if not m:
+                    m = re.search(pattern2, no_alvo["acoes_html"])
+                if m:
+                    return urljoin(sei_base, m.group(1).replace("&amp;", "&")), url_arvore
+
+            # Fallback para busca genérica no HTML inteiro da árvore
+            m = re.search(pattern, html_arvore)
             if not m:
-                m = re.search(pattern2, no_alvo["acoes_html"])
+                m = re.search(pattern2, html_arvore)
             if m:
                 return urljoin(sei_base, m.group(1).replace("&amp;", "&")), url_arvore
 
-        # Fallback para busca genérica no HTML inteiro da árvore
-        m = re.search(pattern, html_arvore)
-        if not m:
-            m = re.search(pattern2, html_arvore)
-        if not m:
-            msg = (
-                f"Ação '{acao}' não encontrada para o documento {id_documento} "
-                f"na árvore do processo {protocolo}."
-            )
-            raise SEIParseError(msg)
-        return urljoin(sei_base, m.group(1).replace("&amp;", "&")), url_arvore
+        msg = (
+            f"Ação '{acao}' não encontrada para o documento {id_documento} "
+            f"na árvore do processo {protocolo}."
+        )
+        raise SEIParseError(msg)
 
     async def consultar_documento_web(self, protocolo: str, id_documento: str) -> dict:
         """Scrape dos metadados de documento_consultar (tipo, data, assinaturas, etc.)."""
