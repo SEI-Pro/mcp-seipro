@@ -90,4 +90,9 @@ jobs:
             echo "::error file=manifest.json::manifest.json (version=$manifest_ver) deve casar com __version__ ($head_ver)."
             exit 1
           fi
-          echo "OK: $base_ver -> $head_ver (manifest em sincronia)"
+          changelog_path="changelog/$head_ver.md"
+          if [ ! -f "$changelog_path" ]; then
+            echo "::error file=$changelog_path::Versão $head_ver bumpada, mas $changelog_path não existe. Adicione uma entrada de changelog antes de mergear."
+            exit 1
+          fi
+          echo "OK: $base_ver -> $head_ver (manifest em sincronia, $changelog_path presente)"
