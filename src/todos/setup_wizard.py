@@ -22,10 +22,12 @@ from pydantic import Field, TypeAdapter
 from pydantic_core import SchemaError as _PydanticSchemaError
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
+from todos import output
 from todos.backends.models import SEIWebClientConfig
 from todos.exceptions import SEIAuthError, SEICredenciaisError, SEIError
 from todos.sei_web_client import SEIWebClient
@@ -1112,3 +1114,112 @@ def run_set_password() -> None:
     _console.print()
     _ok(f"Senha atualizada com sucesso!  [dim]({keyring_user})[/]  Config MCP intacta.")
     _console.print()
+
+
+# ── Provisionamento headless (RFC 0019 §2.3) ─────────────────────────────────
+def _validate_credentials_headless(conn: _SEIConnConfig) -> None:
+    """Login de teste sem interação: `sys.exit(1)` direto em falha, sem `Confirm.ask` de fallback.
+
+    Equivalente não-interativo de `_validate_credentials` — usado quando não
+    há TTY para perguntar "gravar mesmo assim?" (provisionamento por script/CI).
+    """
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("todos").setLevel(logging.WARNING)
+    web_client = SEIWebClient(
+        SEIWebClientConfig(
+            sei_web_url=conn.sei_root,
+            sei_usuario=conn.usuario,
+            sei_senha=conn.senha,
+            sei_sigla_orgao=conn.sigla_orgao,
+            sei_sigla_orgao_sistema=conn.sigla_orgao_sistema,
+            sei_sigla_sistema=conn.sigla_sistema,
+            sei_verify_ssl=not conn.verify_ssl_disabled,
+        )
+    )
+
+    async def _do_login() -> None:
+        try:
+            await web_client.ensure_authenticated()
+        finally:
+            await web_client.close()
+
+    try:
+        asyncio.run(_do_login())
+    except SEICredenciaisError as exc:
+        web_client.limpar_senha()
+        output.emit_human(f"[bold red]Credenciais rejeitadas pelo SEI:[/] {escape(str(exc))}")
+        sys.exit(1)
+    except SEIAuthError as exc:
+        web_client.limpar_senha()
+        output.emit_human(f"[bold red]Falha de autenticação:[/] {escape(str(exc))}")
+        sys.exit(1)
+    except (OSError, ValueError, RuntimeError) as exc:
+        web_client.limpar_senha()
+        output.emit_human(f"[bold red]Erro na validação de login:[/] {escape(str(exc))}")
+        sys.exit(1)
+    else:
+        web_client.limpar_senha()
+
+
+def _save_password_headless(keyring_user: str, senha: str) -> None:
+    """Grava a senha no Keyring sem interação: `sys.exit(1)` direto em falha.
+
+    Equivalente não-interativo de `_save_password_to_keyring` — sem o
+    fallback de "salvar em texto claro?" (não há TTY para perguntar).
+    """
+    try:
+        _keyring.set_password("todos-mcp", keyring_user, senha)
+    except (RuntimeError, OSError, ValueError) as exc:
+        output.emit_human(f"[bold red]Falha ao gravar a senha no Keyring:[/] {escape(str(exc))}")
+        sys.exit(1)
+
+
+def run_setup_headless(
+    inst: _SEIInstanceConfig,
+    usuario: str,
+    senha: str,
+    *,
+    force: bool = False,
+) -> None:
+    """Configura o MCP SEI sem interação — provisionamento por script/CI (RFC 0019 §2.3).
+
+    Pula o wizard inteiro: valida login, grava a senha no Keyring e monta/
+    aplica a config MCP direto. Sem TTY, então qualquer falha aborta com
+    `sys.exit(1)` e uma mensagem clara em vez de perguntar "continuar mesmo
+    assim?" — o chamador (script/CI) decide o que fazer com o exit code.
+
+    `inst` já deve vir com os campos resolvidos e normalizados (mesmo
+    dataclass que `_setup_sei_instance` monta no wizard interativo) — quem
+    chama (tipicamente o parsing de flags de CLI) decide como obtê-los.
+    """
+    if not force:
+        env = _read_existing_todos_env()
+        if env is not None:
+            output.emit_human(
+                "[bold red]MCP 'todos' já está configurado.[/] Use --force para reconfigurar "
+                "do zero, ou 'todos set-password' para trocar só a senha."
+            )
+            sys.exit(1)
+
+    conn = _SEIConnConfig(
+        sei_root=inst.sei_root,
+        usuario=usuario,
+        senha=senha,
+        sigla_orgao=inst.sigla_orgao,
+        sigla_orgao_sistema=inst.sigla_orgao_sistema,
+        sigla_sistema=inst.sigla_sistema,
+        verify_ssl_disabled=inst.verify_ssl_disabled,
+    )
+    _validate_credentials_headless(conn)
+
+    keyring_user = _compute_keyring_user(usuario, inst.sei_root)
+    _save_password_headless(keyring_user, senha)
+
+    # senha="" (não o valor real): keyring já gravou a senha acima, e SEI_SENHA
+    # vazio no mcp_env é o sinal (mesma convenção do wizard interativo) de que
+    # o runtime deve resolver a senha via keyring, não via env var em texto claro.
+    mcp_env, using_plaintext_password = _build_mcp_env(inst, usuario, "")
+    _deploy_mcp_configs(mcp_env, using_plaintext_password=using_plaintext_password)
+    output.emit_result(
+        f"todos configurado sem interação (usuário: {usuario!r}, SEI: {inst.sei_root!r})."
+    )

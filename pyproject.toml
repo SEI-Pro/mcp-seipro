@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "todos-sei"
 dynamic = ["version"]
-description = "TOdos Domina O Sei — MCP server para o SEI com 127 tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
+description = "TOdos Domina O Sei — MCP server para o SEI com 129 tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -148,3 +148,11 @@ skips = [
     "B101",  # assert ok in non-test code here
     "B104",  # 0.0.0.0 intencional — deploy Railway/container
 ]
+
+[tool.ty.rules]
+# `llm` é um extra opcional (litellm/pymupdf, ver [project.optional-dependencies])
+# guardado por try/except ImportError em tools/analise.py — o CI de tipos roda só
+# com o grupo `dev` instalado (sem `llm`), então sem isso todo run reportaria
+# unresolved-import nesses dois imports condicionais, mesmo eles sendo tratados
+# corretamente em runtime. RFC 0019 §2.6 (mesma supressão documentada no pink).
+unresolved-import = "ignore"

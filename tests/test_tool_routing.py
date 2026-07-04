@@ -897,6 +897,8 @@ _TOOLS_WITHOUT_ROUTING: frozenset[str] = frozenset(
         # --- configuracao.py: keyring + descoberta (RFC 0010) ---
         "sei_detectar_formato_protocolo",  # orquestra listar_processos + inferência + keyring
         "sei_redefinir_formato_protocolo",  # remove entrada keyring (sem op de backend)
+        "sei_cache_status",  # CatalogCache local, sem backend SEI (RFC 0019 §2.2)
+        "sei_cache_clear",  # CatalogCache local, sem backend SEI (RFC 0019 §2.2)
         # --- analise.py: LLM multimodal (RFC 0013) ---
         "sei_analisar_processo",  # orquestra gerar_pdf_processo + LLM call (multi-step, sem routing único de backend)
     }

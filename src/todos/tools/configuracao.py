@@ -26,8 +26,9 @@ from fastmcp import Context
 from pydantic import Field
 
 from todos.backends.choice import requires_backend
+from todos.catalog_cache import get_catalog_cache
 from todos.exceptions import SEIValidationError
-from todos.mcp_app import _IDEM, _backend, _get_web_client, _json, mcp
+from todos.mcp_app import _IDEM, _READ, _backend, _get_web_client, _json, mcp
 from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -336,3 +337,41 @@ async def sei_redefinir_formato_protocolo(
             "_next": [{"tool": "sei_detectar_formato_protocolo", "args": {}}],
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Cache de catálogos (RFC 0019 §2.2)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(annotations=_READ)
+async def sei_cache_status() -> str:
+    """Retorna estatísticas do cache de catálogos em disco (total, fresh, bytes).
+
+    - total: número de entradas armazenadas (válidas ou expiradas, ainda não varridas)
+    - fresh: entradas ainda dentro do TTL (não expiradas)
+    - bytes: tamanho em disco do arquivo de cache (inclui WAL/SHM não sincronizados)
+    """
+    stats = await get_catalog_cache().stats()
+    return _json(stats)
+
+
+@mcp.tool(annotations=_IDEM)
+async def sei_cache_clear(
+    older_than_seconds: Annotated[
+        float | None,
+        Field(
+            description="Remove só entradas gravadas há mais tempo que isso; omitido = limpa tudo."
+        ),
+    ] = None,
+) -> str:
+    """Limpa o cache de catálogos em disco, total ou seletivamente.
+
+    - older_than_seconds: remove só entradas com essa idade ou mais. Entradas de
+      antes desta funcionalidade (sem data de gravação registrada) contam como
+      antigas e são removidas. Omitido: limpa o cache inteiro.
+
+    Retorna quantas entradas foram removidas.
+    """
+    removidas = await get_catalog_cache().clear(older_than_seconds=older_than_seconds)
+    return _json({"removidas": removidas})

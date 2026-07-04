@@ -34,7 +34,7 @@ class CatalogCache:
         self._init_db()
 
     def _init_db(self) -> None:
-        """Inicializa a tabela SQLite se ela não existir."""
+        """Inicializa a tabela SQLite se ela não existir (e migra `created_at` se faltar)."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
@@ -42,10 +42,17 @@ class CatalogCache:
                 CREATE TABLE IF NOT EXISTS catalogs (
                     key TEXT PRIMARY KEY,
                     value TEXT,
-                    expires_at REAL
+                    expires_at REAL,
+                    created_at REAL
                 )
                 """
             )
+            # Migração para bancos criados antes de `created_at` existir (usado só
+            # por `clear(older_than_seconds=...)`) — linhas antigas ficam com
+            # created_at NULL, tratado como "idade desconhecida" em `_clear_sync`.
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(catalogs)")}
+            if "created_at" not in existing_cols:
+                conn.execute("ALTER TABLE catalogs ADD COLUMN created_at REAL")
 
     @staticmethod
     def make_key(namespace: dict[str, str], key: str) -> str:
@@ -99,10 +106,10 @@ class CatalogCache:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO catalogs (key, value, expires_at)
-                VALUES (?, ?, ?)
+                INSERT OR REPLACE INTO catalogs (key, value, expires_at, created_at)
+                VALUES (?, ?, ?, ?)
                 """,
-                (db_key, val_str, expires_at),
+                (db_key, val_str, expires_at, now),
             )
             # Probabilistic sweep (5%) — full cleanup available via cleanup()
             if _rng.random() < _SWEEP_PROBABILITY:
@@ -150,6 +157,49 @@ class CatalogCache:
         now = time.time()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("DELETE FROM catalogs WHERE expires_at < ?", (now,))
+            return cursor.rowcount
+
+    async def stats(self) -> dict[str, int]:
+        """Estatísticas agregadas: total de entradas, entradas ainda válidas (fresh) e bytes em disco."""
+        return await asyncio.to_thread(self._stats_sync)
+
+    def _stats_sync(self) -> dict[str, int]:
+        now = time.time()
+        with sqlite3.connect(self.db_path) as conn:
+            total = conn.execute("SELECT COUNT(*) FROM catalogs").fetchone()[0]
+            fresh = conn.execute(
+                "SELECT COUNT(*) FROM catalogs WHERE expires_at > ?", (now,)
+            ).fetchone()[0]
+        # Soma o arquivo principal + WAL/SHM (modo WAL pode manter dados ainda não
+        # "checkpointed" de volta ao arquivo principal) — sem isso, `bytes` subestima
+        # o uso real de disco logo após escritas recentes.
+        bytes_used = sum(
+            path.stat().st_size
+            for suffix in ("", "-wal", "-shm")
+            if (path := self.db_path.with_name(self.db_path.name + suffix)).exists()
+        )
+        return {"total": total, "fresh": fresh, "bytes": bytes_used}
+
+    async def clear(self, *, older_than_seconds: float | None = None) -> int:
+        """Remove entradas do cache. Retorna a quantidade removida.
+
+        Sem `older_than_seconds`: limpa tudo. Com `older_than_seconds`: remove só
+        entradas gravadas há mais tempo que isso — linhas de bancos anteriores à
+        migração de `created_at` (NULL) contam como "idade desconhecida" e são
+        tratadas como antigas (elegíveis pra remoção), já que não há como saber
+        quando foram escritas.
+        """
+        return await asyncio.to_thread(self._clear_sync, older_than_seconds)
+
+    def _clear_sync(self, older_than_seconds: float | None) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            if older_than_seconds is None:
+                cursor = conn.execute("DELETE FROM catalogs")
+            else:
+                cutoff = time.time() - older_than_seconds
+                cursor = conn.execute(
+                    "DELETE FROM catalogs WHERE created_at IS NULL OR created_at < ?", (cutoff,)
+                )
             return cursor.rowcount
 
     async def close(self) -> None:
