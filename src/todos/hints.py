@@ -19,7 +19,6 @@ _DEFAULT_HINTS: list[str] = [
     "Use sei_ler_documento com o id do documento para ler o conteúdo.",
     "Para criar um processo, use sei_criar_processo. Descubra tipos com sei_pesquisar_tipos_processo.",
     "Para enviar um processo a outra unidade, use sei_enviar_processo.",
-    "Na primeira sessão com uma nova instância SEI, chame sei_detectar_formato_protocolo para configurar automaticamente a validação de números de processo.",
 ]
 
 

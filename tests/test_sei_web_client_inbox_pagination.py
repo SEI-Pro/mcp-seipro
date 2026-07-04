@@ -99,7 +99,9 @@ def _fake_sei_server(pages: dict[str, str]) -> Any:
     "0" page below, and the pagination test fails.
     """
 
-    async def fake_post(url: str, *, data: dict[str, str] | None = None, **_kw: Any) -> httpx.Response:
+    async def fake_post(
+        url: str, *, data: dict[str, str] | None = None, **_kw: Any
+    ) -> httpx.Response:
         assert url == _POST_URL
         posted = data or {}
         pagina = posted.get("hdnDetalhadoPaginaAtual", "0")
@@ -114,7 +116,9 @@ class TestFetchInboxPaginationAdvances:
         client = _client_with_form()
         captured: dict[str, str] = {}
 
-        async def fake_post(url: str, *, data: dict[str, str] | None = None, **_kw: Any) -> httpx.Response:
+        async def fake_post(
+            url: str, *, data: dict[str, str] | None = None, **_kw: Any
+        ) -> httpx.Response:
             captured.update(data or {})
             return _resp(url, _inbox_html(pagina_atual=1, ids=["200", "201"]))
 
