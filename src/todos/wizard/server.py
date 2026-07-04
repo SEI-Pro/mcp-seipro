@@ -269,11 +269,13 @@ class _WizardHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "URL do SEI é obrigatória"})
             return
         login_url = f"{sei_root}/sei/controlador.php?acao=login"
+        verify_ssl_disabled = bool(body.get("verify_ssl_disabled", False))
 
         organs: list[tuple[str, str]] = []
-        verify_ssl_disabled = False
         try:
-            organs, _sos, _ss = _detect_organs(login_url, "", "", verify_ssl=True)
+            organs, _sos, _ss = _detect_organs(
+                login_url, "", "", verify_ssl=not verify_ssl_disabled
+            )
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
             logger.warning("wizard: organ detection over TLS failed for %s: %s", sei_root, exc)
 
@@ -373,6 +375,23 @@ class _WizardHandler(http.server.BaseHTTPRequestHandler):
 
 class _ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
+
+
+def browser_available() -> bool:
+    """Return whether `webbrowser` can locate a usable browser controller.
+
+    `webbrowser.open()` returns `False` on failure instead of raising, so a
+    headless/SSH/container environment with no browser would otherwise
+    silently start the wizard HTTP server with nobody able to reach it.
+    `webbrowser.get()` raises `webbrowser.Error` when no controller is
+    registered — the caller uses this to fall back to the CLI wizard
+    instead of starting a server nobody can open.
+    """
+    try:
+        webbrowser.get()
+    except webbrowser.Error:
+        return False
+    return True
 
 
 def run_wizard(port: int = 7789, *, open_browser: bool = True, force: bool = False) -> None:

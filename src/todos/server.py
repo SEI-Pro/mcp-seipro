@@ -57,7 +57,7 @@ from todos.tools import (
     processos,
     unidades,
 )
-from todos.wizard.server import run_wizard
+from todos.wizard.server import browser_available, run_wizard
 
 # Submódulos de tools por domínio. Importá-los registra suas @mcp.tool no `mcp`
 # compartilhado; a tupla mantém a referência viva (e satisfaz o linter). As tools
@@ -755,9 +755,18 @@ def _cmd_setup(
     órgão/mod-wssei, validação de credenciais e gravação no Keyring do
     wizard de terminal, servido por um formulário local (mesmo padrão do
     `pink setup`, projeto irmão). Passe `--cli` para o wizard de texto no
-    terminal (5 passos), útil em ambientes sem browser (SSH, container).
+    terminal (5 passos), útil em ambientes sem browser (SSH, container) —
+    e é o fallback automático quando nenhum navegador utilizável é
+    detectado no ambiente.
     """
     if cli:
+        run_setup_wizard(force=force)
+        return
+    if not browser_available():
+        sys.stdout.write(
+            "Nenhum navegador utilizável foi detectado neste ambiente "
+            "(SSH/container?) — usando o wizard de texto no terminal.\n"
+        )
         run_setup_wizard(force=force)
         return
     run_wizard(force=force)

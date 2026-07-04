@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>TOdos — Configuração</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="pico.min.css">
   <link rel="stylesheet" href="wizard.css">
 </head>
 <body>
@@ -46,11 +46,15 @@
           <input id="sei_sigla_orgao" placeholder="Sigla do órgão (ex.: RO)">
           <small id="sei_sigla_orgao_err" class="field-err hidden"></small>
 
-          <details id="modsei_details" hidden>
+          <details id="modsei_details">
             <summary>Opções avançadas</summary>
             <label for="rest_url" style="margin-top:0.75rem">URL REST do mod-wssei <small>(vazio = modo web-only)</small></label>
             <input id="rest_url" placeholder="https://sei.orgao.gov.br/sei/modulos/wssei/...">
             <small id="modsei_note" class="muted-note"></small>
+            <label for="verify_ssl_disabled">
+              <input type="checkbox" id="verify_ssl_disabled" role="switch">
+              Desativar verificação SSL (instâncias com certificado autoassinado)
+            </label>
           </details>
         </fieldset>
 

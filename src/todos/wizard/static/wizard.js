@@ -161,8 +161,13 @@ async function detectInstance() {
     return;
   }
 
+  const verifySslDisabled = document.getElementById('verify_ssl_disabled').checked;
+
   showSpinner('detect_spin', true);
-  const res = await post('/api/detect-instance', { sei_url: seiUrl });
+  const res = await post('/api/detect-instance', {
+    sei_url: seiUrl,
+    verify_ssl_disabled: verifySslDisabled,
+  });
   showSpinner('detect_spin', false);
 
   if (!res.ok) {
@@ -228,6 +233,7 @@ async function testLogin() {
     sei_usuario: usuario,
     sei_senha: senha,
     sei_sigla_orgao: siglaOrgao,
+    verify_ssl_disabled: document.getElementById('verify_ssl_disabled').checked,
   });
   showSpinner('login_spin', false);
   loginValidated = res.ok;
@@ -292,6 +298,7 @@ async function doSave() {
     sei_orgao: orgaoId,
     sei_sigla_orgao_sistema: '',
     sei_sigla_sistema: '',
+    verify_ssl_disabled: document.getElementById('verify_ssl_disabled').checked,
   };
 
   showSpinner('save_spin', true);
