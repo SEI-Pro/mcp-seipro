@@ -43,7 +43,12 @@ from todos.mcp_app import (
 from todos.remote import run_remote
 from todos.responses import NextAction, ResultadoPesquisaProcessos
 from todos.sei_web_client import SEI_WEB_PAGE_SIZE
-from todos.setup_wizard import run_set_password, run_setup_wizard
+from todos.setup_wizard import (
+    _SEIInstanceConfig,
+    run_set_password,
+    run_setup_headless,
+    run_setup_wizard,
+)
 from todos.tools import (
     acompanhamento,
     analise,
@@ -749,8 +754,54 @@ def _cmd_setup(
             help="Usa o wizard de texto no terminal em vez do navegador (comportamento antigo).",
         ),
     ] = False,
+    usuario: Annotated[
+        str,
+        cyclopts.Parameter(
+            name="--usuario", help="Provisionamento sem interação: usuário do SEI (com --senha)."
+        ),
+    ] = "",
+    senha: Annotated[
+        str,
+        cyclopts.Parameter(
+            name="--senha", help="Provisionamento sem interação: senha do SEI (com --usuario)."
+        ),
+    ] = "",
+    sei_web_url: Annotated[
+        str,
+        cyclopts.Parameter(name="--sei-web-url", help="Headless: URL raiz do SEI (obrigatório)."),
+    ] = "",
+    sei_sigla_orgao: Annotated[
+        str,
+        cyclopts.Parameter(
+            name="--sei-sigla-orgao", help="Headless: sigla do órgão (obrigatório)."
+        ),
+    ] = "",
+    sei_orgao_id: Annotated[
+        str,
+        cyclopts.Parameter(name="--sei-orgao-id", help="Headless: código numérico do órgão."),
+    ] = "0",
+    sei_rest_url: Annotated[
+        str,
+        cyclopts.Parameter(
+            name="--sei-rest-url", help="Headless: URL REST do mod-wssei (vazio = web-only)."
+        ),
+    ] = "",
+    sei_sigla_orgao_sistema: Annotated[
+        str,
+        cyclopts.Parameter(name="--sei-sigla-orgao-sistema", help="Headless: sigla no sistema."),
+    ] = "",
+    sei_sigla_sistema: Annotated[
+        str,
+        cyclopts.Parameter(name="--sei-sigla-sistema", help="Headless: sigla do sistema."),
+    ] = "",
+    verify_ssl_disabled: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name="--verify-ssl-disabled", help="Headless: desativa verificação SSL."
+        ),
+    ] = False,
 ) -> None:
-    """Configurar o MCP SEI interativamente (wizard de primeira vez).
+    """Configurar o MCP SEI (wizard de primeira vez, ou sem interação via flags).
 
     Por padrão abre o wizard no navegador — mesmo backend de detecção de
     órgão/mod-wssei, validação de credenciais e gravação no Keyring do
@@ -759,7 +810,30 @@ def _cmd_setup(
     terminal (5 passos), útil em ambientes sem browser (SSH, container) —
     e é o fallback automático quando nenhum navegador utilizável é
     detectado no ambiente.
+
+    Para provisionamento por script/CI sem TTY (RFC 0019 §2.3), passe
+    `--usuario`/`--senha`/`--sei-web-url`/`--sei-sigla-orgao`: pula o wizard
+    inteiro (interativo ou web) e grava direto no Keyring — mesmo espírito de
+    `pink setup --metabase-usuario X --metabase-senha Y`.
     """
+    if usuario or senha:
+        if not (usuario and senha and sei_web_url and sei_sigla_orgao):
+            output.emit_human(
+                "[bold red]Erro:[/] provisionamento sem interação exige "
+                "--usuario, --senha, --sei-web-url e --sei-sigla-orgao juntos."
+            )
+            raise SystemExit(2)
+        inst = _SEIInstanceConfig(
+            sei_root=sei_web_url.strip().rstrip("/"),
+            rest_url=sei_rest_url,
+            sigla_orgao=sei_sigla_orgao,
+            sigla_orgao_sistema=sei_sigla_orgao_sistema,
+            sigla_sistema=sei_sigla_sistema,
+            orgao_id=sei_orgao_id,
+            verify_ssl_disabled=verify_ssl_disabled,
+        )
+        run_setup_headless(inst, usuario, senha, force=force)
+        return
     if cli:
         run_setup_wizard(force=force)
         return
@@ -834,7 +908,7 @@ def _cmd_skill_install(
 
 @_app.default
 def _cmd_default() -> None:
-    """MCP Server para o SEI — 127 tools, scraper HTTP + REST híbrido.
+    """MCP Server para o SEI — 129 tools, scraper HTTP + REST híbrido.
 
     Sem subcomando, sobe o servidor MCP (stdio ou HTTP conforme $PORT).
     Além de `setup`/`set-password`, qualquer outro nome vira uma chamada de
