@@ -176,8 +176,9 @@ class _SEIMarkdownConverter(MarkdownConverter):
     attribute is absent, instead of varying by content heuristics.
     """
 
-    def convert_tr(self, el: object, text: str, _parent_tags: object) -> str:
+    def convert_tr(self, el: object, text: str, parent_tags: object) -> str:
         """Convert a table row, honouring per-cell HTML align attributes."""
+        del parent_tags  # unused; name is dictated by markdownify's calling convention
         cells = el.find_all(["td", "th"]) if isinstance(el, Tag) else []
         is_first_row = isinstance(el, Tag) and el.find_previous_sibling() is None
         parent = el.parent if isinstance(el, Tag) else None

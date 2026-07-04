@@ -424,7 +424,8 @@ def _mcp_add_via_cli(
             return False
         else:
             return True
-    except OSError:
+    except OSError as exc:
+        _logger_setup.warning("mcp add falhou: %s", exc)
         return False
     else:
         return True
@@ -566,7 +567,8 @@ def _update_codex_via_cli(codex_cli: str, todos_cmd: str, mcp_env: dict[str, str
                 _ok("Atualizado: Codex (global) via `codex mcp add`")
                 return True
         return False
-    except OSError:
+    except OSError as exc:
+        _logger_setup.warning("codex mcp add falhou: %s", exc)
         return False
     else:
         _ok("Atualizado: Codex (global) via `codex mcp add`")
