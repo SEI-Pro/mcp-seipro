@@ -73,11 +73,17 @@ _R4_OK = f"<script>document.getElementById('ifrDownload').src = '{_DOWNLOAD_URL}
 _R5_OK = b"%PDF-1.4 fake content"
 
 
-def _resp(url: str, *, text: str | None = None, content: bytes | None = None) -> httpx.Response:
+def _resp(
+    url: str,
+    *,
+    text: str | None = None,
+    content: bytes | None = None,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
     request = httpx.Request("GET", url)
     if content is not None:
-        return httpx.Response(200, content=content, request=request)
-    return httpx.Response(200, text=text or "", request=request)
+        return httpx.Response(200, content=content, request=request, headers=headers)
+    return httpx.Response(200, text=text or "", request=request, headers=headers)
 
 
 def _client_with_session() -> SEIWebClient:
@@ -122,8 +128,10 @@ class TestGerarArquivoProcessoHappyPath:
         client._http.get = AsyncMock(side_effect=fake_get)  # type: ignore[method-assign]
         client._http.post = AsyncMock(side_effect=fake_post)  # type: ignore[method-assign]
 
-        content = asyncio.run(client._gerar_arquivo_processo(_PROTOCOLO, "procedimento_gerar_pdf"))
-        assert content == _R5_OK
+        resultado = asyncio.run(
+            client._gerar_arquivo_processo(_PROTOCOLO, "procedimento_gerar_pdf")
+        )
+        assert resultado.conteudo == _R5_OK
 
 
 class TestGerarArquivoProcessoSessionExpiry:
@@ -163,8 +171,10 @@ class TestGerarArquivoProcessoSessionExpiry:
         relogin_calls: list[int] = []
         client.login = _fake_login(client, relogin_calls)  # type: ignore[method-assign]
 
-        content = asyncio.run(client._gerar_arquivo_processo(_PROTOCOLO, "procedimento_gerar_pdf"))
-        assert content == _R5_OK
+        resultado = asyncio.run(
+            client._gerar_arquivo_processo(_PROTOCOLO, "procedimento_gerar_pdf")
+        )
+        assert resultado.conteudo == _R5_OK
         assert len(relogin_calls) == 1
         assert calls["arvore"] == 2  # first hit (expired) + retry (fresh)
 
@@ -216,8 +226,10 @@ class TestGerarArquivoProcessoSessionExpiry:
         client._http.post = AsyncMock(side_effect=fake_post)  # type: ignore[method-assign]
         client.login = _fake_login(client)  # type: ignore[method-assign]
 
-        content = asyncio.run(client._gerar_arquivo_processo(_PROTOCOLO, "procedimento_gerar_pdf"))
-        assert content == _R5_OK
+        resultado = asyncio.run(
+            client._gerar_arquivo_processo(_PROTOCOLO, "procedimento_gerar_pdf")
+        )
+        assert resultado.conteudo == _R5_OK
         assert calls["download"] == 2
 
 
@@ -264,8 +276,10 @@ class TestGerarArquivoProcessoStaleCacheKeyRetry:
         client._http.post = AsyncMock(side_effect=fake_post)  # type: ignore[method-assign]
         client.login = _fake_login(client)  # type: ignore[method-assign]
 
-        content = asyncio.run(client._gerar_arquivo_processo(_PROTOCOLO, "procedimento_gerar_pdf"))
-        assert content == _R5_OK
+        resultado = asyncio.run(
+            client._gerar_arquivo_processo(_PROTOCOLO, "procedimento_gerar_pdf")
+        )
+        assert resultado.conteudo == _R5_OK
         assert stale_key not in client._trabalhar_links
 
 
@@ -285,3 +299,38 @@ class TestGerarArquivoProcessoStillRaisesOnGenuineParseFailures:
 
         with pytest.raises(SEIParseError, match="ifrArvore"):
             asyncio.run(client._gerar_arquivo_processo(_PROTOCOLO, "procedimento_gerar_pdf"))
+
+
+class TestGerarPdfProcessoContentTypeMismatch:
+    def test_error_message_reports_the_actual_content_type(self) -> None:
+        """gerar_pdf_processo must report the real Content-Type of the
+        unexpected response it received, not a hardcoded placeholder —
+        regression test for a bug where the error message always said
+        '(desconhecido)' regardless of what the server actually sent."""
+        client = _client_with_session()
+
+        async def fake_get(url: str, **_kw: Any) -> httpx.Response:
+            if url == _TRAB_URL:
+                return _resp(_TRAB_URL, text=_R1_OK)
+            if url == _ARVORE_URL:
+                return _resp(_ARVORE_URL, text=_R2_OK)
+            if url == _FORM_URL:
+                return _resp(_FORM_URL, text=_R3_OK)
+            if url == _DOWNLOAD_URL:
+                return _resp(
+                    _DOWNLOAD_URL,
+                    content=b"<html><body>sessao expirada?</body></html>",
+                    headers={"content-type": "text/html; charset=utf-8"},
+                )
+            msg = f"unexpected GET {url}"
+            raise AssertionError(msg)
+
+        async def fake_post(url: str, **_kw: Any) -> httpx.Response:
+            assert url == _POST_URL
+            return _resp(_POST_URL, text=_R4_OK)
+
+        client._http.get = AsyncMock(side_effect=fake_get)  # type: ignore[method-assign]
+        client._http.post = AsyncMock(side_effect=fake_post)  # type: ignore[method-assign]
+
+        with pytest.raises(SEIParseError, match="text/html"):
+            asyncio.run(client.gerar_pdf_processo(_PROTOCOLO))
