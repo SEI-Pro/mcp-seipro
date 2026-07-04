@@ -14,7 +14,6 @@ ser objetos reais (não strings adiadas).
 from fastmcp import Context
 
 from todos.mcp_app import _DEST, _READ, _json, _web_backend, mcp
-from todos.responses import NextAction
 
 
 @mcp.tool(annotations=_READ)
@@ -30,6 +29,10 @@ async def sei_inspecionar_pagina(
     existentes quando a ação desejada ainda não tem uma tool dedicada:
     inspecione a página onde a ação deveria aparecer (ex: obtida de outra
     tool, ou por navegação manual) e veja o que está disponível.
+
+    `url` precisa ser da mesma instância SEI configurada (mesmo
+    scheme+host) — URLs externas são rejeitadas antes de qualquer request,
+    assim como qualquer redirect que tente sair da instância.
 
     Parâmetros:
     - url: URL absoluta do SEI, já assinada com infra_hash (obtida de outra
@@ -53,14 +56,6 @@ async def sei_inspecionar_pagina(
     """
     backend = await _web_backend(ctx)
     result = await backend.inspecionar_pagina(url, incluir_raw=incluir_raw)
-    if result.get("formularios"):
-        result["_next"] = [
-            NextAction(
-                tool="sei_submeter_form",
-                args={"url_pagina": url, "form_id": result["formularios"][0].get("id")},
-                reason="Submeta o primeiro form encontrado, com os overrides desejados.",
-            ).model_dump()
-        ]
     return _json(result)
 
 
@@ -87,6 +82,11 @@ async def sei_submeter_form(
     chamar esta tool, confirme o resultado com sei_inspecionar_pagina (ou
     outra tool de leitura) comparando o estado antes/depois — não confie
     só no status_code/erro devolvidos aqui.
+
+    `url_pagina`, `url_destino` e o action resolvido do form precisam ser
+    da mesma instância SEI configurada (mesmo scheme+host) — URLs externas
+    são rejeitadas antes de qualquer request, assim como qualquer redirect
+    que tente sair da instância.
 
     Parâmetros:
     - url_pagina: URL da página que contém o form (será rebuscada, não
