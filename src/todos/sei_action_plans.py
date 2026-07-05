@@ -35,7 +35,6 @@ from todos.sei_web_client import (
 
 _PAGE_TTL_SECONDS = 120.0
 _MAX_REDIRECTS = 5
-_LITERAL_TOKEN_MIN_LENGTH = 2
 
 # A request method alone is not a safety classification: SEI uses GET for
 # several state-changing actions. Inspection follows only known page routes.
@@ -507,7 +506,7 @@ def _public_plan(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _inspect_html(  # noqa: C901
+def _inspect_html(  # noqa: C901, PLR0912, PLR0915
     html: str,
     base_url: str,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
@@ -608,10 +607,13 @@ def _inspect_html(  # noqa: C901
             continue
         callback = _parse_js_call(onclick)
         name_match = re.match(r"^\s*([A-Za-z_$][\w$]*)\s*\(", onclick)
-        if callback is None and name_match is None:
-            continue
-        function_name = callback[0] if callback else name_match.group(1)
-        arguments = callback[1] if callback else []
+        if callback is None:
+            if name_match is None:
+                continue
+            function_name = name_match.group(1)
+            arguments: list[str] = []
+        else:
+            function_name, arguments = callback
         sequence += 1
         trigger_id = f"callback:{index}:{function_name}"
         label = element.get_text(" ", strip=True) or str(element.get("title", "")) or function_name
