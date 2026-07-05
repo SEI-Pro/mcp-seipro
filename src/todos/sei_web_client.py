@@ -315,7 +315,7 @@ def _extrair_incluir_documento_href(html_arvore: str) -> str | None:
             html_arvore,
         )
         if m_href:
-            incluir_href = m_href.group(0)
+            incluir_href = m_href.group(0).replace("&amp;", "&")
     return incluir_href
 
 
@@ -5026,41 +5026,8 @@ class SEIWebClient:
         r2 = await self._http.get(arvore_url, headers={"Referer": str(r1.url)})
         _check(r2)
 
-        acoes_html = ""
-        for pat in (
-            r"(?s)Nos\[0\]\.acoes\s*=\s*'((?:[^'\\]|\\.)*)'",
-            r'(?s)Nos\[0\]\.acoes\s*=\s*"((?:[^"\\]|\\.)*)"',
-        ):
-            m = re.search(pat, r2.text)
-            if m:
-                acoes_html = (
-                    m.group(1).replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
-                )
-                break
-
-        if not acoes_html:
-            msg = (
-                "Nos[0].acoes não encontrado — o processo pode estar concluído "
-                "ou você não tem permissão para incluir documentos nele."
-            )
-            raise SEIParseError(msg)
-
         sei_base = f"{self.sei_root}/sei/"
-        soup_acoes = BeautifulSoup(acoes_html, "html.parser")
-        incluir_href: str | None = None
-        for a in soup_acoes.find_all("a", href=re.compile(r"documento_escolher_tipo")):
-            incluir_href = _tag_str(a, "href").replace("&amp;", "&")
-            break
-        if not incluir_href:
-            for img in soup_acoes.find_all("img"):
-                if "Incluir" in (img.get("title", "") or "") or "incluir" in (
-                    img.get("src", "") or ""
-                ):
-                    pa = img.find_parent("a")
-                    if pa:
-                        incluir_href = _tag_str(pa, "href").replace("&amp;", "&")
-                        break
-
+        incluir_href = _extrair_incluir_documento_href(r2.text)
         if not incluir_href:
             msg = (
                 "Link 'Incluir Documento' não encontrado nas ações do processo. "
