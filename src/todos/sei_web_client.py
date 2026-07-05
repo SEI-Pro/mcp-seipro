@@ -2526,15 +2526,15 @@ class SEIWebClient:
         Resolvido pelo mesmo padrão de ``_get_arvore_visualizar_link_var``
         usado para editor_montar: a URL assinada só existe como a variável
         JS ``linkAssinarDocumento`` na página ``arvore_visualizar``, não em
-        ``Nos[].acoes``. NÃO IMPLEMENTADO/TESTADO CONTRA A INSTÂNCIA REAL —
-        escrito por especificação de código (form + campos confirmados via
-        inspeção manual do DOM em sei.sistemas.ro.gov.br, 2026-07-03), mas a
-        submissão final (POST com senha) nunca foi executada nesta sessão:
-        cada assinatura é um ato jurídico real e irreversível, e a política
-        de segurança do agente que escreveu isto proíbe manipular senha de
-        usuário mesmo vinda do keyring — ver
-        docs/known-issues/2026-07-03-documento-editar-conteudo-crc32.md
-        para o contexto da descoberta do padrão `linkX`.
+        ``Nos[].acoes``. Confirmado ao vivo (2026-07-04, ver
+        docs/rfc/0023-assinatura-documento-web-post-senha-falha.md): o
+        payload precisa replicar exatamente o que o JS real
+        ``assinarSenha()`` faz antes de ``frmAssinaturas.submit()`` —
+        ``pwdSenha`` e ``hdnFormaAutenticacao="S"``. Uma primeira tentativa
+        sem ``hdnFormaAutenticacao`` falhou silenciosamente (o SEI reexibe o
+        mesmo form, sem nenhum erro explícito); o override de ``orgao``
+        também usava o nome de campo errado (``selOrgaoAssinante`` em vez de
+        ``selOrgao``, o nome real do select no form).
 
         O form já vem com valores padrão sensatos pré-selecionados pelo
         próprio SEI (órgão do usuário logado, cargo mais comumente usado) —
@@ -2542,6 +2542,11 @@ class SEIWebClient:
         esse padrão. A senha é lida de ``self._senha`` (mesma fonte usada
         no login — keyring ou ``SEI_SENHA``), nunca logada nem incluída em
         mensagens de erro.
+
+        Após o POST, confirma que o form ``frmAssinaturas`` não está mais
+        presente na resposta — sem essa checagem, uma submissão sem efeito
+        (ex.: campo faltando) seria erroneamente reportada como sucesso,
+        já que o SEI não emite um erro explícito nesse caso.
         """
         if not self._senha:
             msg = (
@@ -2569,11 +2574,11 @@ class SEIWebClient:
             msg = f"Form frmAssinaturas não encontrado para o documento {id_documento}."
             raise SEIParseError(msg)
 
-        overrides = {"pwdSenha": self._senha, "btnAssinar": "Assinar"}
+        overrides = {"pwdSenha": self._senha, "hdnFormaAutenticacao": "S"}
         if cargo:
             overrides["selCargoFuncao"] = cargo
         if orgao:
-            overrides["selOrgaoAssinante"] = orgao
+            overrides["selOrgao"] = orgao
 
         r2 = await self._post_form_preservando(form, str(r.url), overrides, referer=str(r.url))
         _check(r2)
@@ -2581,6 +2586,16 @@ class SEIWebClient:
         erro2 = _extrair_erro_sei(body2)
         if erro2:
             msg = f"documento_assinar: {erro2}"
+            raise SEIConnectionError(msg)
+
+        soup2 = BeautifulSoup(body2, "html.parser")
+        if soup2.find("form", {"id": "frmAssinaturas"}) is not None:
+            msg = (
+                f"documento_assinar: o SEI reexibiu o form de assinatura para o "
+                f"documento {id_documento} sem mensagem de erro explícita — a "
+                "submissão não teve efeito (senha incorreta, campo faltando, ou "
+                "outra causa não identificada)."
+            )
             raise SEIConnectionError(msg)
         return {"status": "ok", "id_documento": id_documento}
 
