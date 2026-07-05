@@ -12,6 +12,7 @@ runtime to build the tool schema.
 """
 
 from fastmcp import Context
+
 from todos.mcp_app import _DEST, _READ, _get_web_client, _json, _web_backend, mcp
 from todos.sei_action_plans import execute_page_plan, inspect_page
 
