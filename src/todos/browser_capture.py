@@ -14,7 +14,7 @@ Esta é uma exceção ESCOPADA a este módulo (RFC 0021,
 reescrever o resto do scraper em Playwright. `playwright` é uma dependência
 opcional (extra `screenshot` em `pyproject.toml`), importada sob guarda de
 `try/except ImportError` como o extra `llm` já existente em
-`tools/analise.py`, para não derrubar as ~130 tools do servidor quando o
+`tools/analise.py`, para não derrubar as demais tools do servidor quando o
 extra não está instalado.
 
 Autenticação — NUNCA loga de novo no browser. A única fonte de autenticação

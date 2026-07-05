@@ -44,9 +44,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 # Import every tool module + todos.server so the @mcp.tool functions exist as
-# plain coroutines and all 132 tools (including the 6 in server.py) are
+# plain coroutines and every tool (including the 6 in server.py) is
 # registered — making test_all_mcp_tools_have_routing_entry deterministic
-# regardless of pytest collection order with test_tool_count.py.
+# regardless of pytest collection order.
 _MODULES = [
     "todos.server",  # registers the 6 orquestração tools in server.py
     "todos.tools.acompanhamento",
@@ -907,8 +907,9 @@ _TOOLS_WITHOUT_ROUTING: frozenset[str] = frozenset(
         "sei_cache_clear",  # CatalogCache local, sem backend SEI (RFC 0019 §2.2)
         # --- analise.py: LLM multimodal (RFC 0013) ---
         "sei_analisar_processo",  # orquestra gerar_pdf_processo + LLM call (multi-step, sem routing único de backend)
-        # --- generico.py: inspeção/submissão genérica de form (RFC 0020, web-only) ---
-        "sei_inspecionar_pagina",  # backend.inspecionar_pagina(url, ...) via _web_backend direto
+        # --- generico.py: inspeção e planos web (RFC 0020/0023, web-only) ---
+        "sei_inspecionar_pagina",  # página/planos usam o cliente web diretamente
+        "sei_executar_plano_sei",  # plano opaco, confirmação e pós-condição são stateful
         "sei_submeter_form",  # backend.submeter_form(...) via _web_backend direto
         # --- generico.py: captura de tela via browser real (RFC 0021, web-only) ---
         "sei_capturar_tela",  # backend.capturar_tela(url, ...) via _web_backend direto

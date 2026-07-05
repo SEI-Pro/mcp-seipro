@@ -818,6 +818,53 @@ class SEIWebClient:
         """
         return self._http.cookies
 
+    @property
+    def inbox_url(self) -> str:
+        """URL da caixa de entrada da sessão autenticada, ou vazio antes do login.
+
+        Wrapper público usado por `sei_action_plans` (RFC 0025) como Referer
+        padrão ao inspecionar/executar planos de ação genéricos.
+        """
+        return str(self._inbox_url or "")
+
+    async def http_get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
+    ) -> httpx.Response:
+        """GET autenticado via a sessão httpx deste client.
+
+        Wrapper público usado por `sei_action_plans` (RFC 0025), que já valida
+        a mesma origem (`validar_mesma_origem`) antes de qualquer chamada.
+        """
+        return await self._http.get(url, headers=headers, follow_redirects=follow_redirects)
+
+    async def http_post(
+        self,
+        url: str,
+        *,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
+    ) -> httpx.Response:
+        """POST autenticado via a sessão httpx deste client — ver `http_get`."""
+        return await self._http.post(
+            url, content=content, headers=headers, follow_redirects=follow_redirects
+        )
+
+    def invalidar_cache_arvore_completo(self) -> None:
+        """Limpa o cache de árvores de TODOS os processos.
+
+        Wrapper público usado por `sei_action_plans.execute_page_plan` (RFC
+        0025) após uma execução genérica de ação — diferente de
+        `_invalidar_arvore(protocolo)`, usado pelos métodos tipados que sabem
+        qual processo foi afetado, a execução genérica não sabe qual protocolo
+        a página pertence, então invalida tudo por segurança.
+        """
+        self._arvore_cache.clear()
+
     def refresh_request_cookies(self, request: httpx.Request) -> None:
         """Refresh *request*'s baked-in ``Cookie`` header from the current jar.
 
