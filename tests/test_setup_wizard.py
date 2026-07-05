@@ -49,6 +49,41 @@ def test_read_existing_todos_env_not_configured(
 
 
 # ---------------------------------------------------------------------------
+# Chave(s) da API Gemini (opcional, para sei_analisar_processo)
+# ---------------------------------------------------------------------------
+
+
+class TestPromptGeminiKey:
+    def test_vazio_pula_e_retorna_dict_vazio(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sw.Prompt, "ask", lambda *_args, **_kwargs: "")
+        assert sw._prompt_gemini_key() == {}
+
+    def test_uma_key_vai_em_gemini_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sw.Prompt, "ask", lambda *_args, **_kwargs: "  minha-key-123  ")
+        assert sw._prompt_gemini_key() == {"GEMINI_API_KEY": "minha-key-123"}
+
+    def test_varias_keys_separadas_por_virgula_vao_em_gemini_api_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(sw.Prompt, "ask", lambda *_args, **_kwargs: "key1, key2 ,, key3")
+        assert sw._prompt_gemini_key() == {"GEMINI_API_KEYS": "key1,key2,key3"}
+
+
+class TestBuildMcpEnvExtra:
+    def test_sem_extra_env_nao_adiciona_chaves_gemini(self) -> None:
+        mcp_env, _plaintext = sw._build_mcp_env(_inst(), "fulano", "secret")
+        assert "GEMINI_API_KEY" not in mcp_env
+        assert "GEMINI_API_KEYS" not in mcp_env
+
+    def test_extra_env_e_mesclado_no_mcp_env(self) -> None:
+        mcp_env, _plaintext = sw._build_mcp_env(
+            _inst(), "fulano", "secret", extra_env={"GEMINI_API_KEY": "abc"}
+        )
+        assert mcp_env["GEMINI_API_KEY"] == "abc"
+        assert mcp_env["SEI_USUARIO"] == "fulano"
+
+
+# ---------------------------------------------------------------------------
 # Provisionamento headless (RFC 0019 §2.3)
 # ---------------------------------------------------------------------------
 

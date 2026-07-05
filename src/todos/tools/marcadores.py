@@ -30,6 +30,7 @@ _DEFAULT_LIMIT = 50
 
 
 @mcp.tool(annotations=_WRITE)
+@requires_backend
 async def sei_criar_marcador(
     nome: str,
     id_cor: str = "",
@@ -40,8 +41,11 @@ async def sei_criar_marcador(
     - nome: nome do marcador
     - id_cor: ID da cor (use sei_listar_cores_marcador para ver opções).
       Se omitido, lista as cores disponíveis para escolha.
+
+    Funciona tanto via REST (mod-wssei) quanto via scraper web — instâncias
+    sem mod-wssei não precisam mais cair em erro aqui.
     """
-    backend = await _rest_backend(ctx)
+    backend = await _backend(ctx)
     if not id_cor:
         cores = await backend.listar_cores_marcador()
         disponiveis = ", ".join(str(c) for c in cores) if cores else "(nenhuma retornada)"

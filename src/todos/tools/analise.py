@@ -324,6 +324,9 @@ async def sei_analisar_processo(
 
     Requer: GEMINI_API_KEY (ou OPENAI_API_KEY / ANTHROPIC_API_KEY conforme o provider).
     Para múltiplas keys Gemini: GEMINI_API_KEYS=key1,key2,...
+    `todos setup` pergunta pela(s) chave(s) Gemini opcionalmente (pode pular
+    e configurar depois rodando o setup de novo, ou setando a env var
+    diretamente) — gratuita em ai.google.dev (free tier).
 
     Retorno:
     {

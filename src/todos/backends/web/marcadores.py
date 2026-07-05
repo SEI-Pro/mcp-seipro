@@ -12,16 +12,31 @@ logger = logging.getLogger(__name__)
 class MarcadoresWeb(_WebMixin):
     """Operações web de marcadores."""
 
+    async def criar_marcador(self, nome: str, id_cor: str = "") -> dict:
+        """Cria um marcador na unidade atual.
+
+        Delega a `SEIWebClient.criar_marcador_web` — funciona sem REST/
+        mod-wssei (diferente do backend REST, que é a única implementação
+        que existia antes). Se `id_cor` vier vazio, o próprio
+        `criar_marcador_web` levanta erro com as cores disponíveis,
+        extraídas ao vivo do form de cadastro (não depende de REST).
+        """
+        return await self._web.criar_marcador_web(nome, id_cor)
+
+    async def listar_cores_marcador(self) -> list[dict]:
+        """Lista as cores disponíveis para marcadores (extraídas do form de cadastro)."""
+        return await self._web.listar_cores_marcador_web()
+
     async def marcar_processo(self, processo: str, marcador: str, texto: str = "") -> dict:
-        """Aplica um marcador a um processo."""
-        # O servidor lê o id do hidden hdnIdMarcador (sincronizado do selMarcador
-        # por JS); a observação vai em txaTexto. Ação correta: gerenciar.
-        campos: dict[str, str] = {"selMarcador": marcador, "hdnIdMarcador": marcador}
-        if texto:
-            campos["txaTexto"] = texto
-        return await self._web.executar_acao_processo(
-            processo, "andamento_marcador_gerenciar", campos
-        )
+        """Aplica um marcador a um processo.
+
+        Delega a `SEIWebClient.marcar_processo_web`, que usa a ação
+        `andamento_marcador_cadastrar` e reconfirma o resultado lendo os
+        marcadores aplicados de volta (ver docstring lá — a ação
+        `andamento_marcador_gerenciar` usada antes aqui era a tela errada:
+        aceitava o POST sem erro mas não aplicava nada de verdade).
+        """
+        return await self._web.marcar_processo_web(processo, marcador, texto)
 
     async def desmarcar_processo(self, processo: str, marcador: str = "") -> dict:
         """Remove marcador(es) de um processo (vazio = todos)."""

@@ -57,6 +57,14 @@ O assistente interativo solicitará suas credenciais do SEI de forma segura (com
 | `SEI_VERIFY_SSL` | Não | `true` (padrão) ou `false` |
 | `SEI_OCR_LANG` | Não | Idioma do OCR (padrão: `por`) |
 | `SEI_PERMITIR_RESTRITOS` | Não | `false` (padrão) ou `true`. Ver "Privacidade e dados restritos" |
+| `GEMINI_API_KEY` | Não | Chave da API Gemini, usada só por `sei_analisar_processo` (análise multimodal de processos via LLM). Gratuita em [ai.google.dev](https://ai.google.dev) (free tier) |
+| `GEMINI_API_KEYS` | Não | Alternativa a `GEMINI_API_KEY` com várias chaves separadas por vírgula, para rotação automática quando uma esgota a cota |
+
+> **`sei_analisar_processo` é opcional.** Todas as outras tools funcionam sem
+> `GEMINI_API_KEY`/`GEMINI_API_KEYS` — essa env var só é necessária se você
+> quiser usar a análise multimodal via LLM. `todos setup` pergunta por ela
+> (também opcional); pule e configure depois rodando o setup de novo, ou
+> setando a env var diretamente.
 
 > **Dica: como obter `SEI_URL` e `SEI_ORGAO` direto pelo SEI**
 >

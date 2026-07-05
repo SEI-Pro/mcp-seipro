@@ -850,13 +850,56 @@ def _setup_credentials(sei_root: str) -> tuple[str, str, str]:
     return usuario, senha_config, senha_validacao
 
 
+_GEMINI_KEY_ENV_NAMES: tuple[str, ...] = ("GEMINI_API_KEY", "GEMINI_API_KEYS")
+
+
+def _prompt_gemini_key() -> dict[str, str]:
+    """Pergunta (opcional) por uma ou mais chaves da API Gemini.
+
+    Só é necessária para `sei_analisar_processo` (análise multimodal de
+    processos via LiteLLM/Gemini) — nenhuma outra ferramenta SEI depende
+    dela. Pode ser obtida gratuitamente em ai.google.dev (free tier). Se
+    pulada agora, dá pra configurar depois rodando `todos setup --force`
+    de novo, ou setando GEMINI_API_KEY/GEMINI_API_KEYS diretamente no
+    ambiente (mesmas variáveis lidas por `tools/analise.py`).
+
+    Aceita múltiplas keys separadas por vírgula — populam `GEMINI_API_KEYS`
+    (usado por `tools/analise.py` para rotacionar entre keys quando uma
+    esgota a cota); uma única key vai em `GEMINI_API_KEY`. Retorna {} se
+    o usuário pular (default).
+    """
+    _console.print()
+    _console.print(
+        "  [dim]Opcional — usada só por [bold]sei_analisar_processo[/bold] "
+        "(análise multimodal de processos via LLM). Gratuita em "
+        "[cyan]ai.google.dev[/] (free tier). Pode pular agora e configurar "
+        "depois rodando o setup de novo, ou setando a env var diretamente.[/]"
+    )
+    raw = Prompt.ask(
+        "  Chave(s) da API Gemini (vazio = pular; várias separadas por vírgula)",
+        default="",
+        show_default=False,
+        console=_console,
+    )
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    if not keys:
+        return {}
+    if len(keys) == 1:
+        return {"GEMINI_API_KEY": keys[0]}
+    return {"GEMINI_API_KEYS": ",".join(keys)}
+
+
 # ── Helpers de build/deploy/summary ─────────────────────────────────────────
 def _build_mcp_env(
     inst: _SEIInstanceConfig,
     usuario: str,
     senha: str,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], bool]:
     """Constrói o dicionário de variáveis MCP e exibe tabela resumida.
+
+    `extra_env` (ex.: GEMINI_API_KEY/GEMINI_API_KEYS de `_prompt_gemini_key`)
+    é mesclado por cima das variáveis SEI — vazio/None não adiciona nada.
 
     Retorna (mcp_env, using_plaintext_password).
     """
@@ -872,13 +915,16 @@ def _build_mcp_env(
     }
     if inst.verify_ssl_disabled:
         mcp_env["SEI_VERIFY_SSL"] = "false"
+    if extra_env:
+        mcp_env.update(extra_env)
     using_plaintext = bool(mcp_env["SEI_SENHA"])
 
     vars_table = Table(box=box.SIMPLE, padding=(0, 1), show_header=False)
     vars_table.add_column(style="dim cyan", width=28)
     vars_table.add_column(style="white")
+    _sensitive_keys = {"SEI_SENHA", *_GEMINI_KEY_ENV_NAMES}
     for key, val in mcp_env.items():
-        display = "[dim]•••••••[/]" if key == "SEI_SENHA" and val else val or "[dim]—[/]"
+        display = "[dim]•••••••[/]" if key in _sensitive_keys and val else val or "[dim]—[/]"
         vars_table.add_row(key, display)
     _console.print(vars_table)
     return mcp_env, using_plaintext
@@ -997,7 +1043,8 @@ def run_setup_wizard(*, force: bool = False) -> None:
 
     # ── Passo 4 ─────────────────────────────────────────────────────────────
     _step(4, "Variáveis de Ambiente MCP")
-    mcp_env, using_plaintext_password = _build_mcp_env(inst, usuario, senha)
+    gemini_env = _prompt_gemini_key()
+    mcp_env, using_plaintext_password = _build_mcp_env(inst, usuario, senha, extra_env=gemini_env)
     senha = ""
     del senha
 

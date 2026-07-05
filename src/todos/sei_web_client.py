@@ -2280,7 +2280,12 @@ class SEIWebClient:
 
         A tela `andamento_marcador_gerenciar` traz o form `frmGerenciarMarcador`,
         a tabela dos marcadores aplicados (cada `acaoRemover('<id>','<desc>')`) e
-        a URL assinada de `andamento_marcador_remover`.
+        a URL assinada de `andamento_marcador_remover`. Também é o ponto de
+        partida de `marcar_processo_web`: essa tela só tem um checkbox por
+        marcador já aplicado, sem `selMarcador` — o form de cadastro real
+        (`frmAndamentoMarcadorCadastro`, ação `andamento_marcador_cadastrar`)
+        fica atrás do botão "Adicionar" cujo `onclick` está no HTML retornado
+        aqui.
         """
         html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
         m = re.search(
@@ -2313,6 +2318,106 @@ class SEIWebClient:
             nome, cor = self._split_marcador_desc(desc)
             aplicados.append({"id": mid, "nome": nome, "cor": cor})
         return {"marcadores": aplicados, "total_itens": len(aplicados)}
+
+    async def marcar_processo_web(self, protocolo: str, marcador: str, texto: str = "") -> dict:
+        """Aplica um marcador a um processo via `andamento_marcador_cadastrar`.
+
+        BUG CONFIRMADO AO VIVO em sei.sistemas.ro.gov.br (2026-07-05, ver
+        docs/rfc/0026-marcar-e-criar-marcador-web.md): a implementação
+        original postava para `andamento_marcador_gerenciar` com um campo
+        `selMarcador` inventado — o SEI aceitava o POST sem erro, mas não
+        aplicava nada, porque essa tela é a de GERENCIAR/remover marcadores
+        JÁ aplicados (form `frmGerenciarMarcador`, só com um checkbox
+        `chkInfraItemN` por marcador existente) e não tem `selMarcador`
+        nenhum. Reproduzido duas vezes seguidas contra processos reais,
+        confirmado via `consultar_marcador_processo_web` que o marcador não
+        havia sido aplicado.
+
+        O `<select>` real com os marcadores da unidade só existe num form
+        SEPARADO, `frmAndamentoMarcadorCadastro`, alcançado pelo botão
+        "Adicionar" daquela tela — a ação certa é
+        `andamento_marcador_cadastrar`. Fluxo:
+        1. reaproveita `_pagina_marcador` (mesmo ponto de partida de
+           `desmarcar_processo_web`/`consultar_marcador_processo_web`);
+        2. extrai a URL do botão "Adicionar" via regex no `onclick`;
+        3. GET nessa URL para carregar `frmAndamentoMarcadorCadastro`;
+        4. POST nesse form (`_post_form_preservando` — o form já aponta
+           para a ação certa) com `selMarcador`/`hdnIdMarcador` sobrescritos
+           para o id do marcador (o JS do form real espelha um no outro; ao
+           montar o POST direto, basta setar os dois) e `txaTexto` opcional.
+
+        Depois do POST, releem-se os marcadores aplicados
+        (`consultar_marcador_processo_web`) e só retorna sucesso se o id
+        aplicado aparecer de fato na lista — mesma disciplina de
+        reconfirmação de `assinar_documento_web`/`desmarcar_processo_web`:
+        o SEI pode aceitar um POST malformado sem erro explícito e não
+        aplicar nada.
+        """
+        await self.ensure_authenticated()
+        body, _, referer = await self._pagina_marcador(protocolo)
+
+        m = re.search(
+            r"onclick=\"location\.href='(controlador\.php\?acao=andamento_marcador_cadastrar"
+            r"[^\"'\s]*)'\"",
+            body,
+        )
+        if not m:
+            msg = f'Botão "Adicionar" de marcador não encontrado para {protocolo}.'
+            raise SEIParseError(msg)
+        cadastrar_url = urljoin(f"{self.sei_root}/sei/", m.group(1).replace("&amp;", "&"))
+
+        r = await self._http.get(cadastrar_url, headers={"Referer": referer})
+        _check(r)
+        html_cad = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(html_cad)
+        if erro:
+            msg = f"andamento_marcador_cadastrar: {erro}"
+            raise SEIConnectionError(msg)
+
+        soup_cad = BeautifulSoup(html_cad, "html.parser")
+        form = soup_cad.find("form", {"id": "frmAndamentoMarcadorCadastro"})
+        if not isinstance(form, Tag):
+            msg = f"Form frmAndamentoMarcadorCadastro não encontrado para {protocolo}."
+            raise SEIParseError(msg)
+
+        overrides = {"selMarcador": marcador, "hdnIdMarcador": marcador}
+        if texto:
+            overrides["txaTexto"] = texto
+        # _post_form_preservando (via _coletar_estado_form) exclui de propósito
+        # o botão submit — o PHP do SEI ignora o POST silenciosamente sem o
+        # par name=value do botão (mesmo padrão de criar_bloco_assinatura_web);
+        # sem isso o marcador seria "salvo" sem erro, mas sem efeito real.
+        sbm = _extrair_submit_btn(form)
+        if sbm:
+            overrides[sbm[0]] = sbm[1]
+
+        r2 = await self._post_form_preservando(form, str(r.url), overrides, referer=str(r.url))
+        _check(r2)
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro2 = _extrair_erro_sei(body2)
+        if erro2:
+            msg = f"andamento_marcador_cadastrar: {erro2}"
+            raise SEIConnectionError(msg)
+
+        # Reconfirma: o POST pode ser um no-op silencioso (exatamente o bug
+        # ao vivo que motivou esta correção) — só conta como sucesso se o
+        # marcador realmente aparecer na lista dos aplicados.
+        self._invalidar_arvore(protocolo)
+        aplicados = await self.consultar_marcador_processo_web(protocolo)
+        ids_aplicados = {a["id"] for a in aplicados.get("marcadores", [])}
+        if marcador not in ids_aplicados:
+            msg = (
+                f"Marcador {marcador} não aparece aplicado em {protocolo} após o "
+                "POST — a submissão não teve efeito (id de marcador inválido, "
+                "ou outra causa não identificada)."
+            )
+            raise SEIConnectionError(msg)
+        return {
+            "ok": True,
+            "mensagem": "Marcador aplicado.",
+            "protocolo": protocolo,
+            "marcador": marcador,
+        }
 
     async def desmarcar_processo_web(self, protocolo: str, marcador: str = "") -> dict:
         """Remove marcador(es) de um processo via `andamento_marcador_remover`.
@@ -4379,6 +4484,144 @@ class SEIWebClient:
                 continue
             marcadores.append({"id": v, "nome": t})
         return {"marcadores": marcadores, "total_itens": len(marcadores)}
+
+    async def _pagina_marcador_listar(self) -> tuple[str, str]:
+        """Retorna (body, url) da tela `marcador_listar` (marcadores da unidade).
+
+        Ponto de partida comum de `criar_marcador_web`/`listar_cores_marcador_web`
+        — a listagem de marcadores da UNIDADE (ciclo de vida: criar/excluir/
+        desativar/reativar), diferente de `_pagina_marcador`, que é a tela de
+        marcadores aplicados a um PROCESSO específico.
+        """
+        await self.ensure_authenticated()
+        listar_url = await self._obter_link_toolbar("marcador_listar")
+        r = await self._http.get(listar_url, headers={"Referer": str(self._inbox_url)})
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        return body, listar_url
+
+    async def _pagina_marcador_cadastro(self) -> tuple[BeautifulSoup, str]:
+        """Retorna (soup, url) do form `frmMarcadorCadastro` (criar marcador novo).
+
+        Alcançado pelo botão "Novo" (`btnNovo`) da tela `marcador_listar` —
+        mesmo padrão de resolução em dois passos de `criar_bloco_assinatura_web`
+        (a ação de criar não aparece no toolbar da inbox, só na listagem).
+        """
+        listar_body, listar_url = await self._pagina_marcador_listar()
+        m = re.search(
+            r"onclick=\"location\.href='(controlador\.php\?acao=marcador_cadastrar[^\"'\s]*)'\"",
+            listar_body,
+        )
+        if not m:
+            msg = 'Botão "Novo" de marcador não encontrado na listagem (marcador_listar).'
+            raise SEIParseError(msg)
+        sei_base = f"{self.sei_root}/sei/"
+        cadastrar_url = urljoin(sei_base, m.group(1).replace("&amp;", "&"))
+        r = await self._http.get(cadastrar_url, headers={"Referer": listar_url})
+        _check(r)
+        body = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(body)
+        if erro:
+            msg = f"marcador_cadastrar: {erro}"
+            raise SEIConnectionError(msg)
+        return BeautifulSoup(body, "html.parser"), cadastrar_url
+
+    async def listar_cores_marcador_web(self) -> list[dict]:
+        """Lista as cores disponíveis para marcadores (scraper web, sem REST).
+
+        Extrai direto do `<select name="selStaIcone">` do form de cadastro
+        de marcador (`frmMarcadorCadastro`) da própria unidade — as opções
+        (id numérico + nome) podem variar por instância do SEI, por isso são
+        sempre lidas ao vivo aqui, nunca hardcoded.
+        """
+        soup, _url = await self._pagina_marcador_cadastro()
+        sel = soup.find("select", {"name": "selStaIcone"})
+        if not isinstance(sel, Tag):
+            msg = "select selStaIcone não encontrado no form de cadastro de marcador."
+            raise SEIParseError(msg)
+        cores: list[dict[str, str]] = []
+        for opt in sel.find_all("option"):
+            v = _tag_str(opt, "value")
+            t = opt.get_text(strip=True)
+            if v:
+                cores.append({"id": v, "nome": t})
+        return cores
+
+    async def criar_marcador_web(self, nome: str, id_cor: str = "", descricao: str = "") -> dict:
+        """Cria um marcador na unidade atual via `marcador_cadastrar` (scraper web).
+
+        CONFIRMADO AO VIVO em sei.sistemas.ro.gov.br (2026-07-05): criado um
+        marcador novo com sucesso via scraping direto, sem tocar REST — útil
+        para instâncias sem mod-wssei, onde `sei_criar_marcador` hoje falha
+        com "Backend REST não está configurado" mesmo sendo uma operação que
+        não precisa de REST nenhum.
+
+        Fluxo: `marcador_listar` (toolbar da inbox, via `_obter_link_toolbar`)
+        → botão "Novo" (`marcador_cadastrar`) → form `frmMarcadorCadastro`
+        (`selStaIcone`/`hdnStaIcone` — cor, o JS do form real espelha um no
+        outro; ao montar o POST direto, basta setar os dois; `txtNome`;
+        `txaDescricao` opcional; `hdnIdMarcador` vazio para criar novo, não
+        editar) → POST (`_post_form_preservando`, com o par name=value do
+        botão submit incluído explicitamente — mesmo padrão de
+        `criar_bloco_assinatura_web`: sem isso o SEI ignora o POST em
+        silêncio) → reconfirma relendo `marcador_listar` e conferindo que o
+        NOME aparece antes de reportar sucesso (o SEI não devolve o id do
+        marcador recém-criado em nenhum lugar explícito, mesma limitação de
+        `criar_bloco_assinatura_web` com blocos).
+
+        Se `id_cor` vier vazio, levanta erro com as cores disponíveis
+        (extraídas ao vivo por `listar_cores_marcador_web`, sem depender de
+        REST) para o chamador escolher.
+        """
+        if not nome.strip():
+            msg = "nome do marcador não pode ser vazio."
+            raise SEIValidationError(msg)
+        if not id_cor:
+            cores = await self.listar_cores_marcador_web()
+            disponiveis = (
+                ", ".join(f"{c['id']}={c['nome']}" for c in cores)
+                if cores
+                else "(nenhuma encontrada)"
+            )
+            msg = f"id_cor não informado — escolha uma das cores disponíveis: {disponiveis}"
+            raise SEIValidationError(msg)
+
+        soup, cadastrar_url = await self._pagina_marcador_cadastro()
+        form = soup.find("form", {"id": "frmMarcadorCadastro"})
+        if not isinstance(form, Tag):
+            msg = "Form frmMarcadorCadastro não encontrado."
+            raise SEIParseError(msg)
+
+        overrides = {
+            "txtNome": nome,
+            "selStaIcone": id_cor,
+            "hdnStaIcone": id_cor,
+            "hdnIdMarcador": "",
+        }
+        if descricao:
+            overrides["txaDescricao"] = descricao
+        sbm = _extrair_submit_btn(form)
+        if sbm:
+            overrides[sbm[0]] = sbm[1]
+
+        r2 = await self._post_form_preservando(
+            form, cadastrar_url, overrides, referer=cadastrar_url
+        )
+        _check(r2)
+        body2 = _decode_response(r2.content, r2.headers.get("content-type", ""))
+        erro2 = _extrair_erro_sei(body2)
+        if erro2:
+            msg = f"marcador_cadastrar: {erro2}"
+            raise SEIConnectionError(msg)
+
+        listar_body_final, _ = await self._pagina_marcador_listar()
+        if nome not in BeautifulSoup(listar_body_final, "html.parser").get_text():
+            msg = (
+                f"Marcador {nome!r} não aparece na listagem (marcador_listar) após "
+                "o POST — a criação não teve efeito."
+            )
+            raise SEIConnectionError(msg)
+        return {"ok": True, "mensagem": "Marcador criado.", "nome": nome, "id_cor": id_cor}
 
     async def _obter_soup_documento_receber(self, protocolo: str) -> BeautifulSoup:
         """Navega até o form documento_receber para um processo.

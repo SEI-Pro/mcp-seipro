@@ -86,6 +86,7 @@ Quando o expediente do Kanoê referencia um NUP (`\d{4}\.\d{6}/\d{4}-\d{2}`), us
 | `SEI_URL` | não | URL do mod-wssei v2; sem ela → modo web-only |
 | `SEI_WEB_URL` | não | URL base do SEI web (padrão: inferido de SEI_URL) |
 | `TODOS_LOG_LEVEL` | não | Nível de log `todos.*` (padrão: `INFO`) |
+| `GEMINI_API_KEY` / `GEMINI_API_KEYS` | não | Só para `sei_analisar_processo` (análise multimodal via LiteLLM/Gemini); `GEMINI_API_KEYS` aceita múltiplas keys separadas por vírgula para rotação. Gratuita em ai.google.dev (free tier). `todos setup` pergunta por ela opcionalmente |
 
 **Senha: preferencialmente via keyring, nunca via arquivo `.env`.** `todos
 setup` grava a senha no keyring do OS (serviço `todos-mcp`, chave

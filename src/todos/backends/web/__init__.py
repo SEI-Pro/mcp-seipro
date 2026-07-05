@@ -12,9 +12,12 @@ Convenções:
   pós-processa o resultado (ex: extrair `sobrestamentos` de
   `consultar_processo_detalhe`), o backend replica essa extração.
 
-Operações sem equivalente web (assinatura PKI, credenciamento, marcadores via
-mod-wssei, blocos internos, `versao`, `resumo_processos`, etc.) NÃO são
-sobrescritas e herdam o stub `NotImplementedError` da base.
+Operações sem equivalente web (assinatura PKI, credenciamento, histórico de
+marcador, excluir/desativar/reativar marcador, blocos internos, `versao`,
+`resumo_processos`, etc.) NÃO são sobrescritas e herdam o stub
+`NotImplementedError` da base. `criar_marcador`/`listar_cores_marcador` TÊM
+equivalente web (`MarcadoresWeb`) desde RFC 0026 — funcionam mesmo sem
+mod-wssei.
 
 A implementação é dividida em mixins de domínio (espelhando `todos.tools`),
 compostos pela classe concreta `SEIWebBackend`.
