@@ -25,17 +25,17 @@ jobs:
 
           path = Path("tests/test_tool_routing.py")
           text = path.read_text(encoding="utf-8")
-          old = '''        # --- generico.py: inspeção/submissão genérica de form (RFC 0020, web-only) ---
-          "sei_inspecionar_pagina",  # backend.inspecionar_pagina(url, ...) via _web_backend direto
-          "sei_submeter_form",  # backend.submeter_form(...) via _web_backend direto
-          '''
-          new = '''        # --- generico.py: inspeção e planos web (RFC 0020/0023, web-only) ---
-          "sei_inspecionar_pagina",  # página/planos usam o cliente web diretamente
-          "sei_executar_plano_sei",  # plano opaco, confirmação e pós-condição são stateful
-          "sei_submeter_form",  # backend.submeter_form(...) via _web_backend direto
-          '''
+          text = text.replace(
+              "# --- generico.py: inspeção/submissão genérica de form (RFC 0020, web-only) ---",
+              "# --- generico.py: inspeção e planos web (RFC 0020/0023, web-only) ---",
+          )
+          old = '"sei_inspecionar_pagina",  # backend.inspecionar_pagina(url, ...) via _web_backend direto'
+          new = '\n'.join((
+              '"sei_inspecionar_pagina",  # página/planos usam o cliente web diretamente',
+              '"sei_executar_plano_sei",  # plano opaco, confirmação e pós-condição são stateful',
+          ))
           if old not in text:
-              raise SystemExit("routing exemption anchor not found")
+              raise SystemExit("routing tool anchor not found")
           path.write_text(text.replace(old, new), encoding="utf-8")
           PY
           if git diff --quiet; then
