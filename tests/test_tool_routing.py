@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 # Import every tool module + todos.server so the @mcp.tool functions exist as
-# plain coroutines and all 129 tools (including the 6 in server.py) are
+# plain coroutines and all 130 tools (including the 6 in server.py) are
 # registered — making test_all_mcp_tools_have_routing_entry deterministic
 # regardless of pytest collection order with test_tool_count.py.
 _MODULES = [
@@ -255,6 +255,13 @@ _ROUTES: list[tuple[str, str, dict, str, list[object]]] = [
     ),
     ("assinatura", "sei_dar_ciencia", {"referencia": "R"}, "dar_ciencia", ["R"]),
     ("assinatura", "sei_listar_ciencias", {"referencia": "R"}, "listar_ciencias", ["R"]),
+    (
+        "assinatura",
+        "sei_excluir_documento",
+        {"id_documento": "D", "processo": "P", "confirmar": True},
+        "excluir_documento",
+        ["D", "P", True],
+    ),
     # --- blocos_assinatura (excluir/concluir → plural ops) ---
     (
         "blocos_assinatura",

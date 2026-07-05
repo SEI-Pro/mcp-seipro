@@ -2584,6 +2584,105 @@ class SEIWebClient:
             raise SEIConnectionError(msg)
         return {"status": "ok", "id_documento": id_documento}
 
+    async def excluir_documento_web(
+        self, protocolo: str, id_documento: str, *, confirmar: bool = False
+    ) -> dict:
+        """Exclui um documento via a variável JS ``linkExcluirDocumento`` (ação destrutiva).
+
+        Resolvido pelo mesmo padrão de ``_get_arvore_visualizar_link_var`` usado
+        para ``editor_montar``/``documento_assinar``: a URL de exclusão só existe
+        como a variável JS ``linkExcluirDocumento`` na página ``arvore_visualizar``,
+        não em ``Nos[].acoes`` nem como ``onclick`` com parâmetros explícitos (ver
+        RFC 0022 — a investigação original tentou reverse-engineering de frames e
+        estado de "nó selecionado" antes de descobrir que era só mais um caso do
+        padrão `linkX` já mapeado).
+
+        CONFIRMADO AO VIVO em sei.sistemas.ro.gov.br, 2026-07-03/04, processo
+        0016.004284/2026-81, documento 76861634 (um "Anexo" duplicado): um único
+        GET na URL resolvida por ``linkExcluirDocumento`` já executa a exclusão de
+        verdade — não é uma página de confirmação que exige um segundo POST.
+        Reconfirmado via leitura independente (``sei_consultar_documento_externo``
+        passou a falhar com "ação não encontrada" e o documento sumiu de
+        ``sei_listar_documentos``, com os demais documentos do processo intactos).
+
+        Diferente de assinar/editar, esta ação é IRREVERSÍVEL — por isso:
+        - ``confirmar`` é obrigatório (``True``); sem isso, recusa antes de
+          qualquer chamada HTTP (mesmo padrão de "nunca inferir/decidir sozinho"
+          documentado na RFC 0022);
+        - a ausência da variável ``linkExcluirDocumento`` é tratada como recusa
+          LEGÍTIMA do próprio SEI (documento já assinado/tramitado/de outra
+          unidade — o SEI só oferece a ação de excluir quando ela é permitida),
+          não como bug de parsing;
+        - após o GET, a árvore do processo é relida (cache invalidado via
+          ``_invalidar_arvore``) e o nó é procurado de novo por
+          ``parse_arvore_nos``/comparação de ``id`` — o mesmo mecanismo robusto
+          usado para resolver o documento, não um `in html` ingênuo (que dá falso
+          positivo: outros hashes/IDs do HTML podem conter os mesmos dígitos do
+          id_documento por coincidência — reproduzido ao vivo nesta investigação).
+          Só retorna sucesso se o nó realmente não estiver mais presente.
+        """
+        if not confirmar:
+            msg = (
+                f"Exclusão do documento {id_documento} (processo {protocolo}) é "
+                "destrutiva e irreversível no SEI — chame novamente com "
+                "confirmar=True para prosseguir."
+            )
+            raise SEIValidationError(msg)
+
+        await self.ensure_authenticated()
+
+        # Resolve o id interno do nó antes de excluir, para poder reconferir
+        # a ausência dele depois por `id`, não por número SEI (que pode não
+        # bater 1:1 com o que sobra na árvore após a exclusão).
+        html_arvore, _ = await self._arvore_do_processo(protocolo)
+        nos = parse_arvore_nos(html_arvore)
+        no_alvo = next((no for no in nos[1:] if no.get("id") == id_documento), None)
+        if no_alvo is None:
+            no_alvo = next(
+                (
+                    no
+                    for no in nos[1:]
+                    if _parse_doc_label(no.get("label", "")).get("numero_sei") == id_documento
+                ),
+                None,
+            )
+        id_interno = str(no_alvo["id"]) if no_alvo else id_documento
+
+        try:
+            excluir_url, referer = await self._get_arvore_visualizar_link_var(
+                protocolo, id_documento, "linkExcluirDocumento"
+            )
+        except SEIParseError as exc:
+            msg = (
+                f"SEI recusou a exclusão do documento {id_documento} no processo "
+                f"{protocolo} — a ação de excluir não está disponível para este "
+                "documento (provavelmente já foi assinado, já tramitou para outra "
+                "unidade, ou pertence a outra unidade)."
+            )
+            raise SEIValidationError(msg) from exc
+
+        r = await self._http.get(excluir_url, headers={"Referer": referer})
+        _check(r)
+        html_resp = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(html_resp)
+        if erro:
+            msg = f"documento_excluir: {erro}"
+            raise SEIConnectionError(msg)
+
+        self._invalidar_arvore(protocolo)
+        html_arvore2, _ = await self._arvore_do_processo(protocolo)
+        nos2 = parse_arvore_nos(html_arvore2)
+        ainda_presente = any(no.get("id") == id_interno for no in nos2[1:])
+        if ainda_presente:
+            msg = (
+                f"Exclusão do documento {id_documento} não teve efeito — o nó "
+                f"(id {id_interno}) ainda está presente na árvore do processo "
+                f"{protocolo} após a requisição de exclusão."
+            )
+            raise SEIConnectionError(msg)
+
+        return {"status": "ok", "id_documento": id_documento, "processo": protocolo}
+
     async def listar_secoes_web(self, protocolo: str, id_documento: str) -> dict:
         """Lista seções editáveis de um documento interno via editor_montar."""
         await self.ensure_authenticated()
