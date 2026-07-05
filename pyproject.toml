@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "todos-sei"
 dynamic = ["version"]
-description = "TOdos Domina O Sei — MCP server para o SEI com 130 tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
+description = "TOdos Domina O Sei — MCP server para o SEI com 131 tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -28,6 +28,11 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = ["litellm>=1.84.0", "pymupdf>=1.24"]
+# Extra opcional para sei_capturar_tela (RFC 0021) — a ÚNICA tool deste
+# projeto que usa um browser real em vez de httpx+BeautifulSoup puro. Depois
+# de instalar, rode `uv run playwright install chromium` (baixa o binário do
+# browser; não vem com o pacote Python).
+screenshot = ["playwright>=1.45"]
 
 [project.scripts]
 todos = "todos.server:main"
@@ -42,6 +47,7 @@ dev = [
     "pip-audit>=2.8",
     "litellm>=1.84.0",
     "pymupdf>=1.24",
+    "playwright>=1.45",
 ]
 eval = [
     "anthropic>=0.30",

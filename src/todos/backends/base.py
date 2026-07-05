@@ -733,3 +733,19 @@ class SEIBackend:
     ) -> dict:
         """Submete um form arbitrário, com overrides de campo e URL de destino opcional."""
         raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Genérico (RFC 0021) — captura de screenshot via browser real. Exceção
+    # deliberada à arquitetura pure-HTTP (ver todos.browser_capture); só o
+    # backend web implementa (não há equivalente REST/mod-wssei).
+    # ------------------------------------------------------------------
+
+    async def capturar_tela(
+        self,
+        url: str,
+        *,
+        selector: str | None = None,
+        aguardar_segundos: float = 1.0,
+    ) -> dict:
+        """Captura um screenshot PNG real (browser Playwright) de uma URL do SEI."""
+        raise NotImplementedError

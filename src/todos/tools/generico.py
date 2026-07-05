@@ -115,3 +115,64 @@ async def sei_submeter_form(
         incluir_raw=incluir_raw,
     )
     return _json(result)
+
+
+@mcp.tool(annotations=_READ)
+async def sei_capturar_tela(
+    url: str,
+    ctx: Context | None = None,
+    *,
+    selector: str | None = None,
+    aguardar_segundos: float = 1.0,
+) -> str:
+    """Captura um screenshot PNG real de uma tela do SEI, renderizado por um browser Chromium.
+
+    EXCEÇÃO ARQUITETURAL DELIBERADA (RFC 0021): esta é a única tool deste
+    servidor que abre um browser de verdade (Playwright) — todo o resto usa
+    httpx puro + BeautifulSoup (RFC 0020). Só existe porque uma captura
+    visual fiel (CSS/JS client-side, layout real) não é obtível renderizando
+    HTML puro. Ver `todos.browser_capture` para detalhes; não é precedente
+    para reescrever outras tools em Playwright.
+
+    Autenticação: reaproveita a sessão httpx já autenticada por
+    `SEIWebClient.ensure_authenticated()`, transplantando os cookies dela
+    para o browser. NUNCA loga de novo digitando usuário/senha no browser —
+    se a sessão não colar no browser, a tool levanta erro em vez de continuar.
+
+    IMPORTANTE — resolva `url` pouco antes de chamar esta tool, na mesma
+    sessão: o `infra_hash` embutido em toda URL do SEI é específico da sessão
+    SIP que a gerou (confirmado em teste ao vivo — RFC 0021 §2.2); uma URL
+    obtida há muito tempo, ou por uma sessão diferente da que está ativa
+    agora, causa "Hash inválido" no SEI — que aparenta ser (e a tool reporta
+    como) falha de autenticação, mesmo a sessão atual estando válida. Ex.:
+    chame sei_consultar_processo/sei_arvore_processo e passe a URL retornada
+    imediatamente para sei_capturar_tela, no mesmo turno.
+
+    `url` precisa ser da mesma instância SEI configurada (mesmo
+    scheme+host) — mesma validação de mesma origem (SSRF) de
+    sei_inspecionar_pagina/sei_submeter_form: URLs externas são rejeitadas
+    antes de qualquer navegação.
+
+    Parâmetros:
+    - url: URL absoluta do SEI, já assinada com infra_hash (mesma convenção
+      de sei_inspecionar_pagina — obtida de outra tool ou de uma resposta
+      anterior)
+    - selector: seletor CSS opcional — se informado, recorta só esse
+      elemento da página em vez de capturar a tela inteira
+    - aguardar_segundos: tempo de espera após o carregamento da página, antes
+      de capturar (padrão 1.0s) — dá tempo a JS/CSS assíncrono terminar de
+      renderizar
+
+    Requer a dependência opcional `playwright` (extra `screenshot`) instalada
+    e os browsers baixados (`uv run playwright install chromium`) — levanta
+    erro claro e acionável se ausente, em vez de falhar de forma obscura.
+
+    Retorna: caminho absoluto do PNG salvo em disco (mesma convenção de
+    sei_gerar_pdf_processo/sei_gerar_zip_processo — arquivo em disco, não
+    payload inline) e o tamanho em bytes.
+    """
+    backend = await _web_backend(ctx)
+    result = await backend.capturar_tela(
+        url, selector=selector, aguardar_segundos=aguardar_segundos
+    )
+    return _json(result)
