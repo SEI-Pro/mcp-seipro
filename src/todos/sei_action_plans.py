@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
+
 from todos.exceptions import (
     SEIConnectionError,
     SEINotFoundError,
@@ -343,7 +344,7 @@ def _field_spec(element: Tag) -> dict[str, Any] | None:
     return result
 
 
-def _collect_form_pairs(form: Tag) -> list[tuple[str, str]]:  # noqa: C901
+def _collect_form_pairs(form: Tag) -> list[tuple[str, str]]:
     """Collect successful controls, keeping duplicated names in their DOM order."""
     pairs: list[tuple[str, str]] = []
     for element in form.find_all(["input", "select", "textarea"]):
@@ -565,7 +566,9 @@ def _inspect_html(  # noqa: C901, PLR0912, PLR0915
         trigger_id = f"href:{sequence}"
         plans[trigger_id] = {
             "trigger_id": trigger_id,
-            "label": anchor.get_text(" ", strip=True) or str(anchor.get("title", "")) or action_name,
+            "label": anchor.get_text(" ", strip=True)
+            or str(anchor.get("title", ""))
+            or action_name,
             "kind": "direct_get",
             "action_name": action_name,
             "risk": _risk(action_name),
