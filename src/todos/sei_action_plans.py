@@ -1,8 +1,8 @@
-"""Declarative, no-JS action plans for pages served by the SEI frontend.
+"""Declarative action plans for safe exploration of SEI frontend pages.
 
-This module intentionally implements only a small, statically verifiable
-subset of SEI's JavaScript idioms. It never evaluates JavaScript supplied by
-a caller.
+The interpreter in this module intentionally accepts only a small, static subset
+of the JavaScript patterns emitted by SEI. It never evaluates JavaScript
+received from a caller.
 """
 
 from __future__ import annotations
@@ -13,12 +13,12 @@ import json
 import re
 import secrets
 import time
-from dataclasses import dataclass
+import weakref
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-
 from todos.exceptions import (
     SEIConnectionError,
     SEINotFoundError,
@@ -35,29 +35,29 @@ from todos.sei_web_client import (
 
 _PAGE_TTL_SECONDS = 120.0
 _MAX_REDIRECTS = 5
+_LITERAL_TOKEN_MIN_LENGTH = 2
 
-# GET is not a synonym for read in SEI. Inspection follows only these page-like
-# routes. Unknown routes must be reached through a typed tool or a plan that
-# was discovered on an inspected page.
-_READ_ACTION_EXACT = frozenset(
+# A request method alone is not a safety classification: SEI uses GET for
+# several state-changing actions. Inspection follows only known page routes.
+_READ_ACTIONS = frozenset(
     {
-        "arvore_visualizar",
         "arvore_montar",
+        "arvore_visualizar",
         "documento_consultar",
         "documento_visualizar",
         "editor_montar",
         "documento_escolher_tipo",
         "procedimento_consultar",
         "procedimento_consultar_historico",
+        "procedimento_sobrestado_listar",
         "andamento_marcador_gerenciar",
         "acompanhamento_gerenciar",
         "rel_bloco_protocolo_listar",
         "bloco_assinatura_listar",
         "bloco_interno_listar",
-        "procedimento_sobrestado_listar",
     }
 )
-_READ_ACTION_SUFFIXES = ("_listar", "_consultar", "_visualizar", "_montar", "_gerenciar")
+_READ_SUFFIXES = ("_listar", "_consultar", "_visualizar", "_montar", "_gerenciar")
 _DESTRUCTIVE_MARKERS = (
     "excluir",
     "remover",
@@ -78,12 +78,11 @@ _WRITE_MARKERS = (
     "disponibilizar",
     "atribuir",
     "marcar",
-    "desmarcar",
 )
 
 
 @dataclass(frozen=True)
-class _Snapshot:
+class _PageSnapshot:
     url: str
     referer: str
     fingerprint: str
@@ -91,172 +90,178 @@ class _Snapshot:
 
 
 @dataclass
-class _Store:
-    snapshots: dict[str, _Snapshot]
-    lock: asyncio.Lock
+class _PageStore:
+    snapshots: dict[str, _PageSnapshot] = field(default_factory=dict)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
-def _store(client: SEIWebClient) -> _Store:
-    store = getattr(client, "_sei_action_plan_store", None)
-    if not isinstance(store, _Store):
-        store = _Store(snapshots={}, lock=asyncio.Lock())
-        setattr(client, "_sei_action_plan_store", store)
-    return store
+_PAGE_STORES: weakref.WeakKeyDictionary[SEIWebClient, _PageStore] = weakref.WeakKeyDictionary()
+_PAGE_STORES_LOCK = asyncio.Lock()
+
+
+async def _page_store(client: SEIWebClient) -> _PageStore:
+    """Return the page-ref store scoped to one authenticated web client."""
+    async with _PAGE_STORES_LOCK:
+        store = _PAGE_STORES.get(client)
+        if store is None:
+            store = _PageStore()
+            _PAGE_STORES[client] = store
+        return store
 
 
 def _action_name(url: str) -> str:
     return parse_qs(urlparse(url).query).get("acao", [""])[0]
 
 
-def _risk(action: str) -> str:
-    normalized = action.casefold()
-    if not normalized:
+def _risk(action_name: str) -> str:
+    """Classify a controller action conservatively."""
+    action = action_name.casefold()
+    if not action:
         return "write"
-    if any(marker in normalized for marker in _DESTRUCTIVE_MARKERS):
+    if any(marker in action for marker in _DESTRUCTIVE_MARKERS):
         return "destructive"
-    if any(marker in normalized for marker in _WRITE_MARKERS):
+    if any(marker in action for marker in _WRITE_MARKERS):
         return "write"
-    if normalized in _READ_ACTION_EXACT or normalized.endswith(_READ_ACTION_SUFFIXES):
+    if action in _READ_ACTIONS or action.endswith(_READ_SUFFIXES):
         return "read"
-    # Unknown controller actions remain conservative until a typed tool gives
-    # them a more precise classification.
     return "write"
 
 
-def _is_read_action(action: str) -> bool:
-    return _risk(action) == "read"
+def _is_read_action(action_name: str) -> bool:
+    return _risk(action_name) == "read"
 
 
-def _same_origin(client: SEIWebClient, url: str) -> bool:
+def _local_url(client: SEIWebClient, base_url: str, raw_url: str) -> str:
+    """Resolve a link and reject destinations outside the configured instance."""
+    url = urljoin(base_url, raw_url.replace("&amp;", "&"))
     root = urlparse(str(client.sei_root))
-    candidate = urlparse(url)
-    return (
-        candidate.scheme.casefold() == root.scheme.casefold()
-        and candidate.netloc.casefold() == root.netloc.casefold()
-    )
-
-
-def _absolute_and_local(client: SEIWebClient, base_url: str, maybe_relative: str) -> str:
-    url = urljoin(base_url, maybe_relative.replace("&amp;", "&"))
-    if not _same_origin(client, url):
-        raise SEIValidationError("A URL precisa pertencer à instância SEI configurada.")
+    target = urlparse(url)
+    if (root.scheme.casefold(), root.netloc.casefold()) != (
+        target.scheme.casefold(),
+        target.netloc.casefold(),
+    ):
+        message = "A URL precisa pertencer à instância SEI configurada."
+        raise SEIValidationError(message)
     return url
 
 
 def _redact(text: str) -> str:
-    text = re.sub(
+    """Redact common SEI capabilities before returning diagnostic HTML."""
+    redacted = re.sub(
         r"(?i)([?&](?:infra_hash|hdnToken|token|csrf(?:_token)?)=)[^&#'\"\s]+",
         r"\1<redacted>",
         text,
     )
-    text = re.sub(
+    return re.sub(
         r'(?i)(name=["\'](?:hdnToken|token|csrf(?:_token)?)["\'][^>]*value=["\'])[^"\']*',
         r"\1<redacted>",
-        text,
+        redacted,
     )
-    return text
 
 
-def _parse_js_string_arguments(source: str) -> list[str] | None:
-    """Parse only JS literal arguments (strings, integers, booleans, null).
-
-    Returning None means the callback uses an expression we do not understand;
-    it must remain diagnostic-only rather than executable.
-    """
+def _literal_arguments(source: str) -> list[str] | None:  # noqa: C901, PLR0912
+    """Parse literals in a JavaScript call without evaluating expressions."""
     values: list[str] = []
-    i = 0
-    length = len(source)
-    while i < length:
-        while i < length and source[i].isspace():
-            i += 1
-        if i >= length:
+    index = 0
+    while index < len(source):
+        while index < len(source) and source[index].isspace():
+            index += 1
+        if index >= len(source):
             break
-        if source[i] in ("'", '"'):
-            quote = source[i]
-            i += 1
-            out: list[str] = []
+        if source[index] in {"'", '"'}:
+            quote = source[index]
+            index += 1
+            buffer: list[str] = []
             escaped = False
-            while i < length:
-                ch = source[i]
-                i += 1
+            while index < len(source):
+                character = source[index]
+                index += 1
                 if escaped:
-                    out.append({"n": "\n", "r": "\r", "t": "\t"}.get(ch, ch))
+                    buffer.append({"n": "\n", "r": "\r", "t": "\t"}.get(character, character))
                     escaped = False
-                elif ch == "\\":
+                elif character == "\\":
                     escaped = True
-                elif ch == quote:
+                elif character == quote:
                     break
                 else:
-                    out.append(ch)
+                    buffer.append(character)
             else:
                 return None
-            values.append("".join(out))
+            values.append("".join(buffer))
         else:
-            start = i
-            while i < length and source[i] != ",":
-                i += 1
-            raw = source[start:i].strip()
-            if raw in {"true", "false", "null"} or re.fullmatch(r"-?\d+(?:\.\d+)?", raw):
-                values.append(raw)
+            start = index
+            while index < len(source) and source[index] != ",":
+                index += 1
+            token = source[start:index].strip()
+            if token in {"true", "false", "null"} or re.fullmatch(r"-?\d+(?:\.\d+)?", token):
+                values.append(token)
             else:
                 return None
-        while i < length and source[i].isspace():
-            i += 1
-        if i == length:
+        while index < len(source) and source[index].isspace():
+            index += 1
+        if index == len(source):
             break
-        if source[i] != ",":
+        if source[index] != ",":
             return None
-        i += 1
+        index += 1
     return values
 
 
 def _parse_js_call(source: str) -> tuple[str, list[str]] | None:
-    match = re.match(r"^\s*([A-Za-z_$][\w$]*)\s*\((.*)\)\s*;?\s*$", source, re.DOTALL)
-    if not match:
-        return None
-    values = _parse_js_string_arguments(match.group(2))
-    if values is None:
-        return None
-    return match.group(1), values
-
-
-def _function_body(html: str, name: str) -> tuple[list[str], str] | None:
-    """Return function parameter names and a balanced function body.
-
-    This is deliberately a lexer-sized parser, not an evaluator. It ignores
-    braces inside quoted literals and reports None for malformed JavaScript.
-    """
-    match = re.search(
-        rf"\bfunction\s+{re.escape(name)}\s*\(([^)]*)\)\s*\{{",
-        html,
-        flags=re.DOTALL,
+    """Return a callback name and literal arguments, or None for dynamic JS."""
+    match = re.match(
+        r"^\s*(?:return\s+)?([A-Za-z_$][\w$]*)\s*\((.*)\)\s*;?\s*$",
+        source,
+        re.DOTALL,
     )
-    if not match:
+    if match is None:
         return None
-    params = [part.strip() for part in match.group(1).split(",") if part.strip()]
-    i = match.end()
+    arguments = _literal_arguments(match.group(2))
+    if arguments is None:
+        return None
+    return match.group(1), arguments
+
+
+def _function_body(  # noqa: C901
+    html: str, function_name: str
+) -> tuple[list[str], str] | None:
+    """Extract one balanced JavaScript function body without executing it."""
+    match = re.search(
+        rf"\bfunction\s+{re.escape(function_name)}\s*\(([^)]*)\)\s*\{{",
+        html,
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+
     depth = 1
-    quote: str | None = None
+    index = match.end()
+    quote = ""
     escaped = False
-    while i < len(html):
-        ch = html[i]
-        i += 1
+    while index < len(html):
+        character = html[index]
+        index += 1
         if quote:
             if escaped:
                 escaped = False
-            elif ch == "\\":
+            elif character == "\\":
                 escaped = True
-            elif ch == quote:
-                quote = None
+            elif character == quote:
+                quote = ""
             continue
-        if ch in ("'", '"', "`"):
-            quote = ch
-        elif ch == "{":
+        if character in {"'", '"', "`"}:
+            quote = character
+        elif character == "{":
             depth += 1
-        elif ch == "}":
+        elif character == "}":
             depth -= 1
             if depth == 0:
-                return params, html[match.end() : i - 1]
+                parameters = [
+                    parameter.strip()
+                    for parameter in match.group(1).split(",")
+                    if parameter.strip()
+                ]
+                return parameters, html[match.end() : index - 1]
     return None
 
 
@@ -265,48 +270,45 @@ def _form_ref(form: Tag, index: int) -> str:
     return f"form:{form_id}" if form_id else f"form:index:{index}"
 
 
-def _button_key(form_ref: str, index: int) -> str:
-    return f"{form_ref}:button:{index}"
-
-
-def _get_form_by_ref(soup: BeautifulSoup, ref: str) -> Tag | None:
+def _find_form(soup: BeautifulSoup, form_ref: str) -> Tag | None:
     for index, form in enumerate(soup.find_all("form")):
-        if _form_ref(form, index) == ref:
+        if _form_ref(form, index) == form_ref:
             return form
     return None
 
 
-def _get_buttons(form: Tag, form_ref: str) -> list[dict[str, Any]]:
+def _button_specs(form: Tag, form_ref: str) -> list[dict[str, Any]]:
+    """Describe clickable form controls and preserve parsed literal callbacks."""
     buttons: list[dict[str, Any]] = []
     for index, element in enumerate(form.find_all(["button", "input"])):
         if element.name == "input":
             button_type = str(element.get("type", "")).casefold()
-            if button_type not in {"submit", "button"}:
+            if button_type not in {"button", "submit"}:
                 continue
         else:
             button_type = str(element.get("type", "submit")).casefold() or "submit"
         onclick = str(element.get("onclick", "")).strip()
-        call = _parse_js_call(onclick) if onclick else None
+        callback = _parse_js_call(onclick) if onclick else None
         buttons.append(
             {
-                "button_key": _button_key(form_ref, index),
+                "button_key": f"{form_ref}:button:{index}",
                 "name": str(element.get("name", "")),
                 "value": str(element.get("value", "")) or element.get_text(" ", strip=True),
                 "type": button_type,
-                "onclick_function": call[0] if call else None,
-                "onclick_args": call[1] if call else None,
+                "onclick_function": callback[0] if callback else None,
+                "onclick_args": callback[1] if callback else None,
             }
         )
     return buttons
 
 
-def _field_public_info(element: Tag) -> dict[str, Any] | None:
+def _field_spec(element: Tag) -> dict[str, Any] | None:
     name = str(element.get("name", "")).strip()
     if not name:
         return None
     tag = element.name
     input_type = str(element.get("type", "text")).casefold() if tag == "input" else tag
-    data: dict[str, Any] = {
+    result: dict[str, Any] = {
         "name": name,
         "type": input_type,
         "disabled": element.has_attr("disabled"),
@@ -314,17 +316,17 @@ def _field_public_info(element: Tag) -> dict[str, Any] | None:
         "required": element.has_attr("required"),
     }
     if input_type == "hidden":
-        data["hidden"] = True
-        data["value_redacted"] = True
-        return data
+        result["hidden"] = True
+        result["value_redacted"] = True
+        return result
     if tag == "select":
         selected = element.find_all("option", selected=True)
         if not selected:
             first = element.find("option")
             selected = [first] if isinstance(first, Tag) else []
-        data["multiple"] = element.has_attr("multiple")
-        data["values"] = [str(option.get("value", "")) for option in selected]
-        data["options"] = [
+        result["multiple"] = element.has_attr("multiple")
+        result["values"] = [str(option.get("value", "")) for option in selected]
+        result["options"] = [
             {
                 "value": str(option.get("value", "")),
                 "text": option.get_text(" ", strip=True),
@@ -334,16 +336,16 @@ def _field_public_info(element: Tag) -> dict[str, Any] | None:
             for option in element.find_all("option")
         ]
     elif tag == "textarea":
-        data["value"] = element.get_text()
+        result["value"] = element.get_text()
     else:
-        data["value"] = str(element.get("value", ""))
+        result["value"] = str(element.get("value", ""))
         if input_type in {"checkbox", "radio"}:
-            data["checked"] = element.has_attr("checked")
-    return data
+            result["checked"] = element.has_attr("checked")
+    return result
 
 
-def _collect_form_pairs(form: Tag) -> list[tuple[str, str]]:
-    """Return browser-like successful controls without collapsing duplicate names."""
+def _collect_form_pairs(form: Tag) -> list[tuple[str, str]]:  # noqa: C901
+    """Collect successful controls, keeping duplicated names in their DOM order."""
     pairs: list[tuple[str, str]] = []
     for element in form.find_all(["input", "select", "textarea"]):
         name = str(element.get("name", "")).strip()
@@ -354,17 +356,18 @@ def _collect_form_pairs(form: Tag) -> list[tuple[str, str]]:
         if input_type in {"submit", "button", "reset", "file", "image"}:
             continue
         if input_type in {"checkbox", "radio"}:
-            if not element.has_attr("checked"):
-                continue
-            pairs.append((name, str(element.get("value", "on"))))
+            if element.has_attr("checked"):
+                pairs.append((name, str(element.get("value", "on"))))
         elif tag == "select":
             selected = element.find_all("option", selected=True)
             if not selected:
                 first = element.find("option")
                 selected = [first] if isinstance(first, Tag) else []
-            for option in selected:
-                if option is not None and not option.has_attr("disabled"):
-                    pairs.append((name, str(option.get("value", ""))))
+            pairs.extend(
+                (name, str(option.get("value", "")))
+                for option in selected
+                if isinstance(option, Tag) and not option.has_attr("disabled")
+            )
         elif tag == "textarea":
             pairs.append((name, element.get_text()))
         else:
@@ -372,96 +375,122 @@ def _collect_form_pairs(form: Tag) -> list[tuple[str, str]]:
     return pairs
 
 
-def _with_overrides(
+def _apply_values(
     pairs: list[tuple[str, str]],
-    overrides: list[dict[str, str]] | None,
     mutations: list[dict[str, str]],
+    overrides: list[dict[str, str]] | None,
 ) -> list[tuple[str, str]]:
-    replace: dict[str, list[str]] = {}
+    """Apply plan mutations then caller overrides without losing repeated fields."""
+    replacements: dict[str, list[str]] = {}
     for mutation in mutations:
-        name = mutation.get("field", "")
-        value = mutation.get("value", "")
+        name = str(mutation.get("field", "")).strip()
         if name:
-            replace[name] = [value]
+            replacements[name] = [str(mutation.get("value", ""))]
+
+    override_names: set[str] = set()
     for override in overrides or []:
         name = str(override.get("name", "")).strip()
         if not name:
-            raise SEIValidationError("Cada override precisa ter o campo 'name'.")
-        replace.setdefault(name, []).append(str(override.get("value", "")))
-    result = [(name, value) for name, value in pairs if name not in replace]
-    for name, values in replace.items():
+            message = "Cada override precisa ter o campo 'name'."
+            raise SEIValidationError(message)
+        if name not in override_names:
+            replacements[name] = []
+            override_names.add(name)
+        replacements[name].append(str(override.get("value", "")))
+
+    result = [(name, value) for name, value in pairs if name not in replacements]
+    for name, values in replacements.items():
         result.extend((name, value) for value in values)
     return result
-
-
-def _controller_action_from_text(text: str) -> tuple[str, str]:
-    raw = text.replace("&amp;", "&")
-    return raw, _action_name(raw)
 
 
 def _callback_plan(
     html: str,
     function_name: str,
-    args: list[str],
+    arguments: list[str],
     base_url: str,
 ) -> dict[str, Any] | None:
-    parsed = _function_body(html, function_name)
-    if parsed is None:
+    """Translate a small allowlisted callback subset into a declarative plan."""
+    extracted = _function_body(html, function_name)
+    if extracted is None:
         return None
-    params, body = parsed
-    param_values = {param: args[index] for index, param in enumerate(params) if index < len(args)}
+    parameters, body = extracted
+    parameter_values = {
+        parameter: arguments[index]
+        for index, parameter in enumerate(parameters)
+        if index < len(arguments)
+    }
 
-    # A callback may simply navigate to a literal signed controller URL.
     location = re.search(
-        r"(?:window\.)?location\.href\s*=\s*['\"]([^'\"]+)['\"]",
+        r"(?:window\.)?location(?:\.href)?\s*=\s*['\"]([^'\"]+)['\"]",
         body,
-        flags=re.DOTALL,
+        re.DOTALL,
     )
-    if location:
-        raw, action = _controller_action_from_text(location.group(1))
+    if location is not None:
+        target = location.group(1).replace("&amp;", "&")
+        action_name = _action_name(target)
         return {
             "kind": "direct_get",
-            "action_name": action,
-            "risk": _risk(action),
-            "target_url": urljoin(base_url, raw),
-            "mutations": [],
+            "action_name": action_name,
+            "risk": _risk(action_name),
+            "target_url": urljoin(base_url, target),
             "form_ref": None,
+            "mutations": [],
         }
 
     form_match = re.search(
+        r"(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*"
         r"document\.getElementById\(['\"]([^'\"]+)['\"]\)",
         body,
-        flags=re.DOTALL,
+        re.DOTALL,
     )
-    form_id = form_match.group(1) if form_match else ""
+    if form_match is None:
+        return None
+    variable, form_id = form_match.groups()
     action_match = re.search(
-        r"\.action\s*=\s*['\"]([^'\"]*controlador\.php\?acao=[^'\"]+)['\"]",
+        rf"\b{re.escape(variable)}\.action\s*=\s*['\"]"
+        r"([^'\"]*controlador\.php\?acao=[^'\"]+)['\"]",
         body,
-        flags=re.DOTALL,
+        re.DOTALL,
     )
-    submit_match = re.search(r"\.submit\s*\(\s*\)", body)
-    if not form_id or not action_match or not submit_match:
+    submits = re.search(rf"\b{re.escape(variable)}\.submit\s*\(\s*\)", body)
+    if action_match is None or submits is None:
         return None
 
-    target_raw, action = _controller_action_from_text(action_match.group(1))
     mutations: list[dict[str, str]] = []
-    # The common SEI pattern is document.getElementById('hidden').value = id;
-    for assignment in re.finditer(
-        r"document\.getElementById\(['\"]([^'\"]+)['\"]\)\.value\s*=\s*([A-Za-z_$][\w$]*)",
-        body,
-        flags=re.DOTALL,
-    ):
-        field, variable = assignment.groups()
-        if variable in param_values:
-            mutations.append({"field": field, "value": param_values[variable]})
+    assignment_pattern = (
+        r"document\.getElementById\(['\"]([^'\"]+)['\"]\)\.value\s*=\s*"
+        r"([A-Za-z_$][\w$]*)"
+    )
+    for field_name, parameter in re.findall(assignment_pattern, body, re.DOTALL):
+        if parameter in parameter_values:
+            mutations.append({"field": field_name, "value": parameter_values[parameter]})
 
+    target = action_match.group(1).replace("&amp;", "&")
+    action_name = _action_name(target)
     return {
         "kind": "form_submit",
-        "action_name": action,
-        "risk": _risk(action),
-        "target_url": urljoin(base_url, target_raw),
-        "mutations": mutations,
+        "action_name": action_name,
+        "risk": _risk(action_name),
+        "target_url": urljoin(base_url, target),
         "form_ref": f"form:{form_id}",
+        "mutations": mutations,
+    }
+
+
+def _unsupported_plan(trigger_id: str, label: str) -> dict[str, Any]:
+    return {
+        "trigger_id": trigger_id,
+        "label": label,
+        "kind": "unsupported_callback",
+        "action_name": "",
+        "risk": "write",
+        "target_url": "",
+        "form_ref": None,
+        "mutations": [],
+        "button": None,
+        "supported": False,
+        "reason": "callback_outside_static_subset",
     }
 
 
@@ -478,28 +507,33 @@ def _public_plan(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _inspect_html(html: str, base_url: str) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+def _inspect_html(  # noqa: C901
+    html: str,
+    base_url: str,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Build public page metadata and private executable action plans."""
     soup = BeautifulSoup(html, "html.parser")
     forms: list[dict[str, Any]] = []
     plans: dict[str, dict[str, Any]] = {}
-    counter = 0
+    sequence = 0
 
     for index, form in enumerate(soup.find_all("form")):
-        ref = _form_ref(form, index)
-        action_url = urljoin(base_url, str(form.get("action", "")).replace("&amp;", "&"))
-        action = _action_name(action_url)
-        buttons = _get_buttons(form, ref)
+        form_ref = _form_ref(form, index)
+        raw_action = str(form.get("action", "")).replace("&amp;", "&")
+        target_url = urljoin(base_url, raw_action) if raw_action else base_url
+        action_name = _action_name(target_url)
+        buttons = _button_specs(form, form_ref)
         forms.append(
             {
-                "form_ref": ref,
+                "form_ref": form_ref,
                 "id": str(form.get("id", "")) or None,
                 "method": str(form.get("method", "get")).casefold(),
                 "enctype": str(form.get("enctype", "application/x-www-form-urlencoded")).casefold(),
-                "action_name": action or None,
+                "action_name": action_name or None,
                 "fields": [
-                    info
+                    item
                     for element in form.find_all(["input", "select", "textarea"])
-                    if (info := _field_public_info(element)) is not None
+                    if (item := _field_spec(element)) is not None
                 ],
                 "buttons": buttons,
             }
@@ -507,106 +541,94 @@ def _inspect_html(html: str, base_url: str) -> tuple[dict[str, Any], dict[str, d
         for button in buttons:
             if button["type"] != "submit":
                 continue
-            counter += 1
-            trigger_id = f"submit:{counter}"
-            plan = {
+            sequence += 1
+            trigger_id = f"submit:{sequence}"
+            plans[trigger_id] = {
                 "trigger_id": trigger_id,
                 "label": button["value"] or "Enviar",
                 "kind": "form_submit",
-                "risk": _risk(action),
-                "action_name": action,
-                "target_url": action_url or base_url,
-                "form_ref": ref,
+                "action_name": action_name,
+                "risk": _risk(action_name),
+                "target_url": target_url,
+                "form_ref": form_ref,
                 "mutations": [],
                 "button": button,
-                "supported": bool(action),
-                "reason": None if action else "form_without_action",
+                "supported": bool(action_name),
+                "reason": None if action_name else "form_without_action",
             }
-            plans[trigger_id] = plan
 
-    # Direct links and linkX variables are discovered without exposing signed URLs.
     for anchor in soup.find_all("a", href=True):
-        href = str(anchor["href"])
-        if "acao=" not in href:
+        raw_url = str(anchor["href"]).replace("&amp;", "&")
+        if "acao=" not in raw_url:
             continue
-        raw, action = _controller_action_from_text(href)
-        counter += 1
-        trigger_id = f"href:{counter}"
+        action_name = _action_name(raw_url)
+        sequence += 1
+        trigger_id = f"href:{sequence}"
         plans[trigger_id] = {
             "trigger_id": trigger_id,
-            "label": anchor.get_text(" ", strip=True) or anchor.get("title", "") or action,
+            "label": anchor.get_text(" ", strip=True) or str(anchor.get("title", "")) or action_name,
             "kind": "direct_get",
-            "risk": _risk(action),
-            "action_name": action,
-            "target_url": urljoin(base_url, raw),
+            "action_name": action_name,
+            "risk": _risk(action_name),
+            "target_url": urljoin(base_url, raw_url),
             "form_ref": None,
             "mutations": [],
             "button": None,
-            "supported": bool(action),
-            "reason": None if action else "missing_action",
+            "supported": bool(action_name),
+            "reason": None if action_name else "missing_action",
         }
 
-    for index, match in enumerate(
-        re.finditer(r"\b(?:var\s+)?([A-Za-z_$][\w$]*[Ll]ink[\w$]*)\s*=\s*(['\"])(.*?)\2", html, re.DOTALL)
+    for variable, _, raw_url in re.findall(
+        r"\b(?:var\s+)?(\w*[Ll]ink\w*)\s*=\s*(['\"])(.*?)\2",
+        html,
+        re.DOTALL,
     ):
-        variable, _, raw = match.groups()
-        if "acao=" not in raw:
+        if "acao=" not in raw_url:
             continue
-        raw, action = _controller_action_from_text(raw)
-        counter += 1
-        trigger_id = f"jsvar:{variable}:{index}"
+        action_name = _action_name(raw_url)
+        sequence += 1
+        trigger_id = f"jsvar:{variable}:{sequence}"
         plans[trigger_id] = {
             "trigger_id": trigger_id,
             "label": variable,
             "kind": "direct_get",
-            "risk": _risk(action),
-            "action_name": action,
-            "target_url": urljoin(base_url, raw),
+            "action_name": action_name,
+            "risk": _risk(action_name),
+            "target_url": urljoin(base_url, raw_url.replace("&amp;", "&")),
             "form_ref": None,
             "mutations": [],
             "button": None,
-            "supported": bool(action),
-            "reason": None if action else "missing_action",
+            "supported": bool(action_name),
+            "reason": None if action_name else "missing_action",
         }
 
-    # Map callbacks on actual clickable elements to a static plan, preserving
-    # literal arguments. Unsupported callbacks are intentionally diagnostic.
-    for element_index, element in enumerate(soup.find_all(["a", "button", "input"])):
+    for index, element in enumerate(soup.find_all(["a", "button", "input"])):
         onclick = str(element.get("onclick", "")).strip()
         if not onclick:
             continue
-        call = _parse_js_call(onclick)
-        if call is None:
+        callback = _parse_js_call(onclick)
+        name_match = re.match(r"^\s*([A-Za-z_$][\w$]*)\s*\(", onclick)
+        if callback is None and name_match is None:
             continue
-        function_name, args = call
-        counter += 1
-        trigger_id = f"callback:{element_index}:{function_name}"
-        callback = _callback_plan(html, function_name, args, base_url)
-        if callback is None:
-            plans[trigger_id] = {
-                "trigger_id": trigger_id,
-                "label": element.get_text(" ", strip=True) or str(element.get("title", "")) or function_name,
-                "kind": "unsupported_callback",
-                "risk": "write",
-                "action_name": "",
-                "target_url": "",
-                "form_ref": None,
-                "mutations": [],
-                "button": None,
-                "supported": False,
-                "reason": "callback_outside_static_subset",
-            }
+        function_name = callback[0] if callback else name_match.group(1)
+        arguments = callback[1] if callback else []
+        sequence += 1
+        trigger_id = f"callback:{index}:{function_name}"
+        label = element.get_text(" ", strip=True) or str(element.get("title", "")) or function_name
+        plan = _callback_plan(html, function_name, arguments, base_url) if callback else None
+        if plan is None:
+            plans[trigger_id] = _unsupported_plan(trigger_id, label)
             continue
-        callback.update(
+        plan.update(
             {
                 "trigger_id": trigger_id,
-                "label": element.get_text(" ", strip=True) or str(element.get("title", "")) or function_name,
+                "label": label,
                 "button": None,
                 "supported": True,
                 "reason": None,
             }
         )
-        plans[trigger_id] = callback
+        plans[trigger_id] = plan
 
     public = {
         "forms": forms,
@@ -620,34 +642,42 @@ def _fingerprint(public: dict[str, Any]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-async def _fetch_read_page(client: SEIWebClient, url: str, referer: str = "") -> tuple[str, str]:
-    """Fetch a page without following an unclassified redirect."""
+async def _fetch_read_page(
+    client: SEIWebClient,
+    url: str,
+    referer: str = "",
+) -> tuple[str, str]:
+    """Fetch only a previously classified read page, including safe redirects."""
     await client.ensure_authenticated()
-    current = _absolute_and_local(client, str(client.sei_root), url)
+    current = _local_url(client, str(client.sei_root), url)
     for _ in range(_MAX_REDIRECTS + 1):
-        action = _action_name(current)
-        if not _is_read_action(action):
-            raise SEIValidationError(
-                f"A inspeção só abre páginas de leitura conhecidas; '{action or 'sem acao'}' "
-                "é uma ação ou rota não classificada."
+        action_name = _action_name(current)
+        if not _is_read_action(action_name):
+            message = (
+                "A inspeção só abre páginas de leitura conhecidas; "
+                f"{action_name or 'rota sem acao'} não foi classificada como leitura."
             )
-        response = await client._http.get(
+            raise SEIValidationError(message)
+        response = await client._http.get(  # noqa: SLF001
             current,
-            headers={"Referer": referer or str(client._inbox_url or "")},
+            headers={"Referer": referer or str(client._inbox_url or "")},  # noqa: SLF001
             follow_redirects=False,
         )
         if response.is_redirect:
             location = response.headers.get("location")
             if not location:
-                raise SEIConnectionError("Redirecionamento do SEI sem cabeçalho Location.")
-            referer, current = current, _absolute_and_local(client, current, location)
+                message = "Redirecionamento do SEI sem cabeçalho Location."
+                raise SEIConnectionError(message)
+            referer, current = current, _local_url(client, current, location)
             continue
         _check(response)
         body = _decode_response(response.content, response.headers.get("content-type", ""))
         if _is_login_page(body):
-            raise SEIConnectionError("O SEI devolveu a página de login durante a inspeção.")
+            message = "O SEI devolveu a página de login durante a inspeção."
+            raise SEIConnectionError(message)
         return body, str(response.url)
-    raise SEIConnectionError("Número máximo de redirecionamentos excedido na inspeção.")
+    message = "Número máximo de redirecionamentos excedido na inspeção."
+    raise SEIConnectionError(message)
 
 
 async def inspect_page(
@@ -656,29 +686,28 @@ async def inspect_page(
     *,
     incluir_raw: bool = False,
 ) -> dict[str, Any]:
-    """Inspect a known-safe SEI page and retain an opaque action-plan snapshot."""
+    """Inspect a read page and retain an opaque reference to its static plans."""
     body, final_url = await _fetch_read_page(client, url)
     public, _ = _inspect_html(body, final_url)
-    fingerprint = _fingerprint(public)
-    page_ref = f"sei-page:{secrets.token_urlsafe(18)}"
-    snapshot = _Snapshot(
+    now = time.monotonic()
+    reference = f"sei-page:{secrets.token_urlsafe(18)}"
+    snapshot = _PageSnapshot(
         url=final_url,
-        referer=str(client._inbox_url or ""),
-        fingerprint=fingerprint,
-        created_at=time.monotonic(),
+        referer=str(client._inbox_url or ""),  # noqa: SLF001
+        fingerprint=_fingerprint(public),
+        created_at=now,
     )
-    store = _store(client)
+    store = await _page_store(client)
     async with store.lock:
-        now = time.monotonic()
         store.snapshots = {
             key: value
             for key, value in store.snapshots.items()
             if now - value.created_at <= _PAGE_TTL_SECONDS
         }
-        store.snapshots[page_ref] = snapshot
+        store.snapshots[reference] = snapshot
 
     result: dict[str, Any] = {
-        "page_ref": page_ref,
+        "page_ref": reference,
         "expires_in_seconds": _PAGE_TTL_SECONDS,
         "url_kind": _action_name(final_url) or None,
         **public,
@@ -688,62 +717,60 @@ async def inspect_page(
     return result
 
 
-def _selected_button(form: Tag, form_ref: str, requested: dict[str, str] | None) -> dict[str, Any] | None:
-    buttons = [button for button in _get_buttons(form, form_ref) if button["type"] == "submit"]
+def _button_for_plan(
+    form: Tag,
+    form_ref: str,
+    planned_button: dict[str, Any] | None,
+    requested_button: dict[str, str] | None,
+) -> dict[str, Any] | None:
+    buttons = [button for button in _button_specs(form, form_ref) if button["type"] == "submit"]
     if not buttons:
         return None
-    if requested:
-        key = requested.get("button_key")
-        if key:
-            match = next((button for button in buttons if button["button_key"] == key), None)
-        else:
-            match = next(
-                (
-                    button
-                    for button in buttons
-                    if button["name"] == requested.get("name", "")
-                    and button["value"] == requested.get("value", "")
-                ),
-                None,
-            )
-        if match is None:
-            raise SEIValidationError("O botão submit informado não pertence ao formulário atual.")
-        return match
-    if len(buttons) > 1:
-        raise SEIValidationError(
-            "O formulário possui mais de um botão submit. Informe submit_button pelo button_key."
-        )
-    return buttons[0]
+    request = requested_button or planned_button
+    if request is not None:
+        button_key = str(request.get("button_key", ""))
+        button = next((item for item in buttons if item["button_key"] == button_key), None)
+        if button is None:
+            message = "O botão submit informado não pertence ao formulário atual."
+            raise SEIValidationError(message)
+        return button
+    if len(buttons) == 1:
+        return buttons[0]
+    message = "O formulário possui mais de um botão submit; informe submit_button.button_key."
+    raise SEIValidationError(message)
 
 
 async def _verify(
     client: SEIWebClient,
-    snapshot: _Snapshot,
-    expect: dict[str, str] | None,
+    snapshot: _PageSnapshot,
+    expectation: dict[str, str] | None,
 ) -> dict[str, Any]:
-    if not expect:
+    if not expectation:
         return {"status": "not_requested"}
-    kind = str(expect.get("kind", ""))
+    kind = str(expectation.get("kind", ""))
     body, _ = await _fetch_read_page(client, snapshot.url, snapshot.referer)
     soup = BeautifulSoup(body, "html.parser")
-    if kind in {"text_absent", "text_present"}:
-        text = str(expect.get("text", ""))
+    if kind in {"text_present", "text_absent"}:
+        text = str(expectation.get("text", ""))
         if not text:
-            raise SEIValidationError("A verificação textual exige expect.text.")
+            message = "A verificação textual exige expect.text."
+            raise SEIValidationError(message)
         present = text in soup.get_text(" ", strip=True)
-        wanted = kind == "text_present"
-        return {"status": "passed" if present == wanted else "failed", "kind": kind}
-    if kind in {"selector_absent", "selector_present"}:
-        selector = str(expect.get("selector", ""))
+        expected = kind == "text_present"
+    elif kind in {"selector_present", "selector_absent"}:
+        selector = str(expectation.get("selector", ""))
         if not selector:
-            raise SEIValidationError("A verificação por seletor exige expect.selector.")
+            message = "A verificação por seletor exige expect.selector."
+            raise SEIValidationError(message)
         present = soup.select_one(selector) is not None
-        wanted = kind == "selector_present"
-        return {"status": "passed" if present == wanted else "failed", "kind": kind}
-    raise SEIValidationError(f"Tipo de verificação não suportado: {kind!r}.")
+        expected = kind == "selector_present"
+    else:
+        message = f"Tipo de verificação não suportado: {kind!r}."
+        raise SEIValidationError(message)
+    return {"status": "passed" if present == expected else "failed", "kind": kind}
 
 
-async def execute_page_plan(
+async def execute_page_plan(  # noqa: C901, PLR0912, PLR0913, PLR0915
     client: SEIWebClient,
     page_ref: str,
     trigger_id: str,
@@ -753,76 +780,87 @@ async def execute_page_plan(
     confirmar: bool = False,
     expect: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Execute a previously inspected static plan; never execute arbitrary JS."""
-    store = _store(client)
+    """Execute a previously inspected plan without JS input or arbitrary URLs."""
+    store = await _page_store(client)
     async with store.lock:
         snapshot = store.snapshots.get(page_ref)
     if snapshot is None:
-        raise SEINotFoundError("page_ref desconhecida ou já expirada.")
+        message = "page_ref desconhecida ou expirada; inspecione a página novamente."
+        raise SEINotFoundError(message)
     if time.monotonic() - snapshot.created_at > _PAGE_TTL_SECONDS:
         async with store.lock:
             store.snapshots.pop(page_ref, None)
-        raise SEINotFoundError("page_ref expirada; inspecione a página novamente.")
+        message = "page_ref expirada; inspecione a página novamente."
+        raise SEINotFoundError(message)
 
     body, final_url = await _fetch_read_page(client, snapshot.url, snapshot.referer)
     public, plans = _inspect_html(body, final_url)
     if _fingerprint(public) != snapshot.fingerprint:
-        raise SEIValidationError(
-            "A página mudou desde a inspeção; gere uma nova page_ref antes de executar a ação."
-        )
+        message = "A página mudou desde a inspeção; gere uma nova page_ref antes de executar."
+        raise SEIValidationError(message)
     plan = plans.get(trigger_id)
     if plan is None:
-        raise SEINotFoundError("O trigger_id não existe mais na página atual.")
+        message = "O trigger_id não existe mais na página atual."
+        raise SEINotFoundError(message)
     if not plan["supported"]:
-        raise SEIValidationError(
-            "Este callback está fora do subconjunto estático suportado e não pode ser executado."
-        )
+        message = "O callback está fora do subconjunto estático suportado."
+        raise SEIValidationError(message)
     if plan["risk"] != "read" and not confirmar:
-        raise SEIValidationError(
-            "A ação pode alterar o SEI. Reenvie com confirmar=True após conferir o plano."
-        )
+        message = "A ação pode alterar o SEI. Reenvie com confirmar=True."
+        raise SEIValidationError(message)
 
     if plan["kind"] == "direct_get":
-        target = _absolute_and_local(client, final_url, plan["target_url"])
-        response = await client._http.get(target, headers={"Referer": final_url})
+        response = await client._http.get(  # noqa: SLF001
+            _local_url(client, final_url, str(plan["target_url"])),
+            headers={"Referer": final_url},
+            follow_redirects=False,
+        )
     elif plan["kind"] == "form_submit":
         soup = BeautifulSoup(body, "html.parser")
-        form = _get_form_by_ref(soup, str(plan["form_ref"]))
+        form = _find_form(soup, str(plan["form_ref"]))
         if form is None:
-            raise SEIParseError("O formulário do plano não foi localizado após releitura.")
-        method = str(form.get("method", "get")).casefold()
-        if method != "post":
-            raise SEIValidationError("A execução genérica só suporta formulários POST.")
+            message = "O formulário do plano não foi localizado após releitura."
+            raise SEIParseError(message)
+        if str(form.get("method", "get")).casefold() != "post":
+            message = "A execução genérica só suporta formulários POST."
+            raise SEIValidationError(message)
         enctype = str(form.get("enctype", "application/x-www-form-urlencoded")).casefold()
         if enctype not in {"", "application/x-www-form-urlencoded"}:
-            raise SEIValidationError(
-                "A execução genérica não suporta este enctype; use uma ferramenta tipada."
-            )
-        pairs = _collect_form_pairs(form)
-        pairs = _with_overrides(pairs, overrides, list(plan.get("mutations", [])))
-        button = _selected_button(form, str(plan["form_ref"]), submit_button)
+            message = "A execução genérica não suporta este enctype; use uma ferramenta tipada."
+            raise SEIValidationError(message)
+        pairs = _apply_values(
+            _collect_form_pairs(form),
+            list(plan.get("mutations", [])),
+            overrides,
+        )
+        button = _button_for_plan(
+            form,
+            str(plan["form_ref"]),
+            plan.get("button"),
+            submit_button,
+        )
         if button and button["name"]:
             pairs.append((str(button["name"]), str(button["value"])))
-        target = _absolute_and_local(client, final_url, str(plan["target_url"]))
-        response = await client._http.post(
-            target,
+        response = await client._http.post(  # noqa: SLF001
+            _local_url(client, final_url, str(plan["target_url"])),
             content=urlencode(pairs, encoding="iso-8859-1", errors="replace").encode("ascii"),
             headers={"Referer": final_url, "Content-Type": "application/x-www-form-urlencoded"},
+            follow_redirects=False,
         )
     else:
-        raise SEIValidationError(f"Tipo de plano não executável: {plan['kind']!r}.")
+        message = f"Plano não executável: {plan['kind']!r}."
+        raise SEIValidationError(message)
 
     _check(response)
     response_body = _decode_response(response.content, response.headers.get("content-type", ""))
     if error := _extrair_erro_sei(response_body):
         raise SEIConnectionError(error)
 
-    # The generic executor cannot always infer the affected process; dropping
-    # the short-lived tree cache is safer than returning stale state.
-    client._arvore_cache.clear()
+    client._arvore_cache.clear()  # noqa: SLF001
     verification = await _verify(client, snapshot, expect)
     if verification["status"] == "failed":
-        raise SEIConnectionError("O SEI respondeu sem erro, mas a pós-condição não foi satisfeita.")
+        message = "O SEI respondeu sem erro, mas a pós-condição não foi satisfeita."
+        raise SEIConnectionError(message)
 
     return {
         "submitted": True,
