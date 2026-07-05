@@ -13,6 +13,20 @@ Limitações:
 - Layout dos campos depende da configuração de painel do usuário no SEI
 - Sem suporte a 2FA ou CAPTCHA (aborta com erro)
 - Específico para instâncias SEI com Infra v1.5x+ (login form com hdnToken)
+
+Arquitetura deliberadamente pure-HTTP (httpx + BeautifulSoup), sem
+browser/Playwright — mais leve e mais rápido que dirigir um browser real, e
+suficiente pra tudo que é scraping/parsing/submissão de formulário (RFC
+0020 explicitamente lista "executar JS de verdade" como não-objetivo).
+
+A ÚNICA exceção conhecida é `sei_capturar_tela` (RFC 0021,
+`src/todos/browser_capture.py`) — captura visual (screenshot PNG) não tem
+como ser obtida renderizando HTML puro, então essa tool específica levanta
+um Playwright/Chromium headless à parte. Ela reaproveita a sessão SIP já
+autenticada por este módulo (`ensure_authenticated` + cookies de
+`self._http`) em vez de logar de novo no browser — ver `browser_capture.py`
+para os detalhes. Essa exceção é escopada a essa tool: não é precedente
+para reescrever o resto deste scraper em Playwright.
 """
 
 from __future__ import annotations
@@ -39,6 +53,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
     from types import ModuleType
 
+from todos import browser_capture
 from todos.backends.models import (
     DocumentoExternoInclusaoWeb,
     NovoProcessoWeb,
@@ -56,6 +71,9 @@ from todos.exceptions import (
     SEIParseError,
     SEIValidationError,
 )
+from todos.html_utils import is_login_page as _is_login_page
+from todos.html_utils import peek_is_login_page as _peek_is_login_page
+from todos.html_utils import redact_signed_capabilities as _redact_signed_capabilities
 from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -143,43 +161,26 @@ def _tag_str(tag: Tag | None, attr: str, default: str = "") -> str:
 
 
 def _check(r: httpx.Response) -> None:
-    """Raise a typed SEIError for any non-2xx response."""
+    """Raise a typed SEIError for any non-2xx response.
+
+    `httpx.HTTPStatusError`'s default message embeds the full request URL —
+    including `infra_hash`/token query params for SEI's signed action URLs —
+    so the message is redacted before being embedded in the raised error;
+    otherwise any transient 4xx/5xx would hand the capability straight back
+    to the agent.
+    """
     try:
         r.raise_for_status()
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
+        msg = _redact_signed_capabilities(str(exc))
         if status in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
-            raise SEIAuthError(str(exc)) from exc
+            raise SEIAuthError(msg) from exc
         if status == httpx.codes.NOT_FOUND:
-            raise SEINotFoundError(str(exc)) from exc
+            raise SEINotFoundError(msg) from exc
         if status >= httpx.codes.INTERNAL_SERVER_ERROR:
-            raise SEIConnectionError(str(exc)) from exc
-        raise SEIValidationError(str(exc)) from exc
-
-
-_LOGIN_PAGE_PEEK_BYTES = 8192  # login forms sit near the top; no need to decode a whole PDF/ZIP
-
-
-def _is_login_page(body: str) -> bool:
-    """Detect whether *body* is the SEI login page instead of the page requested.
-
-    A dead SIP session doesn't fail with 401/403 — the server answers HTTP
-    200 with the login form's HTML. ``_check()`` can't catch this (it only
-    looks at status codes), so every multi-step scrape must inspect the body
-    for this marker to tell "session expired mid-flow" apart from "a normal
-    parse failure".
-    """
-    return 'name="txtUsuario"' in body or 'id="txtUsuario"' in body
-
-
-def _peek_is_login_page(content: bytes) -> bool:
-    """Like ``_is_login_page``, but only decodes a bounded byte prefix.
-
-    Used where decoding the full body would be wasteful (e.g. a large PDF/ZIP
-    download) — the login form's marker always sits near the top when present.
-    """
-    peek = content[:_LOGIN_PAGE_PEEK_BYTES].decode("utf-8", errors="replace")
-    return _is_login_page(peek)
+            raise SEIConnectionError(msg) from exc
+        raise SEIValidationError(msg) from exc
 
 
 def _safe_int(val: str, default: int = 0) -> int:
@@ -264,6 +265,59 @@ def _extrair_link_enviar_processo(html_arvore: str, sei_base: str, protocolo: st
         )
         raise SEINotFoundError(msg)
     return urljoin(sei_base, m.group(0).replace("&amp;", "&"))
+
+
+def _extrair_incluir_documento_href(html_arvore: str) -> str | None:
+    """Localiza o href de "Incluir Documento" (`documento_escolher_tipo`) na árvore.
+
+    As ações do nó raiz (`Nos[0].acoes`) vêm como HTML *escapado dentro de
+    uma string JS* (`Nos[0].acoes = '<a href="...">...'`), não como `<a>` de
+    verdade no DOM da página — por isso `soup.find_all("a", ...)` direto na
+    árvore inteira nunca enxerga esse link; é preciso extrair a string
+    primeiro. Compartilhado entre `criar_documento_interno_web`,
+    `incluir_documento_externo` e `_obter_soup_documento_receber` (bug
+    original: só o primeiro tinha essa correção, os outros dois falhavam
+    sempre — ver changelog).
+
+    Retorna `None` se o link não for encontrado por nenhuma das estratégias
+    (o chamador decide a mensagem de erro apropriada ao contexto).
+    """
+    acoes_html = ""
+    for pat in (
+        r"(?s)Nos\[0\]\.acoes\s*=\s*'((?:[^'\\]|\\.)*)'",
+        r'(?s)Nos\[0\]\.acoes\s*=\s*"((?:[^"\\]|\\.)*)"',
+    ):
+        m_acoes = re.search(pat, html_arvore)
+        if m_acoes:
+            acoes_html = (
+                m_acoes.group(1).replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
+            )
+            break
+
+    soup_acoes = BeautifulSoup(acoes_html or html_arvore, "html.parser")
+    incluir_href: str | None = None
+    for a in soup_acoes.find_all("a", href=re.compile(r"documento_escolher_tipo")):
+        incluir_href = _tag_str(a, "href").replace("&amp;", "&")
+        break
+    if not incluir_href:
+        for img in soup_acoes.find_all("img"):
+            if "Incluir" in (img.get("title", "") or "") or "incluir" in (img.get("src", "") or ""):
+                pa = img.find_parent("a")
+                # Confirma que o link pai aponta para documento_escolher_tipo,
+                # não "Incluir em Bloco" ou outra ação de toolbar com "incluir".
+                if pa and "documento_escolher_tipo" in _tag_str(pa, "href"):
+                    incluir_href = _tag_str(pa, "href").replace("&amp;", "&")
+                    break
+    if not incluir_href:
+        # Último recurso: regex direto no HTML bruto (cobre instâncias onde
+        # nem Nos[0].acoes existe mas o link aparece solto em outro script).
+        m_href = re.search(
+            r"controlador\.php\?acao=documento_escolher_tipo[^\"'\s]*infra_hash=[a-fA-F0-9]+",
+            html_arvore,
+        )
+        if m_href:
+            incluir_href = m_href.group(0).replace("&amp;", "&")
+    return incluir_href
 
 
 def _parse_form_info(form: Tag, base_url: str) -> dict:
@@ -762,6 +816,75 @@ class SEIWebClient:
     def is_authenticated(self) -> bool:
         """True após login bem-sucedido (inbox_url capturada)."""
         return self._inbox_url is not None
+
+    @property
+    def cookies(self) -> httpx.Cookies:
+        """Cookie jar da sessão httpx autenticada.
+
+        Único ponto de acesso público usado por `browser_capture.capturar_tela`
+        para transplantar a sessão já autenticada para o `BrowserContext` do
+        Playwright (RFC 0021) — nunca loga de novo no browser.
+        """
+        return self._http.cookies
+
+    @property
+    def inbox_url(self) -> str:
+        """URL da caixa de entrada da sessão autenticada, ou vazio antes do login.
+
+        Wrapper público usado por `sei_action_plans` (RFC 0025) como Referer
+        padrão ao inspecionar/executar planos de ação genéricos.
+        """
+        return str(self._inbox_url or "")
+
+    async def http_get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
+    ) -> httpx.Response:
+        """GET autenticado via a sessão httpx deste client.
+
+        Wrapper público usado por `sei_action_plans` (RFC 0025), que já valida
+        a mesma origem (`validar_mesma_origem`) antes de qualquer chamada.
+        """
+        return await self._http.get(url, headers=headers, follow_redirects=follow_redirects)
+
+    async def http_post(
+        self,
+        url: str,
+        *,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
+    ) -> httpx.Response:
+        """POST autenticado via a sessão httpx deste client — ver `http_get`."""
+        return await self._http.post(
+            url, content=content, headers=headers, follow_redirects=follow_redirects
+        )
+
+    async def http_send(
+        self, request: httpx.Request, *, follow_redirects: bool = False
+    ) -> httpx.Response:
+        """Envia uma `httpx.Request` já construída via a sessão autenticada deste client.
+
+        Wrapper público usado por `sei_action_plans` (RFC 0025) para seguir
+        manualmente `response.next_request` (mesmo padrão de
+        `_enviar_mesma_origem`), validando a origem de cada salto de redirect
+        antes de segui-lo.
+        """
+        return await self._http.send(request, follow_redirects=follow_redirects)
+
+    def invalidar_cache_arvore_completo(self) -> None:
+        """Limpa o cache de árvores de TODOS os processos.
+
+        Wrapper público usado por `sei_action_plans.execute_page_plan` (RFC
+        0025) após uma execução genérica de ação — diferente de
+        `_invalidar_arvore(protocolo)`, usado pelos métodos tipados que sabem
+        qual processo foi afetado, a execução genérica não sabe qual protocolo
+        a página pertence, então invalida tudo por segurança.
+        """
+        self._arvore_cache.clear()
 
     def refresh_request_cookies(self, request: httpx.Request) -> None:
         """Refresh *request*'s baked-in ``Cookie`` header from the current jar.
@@ -2526,15 +2649,15 @@ class SEIWebClient:
         Resolvido pelo mesmo padrão de ``_get_arvore_visualizar_link_var``
         usado para editor_montar: a URL assinada só existe como a variável
         JS ``linkAssinarDocumento`` na página ``arvore_visualizar``, não em
-        ``Nos[].acoes``. NÃO IMPLEMENTADO/TESTADO CONTRA A INSTÂNCIA REAL —
-        escrito por especificação de código (form + campos confirmados via
-        inspeção manual do DOM em sei.sistemas.ro.gov.br, 2026-07-03), mas a
-        submissão final (POST com senha) nunca foi executada nesta sessão:
-        cada assinatura é um ato jurídico real e irreversível, e a política
-        de segurança do agente que escreveu isto proíbe manipular senha de
-        usuário mesmo vinda do keyring — ver
-        docs/known-issues/2026-07-03-documento-editar-conteudo-crc32.md
-        para o contexto da descoberta do padrão `linkX`.
+        ``Nos[].acoes``. Confirmado ao vivo (2026-07-04, ver
+        docs/rfc/0023-assinatura-documento-web-post-senha-falha.md): o
+        payload precisa replicar exatamente o que o JS real
+        ``assinarSenha()`` faz antes de ``frmAssinaturas.submit()`` —
+        ``pwdSenha`` e ``hdnFormaAutenticacao="S"``. Uma primeira tentativa
+        sem ``hdnFormaAutenticacao`` falhou silenciosamente (o SEI reexibe o
+        mesmo form, sem nenhum erro explícito); o override de ``orgao``
+        também usava o nome de campo errado (``selOrgaoAssinante`` em vez de
+        ``selOrgao``, o nome real do select no form).
 
         O form já vem com valores padrão sensatos pré-selecionados pelo
         próprio SEI (órgão do usuário logado, cargo mais comumente usado) —
@@ -2542,6 +2665,11 @@ class SEIWebClient:
         esse padrão. A senha é lida de ``self._senha`` (mesma fonte usada
         no login — keyring ou ``SEI_SENHA``), nunca logada nem incluída em
         mensagens de erro.
+
+        Após o POST, confirma que o form ``frmAssinaturas`` não está mais
+        presente na resposta — sem essa checagem, uma submissão sem efeito
+        (ex.: campo faltando) seria erroneamente reportada como sucesso,
+        já que o SEI não emite um erro explícito nesse caso.
         """
         if not self._senha:
             msg = (
@@ -2569,11 +2697,11 @@ class SEIWebClient:
             msg = f"Form frmAssinaturas não encontrado para o documento {id_documento}."
             raise SEIParseError(msg)
 
-        overrides = {"pwdSenha": self._senha, "btnAssinar": "Assinar"}
+        overrides = {"pwdSenha": self._senha, "hdnFormaAutenticacao": "S"}
         if cargo:
             overrides["selCargoFuncao"] = cargo
         if orgao:
-            overrides["selOrgaoAssinante"] = orgao
+            overrides["selOrgao"] = orgao
 
         r2 = await self._post_form_preservando(form, str(r.url), overrides, referer=str(r.url))
         _check(r2)
@@ -2582,7 +2710,116 @@ class SEIWebClient:
         if erro2:
             msg = f"documento_assinar: {erro2}"
             raise SEIConnectionError(msg)
+
+        soup2 = BeautifulSoup(body2, "html.parser")
+        if soup2.find("form", {"id": "frmAssinaturas"}) is not None:
+            msg = (
+                f"documento_assinar: o SEI reexibiu o form de assinatura para o "
+                f"documento {id_documento} sem mensagem de erro explícita — a "
+                "submissão não teve efeito (senha incorreta, campo faltando, ou "
+                "outra causa não identificada)."
+            )
+            raise SEIConnectionError(msg)
         return {"status": "ok", "id_documento": id_documento}
+
+    async def excluir_documento_web(
+        self, protocolo: str, id_documento: str, *, confirmar: bool = False
+    ) -> dict:
+        """Exclui um documento via a variável JS ``linkExcluirDocumento`` (ação destrutiva).
+
+        Resolvido pelo mesmo padrão de ``_get_arvore_visualizar_link_var`` usado
+        para ``editor_montar``/``documento_assinar``: a URL de exclusão só existe
+        como a variável JS ``linkExcluirDocumento`` na página ``arvore_visualizar``,
+        não em ``Nos[].acoes`` nem como ``onclick`` com parâmetros explícitos (ver
+        RFC 0022 — a investigação original tentou reverse-engineering de frames e
+        estado de "nó selecionado" antes de descobrir que era só mais um caso do
+        padrão `linkX` já mapeado).
+
+        CONFIRMADO AO VIVO em sei.sistemas.ro.gov.br, 2026-07-03/04, processo
+        0016.004284/2026-81, documento 76861634 (um "Anexo" duplicado): um único
+        GET na URL resolvida por ``linkExcluirDocumento`` já executa a exclusão de
+        verdade — não é uma página de confirmação que exige um segundo POST.
+        Reconfirmado via leitura independente (``sei_consultar_documento_externo``
+        passou a falhar com "ação não encontrada" e o documento sumiu de
+        ``sei_listar_documentos``, com os demais documentos do processo intactos).
+
+        Diferente de assinar/editar, esta ação é IRREVERSÍVEL — por isso:
+        - ``confirmar`` é obrigatório (``True``); sem isso, recusa antes de
+          qualquer chamada HTTP (mesmo padrão de "nunca inferir/decidir sozinho"
+          documentado na RFC 0022);
+        - a ausência da variável ``linkExcluirDocumento`` é tratada como recusa
+          LEGÍTIMA do próprio SEI (documento já assinado/tramitado/de outra
+          unidade — o SEI só oferece a ação de excluir quando ela é permitida),
+          não como bug de parsing;
+        - após o GET, a árvore do processo é relida (cache invalidado via
+          ``_invalidar_arvore``) e o nó é procurado de novo por
+          ``parse_arvore_nos``/comparação de ``id`` — o mesmo mecanismo robusto
+          usado para resolver o documento, não um `in html` ingênuo (que dá falso
+          positivo: outros hashes/IDs do HTML podem conter os mesmos dígitos do
+          id_documento por coincidência — reproduzido ao vivo nesta investigação).
+          Só retorna sucesso se o nó realmente não estiver mais presente.
+        """
+        if not confirmar:
+            msg = (
+                f"Exclusão do documento {id_documento} (processo {protocolo}) é "
+                "destrutiva e irreversível no SEI — chame novamente com "
+                "confirmar=True para prosseguir."
+            )
+            raise SEIValidationError(msg)
+
+        await self.ensure_authenticated()
+
+        # Resolve o id interno do nó antes de excluir, para poder reconferir
+        # a ausência dele depois por `id`, não por número SEI (que pode não
+        # bater 1:1 com o que sobra na árvore após a exclusão).
+        html_arvore, _ = await self._arvore_do_processo(protocolo)
+        nos = parse_arvore_nos(html_arvore)
+        no_alvo = next((no for no in nos[1:] if no.get("id") == id_documento), None)
+        if no_alvo is None:
+            no_alvo = next(
+                (
+                    no
+                    for no in nos[1:]
+                    if _parse_doc_label(no.get("label", "")).get("numero_sei") == id_documento
+                ),
+                None,
+            )
+        id_interno = str(no_alvo["id"]) if no_alvo else id_documento
+
+        try:
+            excluir_url, referer = await self._get_arvore_visualizar_link_var(
+                protocolo, id_documento, "linkExcluirDocumento"
+            )
+        except SEIParseError as exc:
+            msg = (
+                f"SEI recusou a exclusão do documento {id_documento} no processo "
+                f"{protocolo} — a ação de excluir não está disponível para este "
+                "documento (provavelmente já foi assinado, já tramitou para outra "
+                "unidade, ou pertence a outra unidade)."
+            )
+            raise SEIValidationError(msg) from exc
+
+        r = await self._http.get(excluir_url, headers={"Referer": referer})
+        _check(r)
+        html_resp = _decode_response(r.content, r.headers.get("content-type", ""))
+        erro = _extrair_erro_sei(html_resp)
+        if erro:
+            msg = f"documento_excluir: {erro}"
+            raise SEIConnectionError(msg)
+
+        self._invalidar_arvore(protocolo)
+        html_arvore2, _ = await self._arvore_do_processo(protocolo)
+        nos2 = parse_arvore_nos(html_arvore2)
+        ainda_presente = any(no.get("id") == id_interno for no in nos2[1:])
+        if ainda_presente:
+            msg = (
+                f"Exclusão do documento {id_documento} não teve efeito — o nó "
+                f"(id {id_interno}) ainda está presente na árvore do processo "
+                f"{protocolo} após a requisição de exclusão."
+            )
+            raise SEIConnectionError(msg)
+
+        return {"status": "ok", "id_documento": id_documento, "processo": protocolo}
 
     async def listar_secoes_web(self, protocolo: str, id_documento: str) -> dict:
         """Lista seções editáveis de um documento interno via editor_montar."""
@@ -4152,11 +4389,7 @@ class SEIWebClient:
         html_arvore, url_arvore = await self._arvore_do_processo(protocolo)
         sei_base = f"{self.sei_root}/sei/"
 
-        soup_arvore = BeautifulSoup(html_arvore, "html.parser")
-        incluir_href: str | None = None
-        for a in soup_arvore.find_all("a", href=re.compile(r"documento_escolher_tipo")):
-            incluir_href = _tag_str(a, "href").replace("&amp;", "&")
-            break
+        incluir_href = _extrair_incluir_documento_href(html_arvore)
         if not incluir_href:
             msg = "Link documento_escolher_tipo não encontrado nas ações do processo."
             raise SEIParseError(msg)
@@ -4338,6 +4571,15 @@ class SEIWebClient:
             raise SEIValidationError(msg)
         return absoluta
 
+    def validar_mesma_origem(self, url: str, *, base: str | None = None) -> str:
+        """Valida (via `_validar_mesma_origem`) que `url` é da mesma origem do SEI.
+
+        Wrapper público para módulos externos (ex.: `browser_capture`), que
+        precisam revalidar a origem final de uma página (pós-redirects do
+        próprio browser) sem acessar um membro privado de fora da classe.
+        """
+        return self._validar_mesma_origem(url, base=base)
+
     async def _enviar_mesma_origem(self, request: httpx.Request) -> httpx.Response:
         """Envia `request` seguindo redirects manualmente, validando a origem.
 
@@ -4475,6 +4717,25 @@ class SEIWebClient:
         if incluir_raw:
             resultado["raw_html"] = body2
         return resultado
+
+    async def capturar_tela_web(
+        self,
+        url: str,
+        *,
+        selector: str | None = None,
+        aguardar_segundos: float = 1.0,
+    ) -> Path:
+        """Captura um screenshot PNG real (browser Playwright) de `url` (RFC 0021).
+
+        Exceção deliberada e escopada à arquitetura pure-HTTP deste cliente —
+        ver o docstring do módulo (topo deste arquivo) e `todos.browser_capture`
+        para a justificativa completa. Delega toda a implementação (transplante
+        de cookies da sessão já autenticada deste client, navegação, detecção de
+        tela de login) a esse módulo separado.
+        """
+        return await browser_capture.capturar_tela(
+            self, url, selector=selector, aguardar_segundos=aguardar_segundos
+        )
 
     async def _abrir_form_cadastro_processo(self, tipo_processo: str) -> tuple[Tag, str]:
         """Navega até o form `frmProcedimentoCadastro` retornando (form, url_atual).
@@ -4777,49 +5038,7 @@ class SEIWebClient:
         sei_base = f"{self.sei_root}/sei/"
 
         # --- Step 1: encontrar link documento_escolher_tipo na árvore ---
-        # As ações do nó raiz (`Nos[0].acoes`) vêm como HTML *escapado dentro de
-        # uma string JS* (`Nos[0].acoes = '<a href="...">...'`), não como <a> de
-        # verdade no DOM da página — por isso soup.find_all("a", ...) na árvore
-        # inteira não enxerga esse link; é preciso extrair a string primeiro.
-        incluir_href: str | None = None
-        for pat in (
-            r"(?s)Nos\[0\]\.acoes\s*=\s*'((?:[^'\\]|\\.)*)'",
-            r'(?s)Nos\[0\]\.acoes\s*=\s*"((?:[^"\\]|\\.)*)"',
-        ):
-            m_acoes = re.search(pat, html_arvore)
-            if m_acoes:
-                acoes_html = (
-                    m_acoes.group(1).replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
-                )
-                break
-        else:
-            acoes_html = ""
-
-        soup_acoes = BeautifulSoup(acoes_html or html_arvore, "html.parser")
-        for a in soup_acoes.find_all("a", href=re.compile(r"documento_escolher_tipo")):
-            incluir_href = _tag_str(a, "href").replace("&amp;", "&")
-            break
-        if not incluir_href:
-            for img in soup_acoes.find_all("img"):
-                if "Incluir" in (img.get("title", "") or "") or "incluir" in (
-                    img.get("src", "") or ""
-                ):
-                    pa = img.find_parent("a")
-                    # Confirm the parent link points to documento_escolher_tipo,
-                    # not "Incluir em Bloco" or other "incluir" toolbar actions.
-                    if pa and "documento_escolher_tipo" in _tag_str(pa, "href"):
-                        incluir_href = _tag_str(pa, "href").replace("&amp;", "&")
-                        break
-        if not incluir_href:
-            # Último recurso: regex direto no HTML bruto (cobre instâncias onde
-            # nem Nos[0].acoes existe mas o link aparece solto em outro script).
-            m_href = re.search(
-                r"controlador\.php\?acao=documento_escolher_tipo[^\"'\s]*infra_hash=[a-fA-F0-9]+",
-                html_arvore,
-            )
-            if m_href:
-                incluir_href = m_href.group(0)
-
+        incluir_href = _extrair_incluir_documento_href(html_arvore)
         if not incluir_href:
             msg = "Link 'Incluir Documento' não encontrado nas ações do processo."
             raise SEIParseError(msg)
@@ -5019,41 +5238,8 @@ class SEIWebClient:
         r2 = await self._http.get(arvore_url, headers={"Referer": str(r1.url)})
         _check(r2)
 
-        acoes_html = ""
-        for pat in (
-            r"(?s)Nos\[0\]\.acoes\s*=\s*'((?:[^'\\]|\\.)*)'",
-            r'(?s)Nos\[0\]\.acoes\s*=\s*"((?:[^"\\]|\\.)*)"',
-        ):
-            m = re.search(pat, r2.text)
-            if m:
-                acoes_html = (
-                    m.group(1).replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
-                )
-                break
-
-        if not acoes_html:
-            msg = (
-                "Nos[0].acoes não encontrado — o processo pode estar concluído "
-                "ou você não tem permissão para incluir documentos nele."
-            )
-            raise SEIParseError(msg)
-
         sei_base = f"{self.sei_root}/sei/"
-        soup_acoes = BeautifulSoup(acoes_html, "html.parser")
-        incluir_href: str | None = None
-        for a in soup_acoes.find_all("a", href=re.compile(r"documento_escolher_tipo")):
-            incluir_href = _tag_str(a, "href").replace("&amp;", "&")
-            break
-        if not incluir_href:
-            for img in soup_acoes.find_all("img"):
-                if "Incluir" in (img.get("title", "") or "") or "incluir" in (
-                    img.get("src", "") or ""
-                ):
-                    pa = img.find_parent("a")
-                    if pa:
-                        incluir_href = _tag_str(pa, "href").replace("&amp;", "&")
-                        break
-
+        incluir_href = _extrair_incluir_documento_href(r2.text)
         if not incluir_href:
             msg = (
                 "Link 'Incluir Documento' não encontrado nas ações do processo. "

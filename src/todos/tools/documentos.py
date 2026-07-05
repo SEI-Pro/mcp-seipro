@@ -27,7 +27,7 @@ import httpx
 from fastmcp import Context
 from pydantic import Field
 
-from todos import access_control
+from todos import access_control, image_utils
 from todos.backends import NovoDocumentoExterno, NovoDocumentoInterno
 from todos.backends.base import SEIBackend
 from todos.backends.choice import get_backend_choice, requires_backend
@@ -618,6 +618,38 @@ async def sei_editar_secao(
 
     result = await backend.alterar_secoes(id_documento, secoes_enviar, versao, processo=processo)
     return _json(result)
+
+
+@mcp.tool(annotations=_READ)
+async def sei_preparar_imagem_para_embed(
+    caminho_imagem: str,
+    max_base64_chars: int = image_utils.DEFAULT_MAX_BASE64_CHARS,
+) -> dict:
+    """Comprime uma imagem local e monta a data URI pronta para embutir numa seção.
+
+    O SEI descarta silenciosamente parágrafos com `<img src="data:...">`
+    acima de um limite de tamanho não documentado (RFC 0024) — esta tool
+    comprime a imagem (escala + qualidade JPEG, da mais leve para a mais
+    agressiva) até caber num limite seguro antes de montar a data URI, e
+    levanta erro claro se nem a compressão mais agressiva couber.
+
+    Fluxo recomendado: gerar/obter o screenshot ou imagem local → esta tool
+    → montar o HTML da seção com `<img src="{data_uri}">` → sei_editar_secao
+    → reconferir via sei_listar_secoes/sei_ler_documento (o SEI não sinaliza
+    erro quando descarta conteúdo grande demais).
+
+    Requer Pillow (extra opcional `llm` — `uv sync --extra llm`).
+    """
+    _validar_arquivo_path(caminho_imagem)
+    # comprimir_para_embed (não montar_data_uri) para medir só o payload base64
+    # contra max_base64_chars — o prefixo "data:image/jpeg;base64," não conta
+    # para o limite de embed do SEI (RFC 0024) e não deve inflar a métrica.
+    b64 = image_utils.comprimir_para_embed(caminho_imagem, max_base64_chars=max_base64_chars)
+    return {
+        "data_uri": f"data:image/jpeg;base64,{b64}",
+        "tamanho_base64_chars": len(b64),
+        "_next": [{"tool": "sei_editar_secao", "args": {}}],
+    }
 
 
 @mcp.tool(annotations=_WRITE)

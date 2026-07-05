@@ -199,6 +199,27 @@ class DocumentosWeb(_WebMixin):
             raise SEINotImplementedError(msg)
         return await self._web.assinar_documento_web(processo, id_documento, cargo, orgao)
 
+    async def excluir_documento(
+        self,
+        id_documento: str,
+        processo: str | None = None,
+        *,
+        confirmar: bool = False,
+    ) -> dict:
+        """Exclui um documento via a variável JS linkExcluirDocumento (ação destrutiva).
+
+        Ver docstring de ``SEIWebClient.excluir_documento_web`` para o fluxo
+        completo (confirmação obrigatória, recusa legítima do SEI quando a ação
+        não está disponível, reconfirmação pós-exclusão via releitura da árvore).
+        """
+        if processo is None:
+            msg = (
+                "Em instâncias sem mod-wssei, forneça o parâmetro 'processo' "
+                "para excluir documento."
+            )
+            raise SEINotImplementedError(msg)
+        return await self._web.excluir_documento_web(processo, id_documento, confirmar=confirmar)
+
     async def alterar_documento_interno(
         self,
         id_documento: str,

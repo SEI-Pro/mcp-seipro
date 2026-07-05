@@ -22,8 +22,8 @@ import httpx
 import pytest
 
 from todos.backends.models import SEIWebClientConfig
-from todos.exceptions import SEIAuthError, SEIParseError
-from todos.sei_web_client import SEIWebClient, _is_login_page
+from todos.exceptions import SEIAuthError, SEINotFoundError, SEIParseError
+from todos.sei_web_client import SEIWebClient, _check, _is_login_page
 
 _LOGIN_PAGE = '<html><body><form><input name="txtUsuario"></form></body></html>'
 _PROTOCOLO = "7000000-00.2024.8.22.0001"
@@ -47,6 +47,26 @@ class TestIsLoginPage:
 
     def test_false_for_empty_string(self) -> None:
         assert _is_login_page("") is False
+
+
+class TestCheckRedactsSignedCapabilities:
+    """`_check` is the shared HTTP-status-check helper used across the whole
+    scraper (~90 call sites). `httpx.HTTPStatusError`'s default message
+    embeds the full request URL, including `infra_hash`/token query params
+    for SEI's signed action URLs — `_check` must redact those before
+    embedding the message in the typed error it raises, or any transient
+    4xx/5xx anywhere in the codebase leaks the capability to the agent."""
+
+    def test_404_error_message_has_infra_hash_redacted(self) -> None:
+        url = "http://sei.test/sei/controlador.php?acao=documento_visualizar&infra_hash=supersecrethash"
+        request = httpx.Request("GET", url)
+        response = httpx.Response(404, request=request)
+
+        with pytest.raises(SEINotFoundError) as excinfo:
+            _check(response)
+
+        assert "supersecrethash" not in str(excinfo.value)
+        assert "<redacted>" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------

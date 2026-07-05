@@ -6,6 +6,7 @@ import logging
 import re
 from types import ModuleType
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup, Tag
 from markdownify import MarkdownConverter
@@ -410,3 +411,130 @@ def sanitize_iso8859(text: str) -> str:
         except UnicodeEncodeError:
             result.append(f"&#{ord(char)};")
     return "".join(result)
+
+
+_LOGIN_PAGE_PEEK_BYTES = 8192  # login forms sit near the top; no need to decode a whole PDF/ZIP
+
+
+def is_login_page(body: str) -> bool:
+    """Detect whether *body* is the SEI login page instead of the page requested.
+
+    A dead SIP session doesn't fail with 401/403 — the server answers HTTP
+    200 with the login form's HTML. Status-code checks can't catch this, so
+    every multi-step scrape must inspect the body for this marker to tell
+    "session expired mid-flow" apart from "a normal parse failure". Lives
+    here (not in `sei_web_client.py`) so that `browser_capture.py` — which
+    needs the same marker for a Playwright-rendered page — can import it
+    without creating a circular import between the two modules.
+    """
+    return 'name="txtUsuario"' in body or 'id="txtUsuario"' in body
+
+
+def peek_is_login_page(content: bytes) -> bool:
+    """Like ``is_login_page``, but only decodes a bounded byte prefix.
+
+    Used where decoding the full body would be wasteful (e.g. a large PDF/ZIP
+    download) — the login form's marker always sits near the top when present.
+    """
+    peek = content[:_LOGIN_PAGE_PEEK_BYTES].decode("utf-8", errors="replace")
+    return is_login_page(peek)
+
+
+# A request method alone is not a safety classification: SEI uses GET for
+# several state-changing actions (e.g. `linkReabrirProcesso`). Any code path
+# that navigates to a caller-supplied SEI URL — the declarative action-plan
+# executor (`sei_action_plans.py`) and the Playwright screenshot tool
+# (`browser_capture.py`) alike — must restrict itself to known read routes
+# before navigating. Lives here (not in either of those modules) so both can
+# import it without a circular import between them.
+READ_ACTIONS = frozenset(
+    {
+        "arvore_montar",
+        "arvore_visualizar",
+        "documento_consultar",
+        "documento_visualizar",
+        "editor_montar",
+        "documento_escolher_tipo",
+        "procedimento_consultar",
+        "procedimento_consultar_historico",
+        "procedimento_sobrestado_listar",
+        "andamento_marcador_gerenciar",
+        "acompanhamento_gerenciar",
+        "rel_bloco_protocolo_listar",
+        "bloco_assinatura_listar",
+        "bloco_interno_listar",
+    }
+)
+READ_SUFFIXES = ("_listar", "_consultar", "_visualizar", "_montar", "_gerenciar")
+DESTRUCTIVE_MARKERS = (
+    "excluir",
+    "remover",
+    "retirar",
+    "cancelar",
+    "concluir",
+    "sobrestar",
+)
+WRITE_MARKERS = (
+    "salvar",
+    "cadastrar",
+    "alterar",
+    "assinar",
+    "enviar",
+    "tramitar",
+    "reabrir",
+    "registrar",
+    "disponibilizar",
+    "atribuir",
+    "marcar",
+)
+
+
+def action_name(url: str) -> str:
+    """Extract the SEI controller's ``acao`` query parameter from *url*."""
+    return parse_qs(urlparse(url).query).get("acao", [""])[0]
+
+
+def risk_of_action(action: str) -> str:
+    """Classify a controller action conservatively: read / write / destructive."""
+    folded = action.casefold()
+    if not folded:
+        return "write"
+    if any(marker in folded for marker in DESTRUCTIVE_MARKERS):
+        return "destructive"
+    if any(marker in folded for marker in WRITE_MARKERS):
+        return "write"
+    if folded in READ_ACTIONS or folded.endswith(READ_SUFFIXES):
+        return "read"
+    return "write"
+
+
+def is_read_action(action: str) -> bool:
+    """Return True if *action* is conservatively classified as read-only."""
+    return risk_of_action(action) == "read"
+
+
+def redact_signed_capabilities(text: str) -> str:
+    r"""Redact common SEI capabilities (infra_hash/tokens) from *text*.
+
+    ``hdnToken`` is matched with a trailing ``\w*`` because the real field
+    name carries a dynamic per-page hash suffix (``hdnToken<hash>`` — see
+    CLAUDE.md "O token CSRF é dinâmico"), not the literal string ``hdnToken``.
+    An exact-match pattern would silently let every real occurrence through.
+
+    Lives here (not in `sei_action_plans.py`, where this redaction was first
+    introduced) so `sei_web_client._check` can apply the same redaction to
+    every error message it raises — not just the two call sites in
+    `sei_action_plans.py` — since `httpx.HTTPStatusError`'s default message
+    embeds the full signed request URL and `_check` would otherwise leak it
+    on any transient 4xx/5xx across the entire scraper.
+    """
+    redacted = re.sub(
+        r"(?i)([?&](?:infra_hash|hdnToken\w*|token|csrf(?:_token)?)=)[^&#'\"\s]+",
+        r"\1<redacted>",
+        text,
+    )
+    return re.sub(
+        r'(?i)(name=["\'](?:hdnToken\w*|token|csrf(?:_token)?)["\'][^>]*value=["\'])[^"\']*',
+        r"\1<redacted>",
+        redacted,
+    )

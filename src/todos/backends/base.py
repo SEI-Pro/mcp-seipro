@@ -390,6 +390,20 @@ class SEIBackend:
         """Assina um documento com o cargo informado."""
         raise NotImplementedError
 
+    async def excluir_documento(
+        self,
+        id_documento: str,
+        processo: str | None = None,
+        *,
+        confirmar: bool = False,
+    ) -> dict:
+        """Exclui um documento — ação destrutiva e irreversível.
+
+        `confirmar=True` é obrigatório para executar; sem ele a operação é
+        recusada antes de qualquer chamada ao SEI.
+        """
+        raise NotImplementedError
+
     async def cancelar_assinatura(self, id_documento: str) -> dict:
         """Cancela a assinatura de um documento."""
         raise NotImplementedError
@@ -732,4 +746,20 @@ class SEIBackend:
         incluir_raw: bool = False,
     ) -> dict:
         """Submete um form arbitrário, com overrides de campo e URL de destino opcional."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Genérico (RFC 0021) — captura de screenshot via browser real. Exceção
+    # deliberada à arquitetura pure-HTTP (ver todos.browser_capture); só o
+    # backend web implementa (não há equivalente REST/mod-wssei).
+    # ------------------------------------------------------------------
+
+    async def capturar_tela(
+        self,
+        url: str,
+        *,
+        selector: str | None = None,
+        aguardar_segundos: float = 1.0,
+    ) -> dict:
+        """Captura um screenshot PNG real (browser Playwright) de uma URL do SEI."""
         raise NotImplementedError

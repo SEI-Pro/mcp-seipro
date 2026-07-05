@@ -188,6 +188,47 @@ async def sei_assinar_documento(
     return _json(result)
 
 
+@mcp.tool(annotations=_DEST)
+@requires_backend
+async def sei_excluir_documento(
+    id_documento: str,
+    processo: str | None = None,
+    ctx: Context | None = None,
+    *,
+    confirmar: bool = False,
+) -> str:
+    """Exclui um documento no SEI. AÇÃO DESTRUTIVA E IRREVERSÍVEL.
+
+    Diferente de cancelar assinatura (que ainda deixa o documento no processo,
+    apenas sem assinatura), excluir REMOVE o documento da árvore do processo
+    por completo. Não há "desfazer" — nem pela interface web do SEI, nem por
+    esta tool.
+
+    `confirmar=True` é OBRIGATÓRIO. Sem ele, a tool recusa antes de fazer
+    qualquer chamada ao SEI — NUNCA infira sozinho que um documento deve ser
+    excluído; confirme explicitamente com o usuário antes de chamar esta tool
+    com confirmar=True.
+
+    LIMITAÇÃO IMPORTANTE (mesma classe de limitação de sei_cancelar_assinatura):
+    o próprio SEI só permite excluir um documento em condições restritas —
+    tipicamente enquanto o processo ainda não foi lido/tramitado para outra
+    unidade e o documento não está assinado. Se a exclusão não for permitida,
+    esta tool devolve um erro claro (SEI recusou) em vez de falhar
+    silenciosamente ou reportar sucesso indevido.
+
+    Após excluir, a tool relê a árvore do processo e só reporta sucesso se o
+    documento realmente não estiver mais presente nela — uma segunda leitura
+    independente, não apenas o retorno HTTP da exclusão.
+
+    - id_documento: ID interno do documento ou número SEI (protocoloFormatado)
+    - processo: protocolo do processo (necessário em instâncias sem mod-wssei)
+    - confirmar: precisa ser True para executar a exclusão
+    """
+    backend = await _backend(ctx)
+    result = await backend.excluir_documento(id_documento, processo=processo, confirmar=confirmar)
+    return _json(result)
+
+
 @mcp.tool(annotations=_READ)
 @requires_backend
 async def sei_listar_assinaturas(

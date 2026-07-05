@@ -682,10 +682,10 @@ class CredenciamentoProtocol(Protocol):
 
 
 class GenericoProtocol(Protocol):
-    """Inspeção e submissão de formulário arbitrário (RFC 0020, 2 ops).
+    """Inspeção/submissão de formulário arbitrário (RFC 0020) e captura de tela (RFC 0021).
 
     Só o backend web implementa — não há equivalente REST (o mod-wssei
-    não expõe HTML pra inspecionar).
+    não expõe HTML pra inspecionar, nem uma tela renderizada pra fotografar).
     """
 
     async def inspecionar_pagina(self, url: str, *, incluir_raw: bool = False) -> dict:
@@ -702,6 +702,16 @@ class GenericoProtocol(Protocol):
         incluir_raw: bool = False,
     ) -> dict:
         """Submete um form arbitrário, com overrides de campo e URL de destino opcional."""
+        ...
+
+    async def capturar_tela(
+        self,
+        url: str,
+        *,
+        selector: str | None = None,
+        aguardar_segundos: float = 1.0,
+    ) -> dict:
+        """Captura um screenshot PNG real (browser Playwright) de uma URL do SEI (RFC 0021)."""
         ...
 
 

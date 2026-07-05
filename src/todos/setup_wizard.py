@@ -124,7 +124,7 @@ def _show_banner() -> None:
     content = (
         f"[bold cyan]{_BANNER_ART}[/]\n\n"
         "[bold white]TOdos Domina O Sei[/]  [dim]·[/]  "
-        "[cyan]MCP Server[/]  [dim]·[/]  [cyan]126 tools[/]"
+        "[cyan]MCP Server[/]  [dim]·[/]  [cyan]dezenas de tools[/]"
     )
     _console.print(Panel(content, border_style="cyan", padding=(1, 4)))
     _console.print()
@@ -926,7 +926,7 @@ def _show_config_summary(
     _console.print()
     _console.print(
         "  Reinicie o [bold]Antigravity[/], [bold]Claude Desktop[/] ou [bold]Codex[/] "
-        "para ativar as [cyan bold]126 ferramentas SEI[/]."
+        "para ativar as [cyan bold]ferramentas SEI[/]."
     )
     _console.print()
 

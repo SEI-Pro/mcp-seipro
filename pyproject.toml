@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "todos-sei"
 dynamic = ["version"]
-description = "TOdos Domina O Sei — MCP server para o SEI com 129 tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
+description = "TOdos Domina O Sei — MCP server para o SEI com dezenas de tools, scraper HTTP + REST híbrido e suporte a instâncias sem mod-wssei"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -28,6 +28,11 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = ["litellm>=1.84.0", "pymupdf>=1.24"]
+# Extra opcional para sei_capturar_tela (RFC 0021) — a ÚNICA tool deste
+# projeto que usa um browser real em vez de httpx+BeautifulSoup puro. Depois
+# de instalar, rode `uv run playwright install chromium` (baixa o binário do
+# browser; não vem com o pacote Python).
+screenshot = ["playwright>=1.45"]
 
 [project.scripts]
 todos = "todos.server:main"
@@ -42,6 +47,7 @@ dev = [
     "pip-audit>=2.8",
     "litellm>=1.84.0",
     "pymupdf>=1.24",
+    "playwright>=1.45",
 ]
 eval = [
     "anthropic>=0.30",
@@ -131,6 +137,13 @@ ignore = [
     "ASYNC109",  # timeout é parâmetro MCP público — não pode ser substituído por asyncio.timeout()
     "ANN401",   # Any necessário para tipos fitz/PIL importados condicionalmente (C-extensions)
     "PLR0913",  # sei_analisar_processo: processo+prompt_extra+modelo+timeout+compressao+ctx = 6 MCP params
+]
+"src/todos/sei_action_plans.py" = [
+    "PLR0913",  # execute_page_plan (RFC 0025): page_ref+trigger_id+overrides+submit_button+
+                # confirmar+expect mirror the sei_executar_plano_sei MCP tool's own signature 1:1
+]
+"src/todos/image_utils.py" = [
+    "ANN401",  # Any necessário para tipo PIL.Image importado condicionalmente (mesmo motivo de analise.py)
 ]
 "tests/**" = ["S101", "ANN", "D", "PLR2004", "SLF001", "FBT003"]  # assert/no-annot/no-docstring/magic-vals/bool-args ok in tests
 "evals/**" = ["S101", "ANN", "D", "PLR2004", "PLR0913", "SLF001", "FBT003", "INP001", "ARG"]  # same relaxations as tests/
