@@ -98,7 +98,9 @@ class TestCapturarTelaOrigemESSRF:
         client = make_client()
 
         async def _run() -> None:
-            await browser_capture.capturar_tela(client, "https://sei.test/mesmo-host-scheme-diferente")
+            await browser_capture.capturar_tela(
+                client, "https://sei.test/mesmo-host-scheme-diferente"
+            )
 
         with pytest.raises(SEIValidationError):
             asyncio.run(_run())

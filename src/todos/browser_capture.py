@@ -194,7 +194,12 @@ async def capturar_tela(
             # cast: `cookies` são dicts simples estruturalmente compatíveis com o
             # TypedDict `SetCookieParam` (ver docstring de _httpx_cookies_to_playwright) —
             # playwright já está confirmado disponível neste ponto (_PLAYWRIGHT_AVAILABLE).
-            await context.add_cookies(cast("list[SetCookieParam]", cookies))
+            # A anotação real (não-string) em `cookies_pw` mantém `SetCookieParam`
+            # visivelmente referenciado para o vulture (ele não enxerga o uso dentro
+            # da string passada a `cast`, e reportaria o import de TYPE_CHECKING
+            # como morto sem esta linha).
+            cookies_pw: list[SetCookieParam] = cast("list[SetCookieParam]", cookies)
+            await context.add_cookies(cookies_pw)
             page = await context.new_page()
             try:
                 await page.goto(url_validada, wait_until="load", timeout=_NAV_TIMEOUT_MS)
@@ -232,8 +237,7 @@ async def capturar_tela(
                     await page.screenshot(path=str(caminho), full_page=True)
             except _PlaywrightError as exc:
                 msg = (
-                    f"Falha ao capturar screenshot de {url_validada} "
-                    f"(selector={selector!r}): {exc}"
+                    f"Falha ao capturar screenshot de {url_validada} (selector={selector!r}): {exc}"
                 )
                 raise SEIConnectionError(msg) from exc
         finally:
