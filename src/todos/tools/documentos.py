@@ -641,10 +641,13 @@ async def sei_preparar_imagem_para_embed(
     Requer Pillow (extra opcional `llm` — `uv sync --extra llm`).
     """
     _validar_arquivo_path(caminho_imagem)
-    data_uri = image_utils.montar_data_uri(caminho_imagem, max_base64_chars=max_base64_chars)
+    # comprimir_para_embed (não montar_data_uri) para medir só o payload base64
+    # contra max_base64_chars — o prefixo "data:image/jpeg;base64," não conta
+    # para o limite de embed do SEI (RFC 0024) e não deve inflar a métrica.
+    b64 = image_utils.comprimir_para_embed(caminho_imagem, max_base64_chars=max_base64_chars)
     return {
-        "data_uri": data_uri,
-        "tamanho_base64_chars": len(data_uri),
+        "data_uri": f"data:image/jpeg;base64,{b64}",
+        "tamanho_base64_chars": len(b64),
         "_next": [{"tool": "sei_editar_secao", "args": {}}],
     }
 

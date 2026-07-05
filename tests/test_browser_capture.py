@@ -105,6 +105,24 @@ class TestCapturarTelaOrigemESSRF:
         with pytest.raises(SEIValidationError):
             asyncio.run(_run())
 
+    def test_rejeita_url_de_acao_nao_classificada_como_leitura(self) -> None:
+        """GET não é sinônimo de seguro no SEI (algumas ações mutantes também
+        usam GET, ex. linkReabrirProcesso) — um browser real EXECUTA a
+        navegação, então capturar_tela deve recusar uma URL cuja acao não
+        seja classificada como leitura, mesmo sendo same-origin e mesmo antes
+        de checar se Playwright está disponível."""
+        client = make_client()
+
+        async def _run() -> None:
+            with patch.object(client, "ensure_authenticated", AsyncMock()) as mock_auth:
+                await browser_capture.capturar_tela(
+                    client, "http://sei.test/sei/controlador.php?acao=documento_excluir"
+                )
+                mock_auth.assert_not_called()
+
+        with pytest.raises(SEIValidationError, match="documento_excluir"):
+            asyncio.run(_run())
+
     def test_aceita_url_mesma_origem_mas_falha_sem_playwright(self) -> None:
         """URL válida passa a validação de origem; com Playwright indisponível
         (simulado aqui via monkeypatch, independente do que está instalado no
@@ -117,7 +135,9 @@ class TestCapturarTelaOrigemESSRF:
                 patch.object(browser_capture, "_PLAYWRIGHT_AVAILABLE", False),
                 patch.object(client, "ensure_authenticated", AsyncMock()) as mock_auth,
             ):
-                await browser_capture.capturar_tela(client, "http://sei.test/sei/pagina")
+                await browser_capture.capturar_tela(
+                    client, "http://sei.test/sei/controlador.php?acao=arvore_visualizar"
+                )
                 mock_auth.assert_not_called()
 
         with pytest.raises(SEIError, match="playwright"):
@@ -156,8 +176,31 @@ class TestCapturarTelaOrigemESSRF:
                 patch.object(client, "ensure_authenticated", AsyncMock()),
                 patch.object(browser_capture, "async_playwright", return_value=mock_pw_cm),
             ):
-                await browser_capture.capturar_tela(client, "http://sei.test/sei/pagina")
+                await browser_capture.capturar_tela(
+                    client, "http://sei.test/sei/controlador.php?acao=arvore_visualizar"
+                )
 
         with pytest.raises(SEIValidationError):
             asyncio.run(_run())
         mock_browser.close.assert_awaited_once()
+
+
+class TestCaminhoScreenshotRedactsSignedCapabilities:
+    """`tempfile.gettempdir()` is a shared, often world-readable directory —
+    the screenshot filename must not embed `infra_hash`/tokens just because
+    the URL slug happens to grab the tail of the URL, where SEI's signed
+    query params typically sit."""
+
+    def test_infra_hash_does_not_appear_in_filename(self) -> None:
+        url = "https://sei.test/sei/controlador.php?acao=arvore_visualizar&infra_hash=supersecrethash123"
+
+        caminho = browser_capture._caminho_screenshot(url, None)
+
+        assert "supersecrethash123" not in caminho.name
+
+    def test_dynamic_hdntoken_does_not_appear_in_filename(self) -> None:
+        url = "https://sei.test/sei/controlador.php?acao=x&hdnTokenAB12CD34=urlvalue456"
+
+        caminho = browser_capture._caminho_screenshot(url, None)
+
+        assert "urlvalue456" not in caminho.name

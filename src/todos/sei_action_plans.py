@@ -16,17 +16,20 @@ import time
 import weakref
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse
+from urllib.parse import urlencode, urljoin
 
 from bs4 import BeautifulSoup, Tag
 
 from todos.exceptions import (
     SEIConnectionError,
-    SEIError,
     SEINotFoundError,
     SEIParseError,
     SEIValidationError,
 )
+from todos.html_utils import action_name as _action_name
+from todos.html_utils import is_read_action as _is_read_action
+from todos.html_utils import redact_signed_capabilities as _redact
+from todos.html_utils import risk_of_action as _risk
 from todos.sei_web_client import (
     SEIWebClient,
     _check,
@@ -40,49 +43,6 @@ if TYPE_CHECKING:
 
 _PAGE_TTL_SECONDS = 120.0
 _MAX_REDIRECTS = 5
-
-# A request method alone is not a safety classification: SEI uses GET for
-# several state-changing actions. Inspection follows only known page routes.
-_READ_ACTIONS = frozenset(
-    {
-        "arvore_montar",
-        "arvore_visualizar",
-        "documento_consultar",
-        "documento_visualizar",
-        "editor_montar",
-        "documento_escolher_tipo",
-        "procedimento_consultar",
-        "procedimento_consultar_historico",
-        "procedimento_sobrestado_listar",
-        "andamento_marcador_gerenciar",
-        "acompanhamento_gerenciar",
-        "rel_bloco_protocolo_listar",
-        "bloco_assinatura_listar",
-        "bloco_interno_listar",
-    }
-)
-_READ_SUFFIXES = ("_listar", "_consultar", "_visualizar", "_montar", "_gerenciar")
-_DESTRUCTIVE_MARKERS = (
-    "excluir",
-    "remover",
-    "retirar",
-    "cancelar",
-    "concluir",
-    "sobrestar",
-)
-_WRITE_MARKERS = (
-    "salvar",
-    "cadastrar",
-    "alterar",
-    "assinar",
-    "enviar",
-    "tramitar",
-    "reabrir",
-    "registrar",
-    "disponibilizar",
-    "atribuir",
-    "marcar",
-)
 
 
 @dataclass(frozen=True)
@@ -113,70 +73,17 @@ async def _page_store(client: SEIWebClient) -> _PageStore:
         return store
 
 
-def _action_name(url: str) -> str:
-    return parse_qs(urlparse(url).query).get("acao", [""])[0]
-
-
-def _risk(action_name: str) -> str:
-    """Classify a controller action conservatively."""
-    action = action_name.casefold()
-    if not action:
-        return "write"
-    if any(marker in action for marker in _DESTRUCTIVE_MARKERS):
-        return "destructive"
-    if any(marker in action for marker in _WRITE_MARKERS):
-        return "write"
-    if action in _READ_ACTIONS or action.endswith(_READ_SUFFIXES):
-        return "read"
-    return "write"
-
-
-def _is_read_action(action_name: str) -> bool:
-    return _risk(action_name) == "read"
-
-
 def _local_url(client: SEIWebClient, base_url: str, raw_url: str) -> str:
-    """Resolve a link and reject destinations outside the configured instance."""
-    url = urljoin(base_url, raw_url.replace("&amp;", "&"))
-    root = urlparse(str(client.sei_root))
-    target = urlparse(url)
-    if (root.scheme.casefold(), root.netloc.casefold()) != (
-        target.scheme.casefold(),
-        target.netloc.casefold(),
-    ):
-        message = "A URL precisa pertencer à instância SEI configurada."
-        raise SEIValidationError(message)
-    return url
+    """Resolve a link and reject destinations outside the configured instance.
 
-
-def _redact(text: str) -> str:
-    """Redact common SEI capabilities before returning diagnostic HTML."""
-    redacted = re.sub(
-        r"(?i)([?&](?:infra_hash|hdnToken|token|csrf(?:_token)?)=)[^&#'\"\s]+",
-        r"\1<redacted>",
-        text,
-    )
-    return re.sub(
-        r'(?i)(name=["\'](?:hdnToken|token|csrf(?:_token)?)["\'][^>]*value=["\'])[^"\']*',
-        r"\1<redacted>",
-        redacted,
-    )
-
-
-def _check_redacted(response: httpx.Response) -> None:
-    """Like `_check`, but redacts signed capabilities from the raised error message.
-
-    `httpx.HTTPStatusError`'s default message embeds the full request URL —
-    including `infra_hash`/token query params for SEI's signed action URLs —
-    and `_check` propagates that text verbatim inside the typed `SEIError` it
-    raises. This module already redacts signed capabilities from
-    `raw_redacted`; the same redaction must apply to error messages, or a
-    transient 4xx/5xx during inspection/execution leaks the hash anyway.
+    Delegates to `client.validar_mesma_origem` rather than re-deriving the
+    scheme/netloc comparison here: an independent reimplementation previously
+    casefolded both sides while the client's own check does not, so the two
+    "same origin" gates in this codebase could disagree on a mixed-case host
+    (e.g. via a redirect Location header) — one accepting a URL the other
+    would reject. A single check means they can no longer drift apart.
     """
-    try:
-        _check(response)
-    except SEIError as exc:
-        raise type(exc)(_redact(str(exc))) from exc
+    return client.validar_mesma_origem(raw_url.replace("&amp;", "&"), base=base_url)
 
 
 def _parse_quoted_literal(source: str, index: int, quote: str) -> tuple[str, int] | None:
@@ -418,28 +325,50 @@ def _collect_form_pairs(form: Tag) -> list[tuple[str, str]]:
     return pairs
 
 
+def _hidden_field_names(form: Tag) -> frozenset[str]:
+    """Return the names of every (non-disabled) hidden input in *form*.
+
+    Per RFC 0025 §4, hidden fields may appear in inspection output "pelo nome
+    e por um indicador de presença, sem vazar seu valor" — the caller never
+    sees a hidden field's value, only that it exists. It follows that
+    `overrides` must never be allowed to set one either: the caller can't
+    know what a legitimate value would even be, so any override targeting a
+    hidden field is either a mistake or an attempt to redirect the action to
+    an untinspected target via the same mechanism `mutations` protects.
+    """
+    return frozenset(
+        str(element.get("name", "")).strip()
+        for element in form.find_all("input", type="hidden")
+        if str(element.get("name", "")).strip() and not element.has_attr("disabled")
+    )
+
+
 def _apply_values(
     pairs: list[tuple[str, str]],
     mutations: list[dict[str, str]],
     overrides: list[dict[str, str]] | None,
+    *,
+    protected_fields: frozenset[str] = frozenset(),
 ) -> list[tuple[str, str]]:
     """Apply plan mutations, then caller overrides, without losing repeated fields.
 
     `mutations` are parsed from the SEI page's own onclick/callback JS — e.g.
     which record id a destructive action targets — and are NOT caller-controlled.
-    `overrides` may add or change other fields, but must never replace a
-    mutation: doing so would let a caller invoke a discovered "delete this
-    record" trigger and silently redirect it to a different, never-inspected
-    record, defeating the entire point of restricting execution to
-    page_ref + trigger_id (RFC 0025).
+    `protected_fields` (typically every hidden field on the form — see
+    `_hidden_field_names`) are likewise not caller-controlled: the caller
+    never even sees their values (RFC 0025 §4). `overrides` may add or change
+    any other field, but must never replace one of these: doing so would let
+    a caller invoke a discovered "delete this record" trigger and silently
+    redirect it to a different, never-inspected record, defeating the entire
+    point of restricting execution to page_ref + trigger_id.
     """
     replacements: dict[str, list[str]] = {}
-    mutation_fields: set[str] = set()
+    locked_fields: set[str] = set(protected_fields)
     for mutation in mutations:
         name = str(mutation.get("field", "")).strip()
         if name:
             replacements[name] = [str(mutation.get("value", ""))]
-            mutation_fields.add(name)
+            locked_fields.add(name)
 
     override_names: set[str] = set()
     for override in overrides or []:
@@ -447,9 +376,9 @@ def _apply_values(
         if not name:
             message = "Cada override precisa ter o campo 'name'."
             raise SEIValidationError(message)
-        if name in mutation_fields:
+        if name in locked_fields:
             message = (
-                f"Campo '{name}' é fixado pelo próprio callback da página "
+                f"Campo '{name}' é fixado pelo formulário/callback da página "
                 "(identifica o alvo da ação) e não pode ser sobrescrito por override."
             )
             raise SEIValidationError(message)
@@ -763,7 +692,7 @@ async def _fetch_read_page(
                 raise SEIConnectionError(message)
             referer, current = current, _local_url(client, current, location)
             continue
-        _check_redacted(response)
+        _check(response)
         body = _decode_response(response.content, response.headers.get("content-type", ""))
         if _is_login_page(body):
             message = "O SEI devolveu a página de login durante a inspeção."
@@ -944,6 +873,7 @@ async def _execute_form_submit(
         _collect_form_pairs(form),
         list(plan.get("mutations", [])),
         overrides,
+        protected_fields=_hidden_field_names(form),
     )
     button = _button_for_plan(
         form,
@@ -959,6 +889,26 @@ async def _execute_form_submit(
         headers={"Referer": final_url, "Content-Type": "application/x-www-form-urlencoded"},
         follow_redirects=False,
     )
+
+
+async def _follow_redirects_same_origin(
+    client: SEIWebClient, response: httpx.Response
+) -> httpx.Response:
+    """Follow `response.next_request` manually, validating origin per hop.
+
+    Mirrors `SEIWebClient._enviar_mesma_origem`. SEI's write actions commonly
+    answer with a redirect (POST/redirect-then-GET) whose target page carries
+    the real success/error indicator — `_check`/`_extrair_erro_sei` must
+    inspect that final page, not the near-empty redirect response itself, or
+    a server-side failure surfaced only on the redirected page would be
+    silently missed and reported as `submitted: True`.
+    """
+    saltos = 0
+    while response.next_request is not None and saltos < _MAX_REDIRECTS:
+        saltos += 1
+        client.validar_mesma_origem(str(response.next_request.url))
+        response = await client.http_send(response.next_request, follow_redirects=False)
+    return response
 
 
 async def execute_page_plan(
@@ -985,7 +935,8 @@ async def execute_page_plan(
         message = f"Plano não executável: {plan['kind']!r}."
         raise SEIValidationError(message)
 
-    _check_redacted(response)
+    response = await _follow_redirects_same_origin(client, response)
+    _check(response)
     response_body = _decode_response(response.content, response.headers.get("content-type", ""))
     if error := _extrair_erro_sei(response_body):
         raise SEIConnectionError(error)

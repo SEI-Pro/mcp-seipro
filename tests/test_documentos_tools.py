@@ -479,8 +479,14 @@ class TestPrepararImagemParaEmbed:
 
         out = asyncio.run(d.sei_preparar_imagem_para_embed(str(caminho)))
 
-        assert out["data_uri"].startswith("data:image/jpeg;base64,")
-        assert out["tamanho_base64_chars"] == len(out["data_uri"])
+        prefixo = "data:image/jpeg;base64,"
+        assert out["data_uri"].startswith(prefixo)
+        # tamanho_base64_chars mede só o payload base64 (o que RFC 0024's
+        # max_base64_chars realmente limita) — NÃO o data_uri inteiro, que
+        # inclui o prefixo "data:image/jpeg;base64," e inflaria a métrica.
+        base64_payload = out["data_uri"].removeprefix(prefixo)
+        assert out["tamanho_base64_chars"] == len(base64_payload)
+        assert out["tamanho_base64_chars"] < len(out["data_uri"])
         assert out["_next"][0]["tool"] == "sei_editar_secao"
 
     def test_extensao_nao_permitida_levanta_erro(self, tmp_path) -> None:

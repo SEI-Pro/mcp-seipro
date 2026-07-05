@@ -73,6 +73,7 @@ from todos.exceptions import (
 )
 from todos.html_utils import is_login_page as _is_login_page
 from todos.html_utils import peek_is_login_page as _peek_is_login_page
+from todos.html_utils import redact_signed_capabilities as _redact_signed_capabilities
 from todos.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -160,18 +161,26 @@ def _tag_str(tag: Tag | None, attr: str, default: str = "") -> str:
 
 
 def _check(r: httpx.Response) -> None:
-    """Raise a typed SEIError for any non-2xx response."""
+    """Raise a typed SEIError for any non-2xx response.
+
+    `httpx.HTTPStatusError`'s default message embeds the full request URL —
+    including `infra_hash`/token query params for SEI's signed action URLs —
+    so the message is redacted before being embedded in the raised error;
+    otherwise any transient 4xx/5xx would hand the capability straight back
+    to the agent.
+    """
     try:
         r.raise_for_status()
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
+        msg = _redact_signed_capabilities(str(exc))
         if status in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
-            raise SEIAuthError(str(exc)) from exc
+            raise SEIAuthError(msg) from exc
         if status == httpx.codes.NOT_FOUND:
-            raise SEINotFoundError(str(exc)) from exc
+            raise SEINotFoundError(msg) from exc
         if status >= httpx.codes.INTERNAL_SERVER_ERROR:
-            raise SEIConnectionError(str(exc)) from exc
-        raise SEIValidationError(str(exc)) from exc
+            raise SEIConnectionError(msg) from exc
+        raise SEIValidationError(msg) from exc
 
 
 def _safe_int(val: str, default: int = 0) -> int:
@@ -853,6 +862,18 @@ class SEIWebClient:
         return await self._http.post(
             url, content=content, headers=headers, follow_redirects=follow_redirects
         )
+
+    async def http_send(
+        self, request: httpx.Request, *, follow_redirects: bool = False
+    ) -> httpx.Response:
+        """Envia uma `httpx.Request` já construída via a sessão autenticada deste client.
+
+        Wrapper público usado por `sei_action_plans` (RFC 0025) para seguir
+        manualmente `response.next_request` (mesmo padrão de
+        `_enviar_mesma_origem`), validando a origem de cada salto de redirect
+        antes de segui-lo.
+        """
+        return await self._http.send(request, follow_redirects=follow_redirects)
 
     def invalidar_cache_arvore_completo(self) -> None:
         """Limpa o cache de árvores de TODOS os processos.

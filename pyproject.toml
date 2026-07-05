@@ -142,6 +142,9 @@ ignore = [
     "PLR0913",  # execute_page_plan (RFC 0025): page_ref+trigger_id+overrides+submit_button+
                 # confirmar+expect mirror the sei_executar_plano_sei MCP tool's own signature 1:1
 ]
+"src/todos/image_utils.py" = [
+    "ANN401",  # Any necessário para tipo PIL.Image importado condicionalmente (mesmo motivo de analise.py)
+]
 "tests/**" = ["S101", "ANN", "D", "PLR2004", "SLF001", "FBT003"]  # assert/no-annot/no-docstring/magic-vals/bool-args ok in tests
 "evals/**" = ["S101", "ANN", "D", "PLR2004", "PLR0913", "SLF001", "FBT003", "INP001", "ARG"]  # same relaxations as tests/
 

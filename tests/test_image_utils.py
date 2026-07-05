@@ -52,6 +52,21 @@ class TestComprimirParaEmbed:
         with pytest.raises(SEIValidationError, match="Não foi possível comprimir"):
             comprimir_para_embed(caminho, max_base64_chars=100)
 
+    def test_imagem_transparente_vira_fundo_branco_nao_preto(self, tmp_path) -> None:
+        """`Image.convert("RGB")` sozinho descarta o canal alpha sem compor —
+        um print/screenshot com transparência (comum em capturas de tela)
+        ficaria com fundo preto/lixo em vez de branco."""
+        caminho = tmp_path / "transparente.png"
+        img = Image.new("RGBA", (50, 50), color=(0, 0, 0, 0))  # totalmente transparente
+        img.save(caminho, "PNG")
+
+        b64 = comprimir_para_embed(caminho, max_base64_chars=30_000)
+        resultado = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+
+        # Composto sobre fundo branco (JPEG não tem alpha) — pixel central deve
+        # ser claro (branco), não preto, mesmo com JPEG lossy admitindo alguma folga.
+        assert resultado.getpixel((25, 25))[0] > 200
+
 
 class TestMontarDataUri:
     def test_monta_data_uri_com_prefixo_correto(self, tmp_path) -> None:

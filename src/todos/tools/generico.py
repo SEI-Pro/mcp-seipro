@@ -153,7 +153,12 @@ async def sei_capturar_tela(
     `url` precisa ser da mesma instância SEI configurada (mesmo
     scheme+host) — mesma validação de mesma origem (SSRF) de
     sei_inspecionar_pagina/sei_submeter_form: URLs externas são rejeitadas
-    antes de qualquer navegação.
+    antes de qualquer navegação. `url` também precisa ter uma `acao`
+    classificada como leitura (mesma restrição de sei_inspecionar_pagina,
+    RFC 0025) — GET não é sinônimo de seguro no SEI (algumas ações mutantes
+    também usam GET, ex. linkReabrirProcesso), e um browser real EXECUTA a
+    navegação de verdade, então uma URL mutante seria executada, não só
+    fotografada.
 
     Parâmetros:
     - url: URL absoluta do SEI, já assinada com infra_hash (mesma convenção

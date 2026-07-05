@@ -18,7 +18,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from todos.exceptions import SEIValidationError
 
@@ -50,6 +50,24 @@ _TENTATIVAS = (
 )
 
 
+def _flatten_alpha(img: Any) -> Any:
+    """Flatten RGBA/LA/P-transparent images onto a white RGB background.
+
+    ``Image.convert("RGB")`` on a transparent image just discards the alpha
+    channel — it does not composite it, so a transparent screenshot/print
+    (a common case: browser screenshots frequently carry an alpha channel)
+    would silently keep whatever garbage/black RGB values sat under the
+    transparent pixels instead of a clean white background. Same fix already
+    applied in ``tools/analise.py`` for the PDF-compression path.
+    """
+    if img.mode in {"RGBA", "LA"} or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        bg = _PILImage.new("RGB", img.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.split()[-1])
+        return bg
+    return img.convert("RGB")
+
+
 def comprimir_para_embed(
     caminho: str | Path,
     *,
@@ -76,7 +94,7 @@ def comprimir_para_embed(
         )
         raise SEIValidationError(msg)
 
-    img_original = _PILImage.open(caminho).convert("RGB")
+    img_original = _flatten_alpha(_PILImage.open(caminho))
     largura, altura = img_original.size
 
     for escala, qualidade in _TENTATIVAS:

@@ -1,12 +1,16 @@
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
 import httpx
 import pytest
 from bs4 import BeautifulSoup
 
-from todos.exceptions import SEINotFoundError, SEIValidationError
+from todos.exceptions import SEIValidationError
 from todos.sei_action_plans import (
     _apply_values,
-    _check_redacted,
     _collect_form_pairs,
+    _follow_redirects_same_origin,
+    _hidden_field_names,
     _inspect_html,
     _parse_js_call,
     _redact,
@@ -99,6 +103,22 @@ def test_raw_redaction_removes_common_signed_capabilities() -> None:
     assert "<redacted>" in redacted
 
 
+def test_raw_redaction_matches_dynamic_hdntoken_field_name() -> None:
+    """`hdnToken` carries a per-page dynamic hash suffix in real SEI markup
+    (CLAUDE.md: "o token CSRF é dinâmico (hdnToken<hash>)") — an exact-match
+    pattern would let the real field name through unredacted."""
+    raw = (
+        '<input type="hidden" name="hdnTokenAB12CD34" value="supersecretlivevalue123">'
+        '<a href="controlador.php?acao=x&hdnTokenAB12CD34=urlvalue456">x</a>'
+    )
+
+    redacted = _redact(raw)
+
+    assert "supersecretlivevalue123" not in redacted
+    assert "urlvalue456" not in redacted
+    assert "<redacted>" in redacted
+
+
 class TestApplyValuesOverrideCannotRetargetMutation:
     """Regression test for the override-substitution finding (RFC 0025 review).
 
@@ -136,22 +156,91 @@ class TestApplyValuesOverrideCannotRetargetMutation:
 
         assert result == [("hdnInfraItemId", "76861634-123")]
 
+    def test_override_on_a_protected_hidden_field_is_rejected(self) -> None:
+        """The common case: a plain `<form>` (no onclick JS, so `mutations=[]`)
+        bakes the target record id into a hidden field directly. Without
+        `protected_fields`, `_apply_values` would have no reason to reject an
+        override on it — the vulnerability this fix closes."""
+        pairs = [("hdnInfraItemId", "76861634-123"), ("txtDescricao", "old")]
+        overrides = [{"name": "hdnInfraItemId", "value": "9999999-attacker-controlled"}]
 
-class TestCheckRedactedRedactsErrorMessages:
-    """Regression test for the signed-URL-leakage finding (RFC 0025 review).
+        with pytest.raises(SEIValidationError, match="hdnInfraItemId"):
+            _apply_values(pairs, [], overrides, protected_fields=frozenset({"hdnInfraItemId"}))
 
-    `_check`'s underlying `httpx.HTTPStatusError` embeds the full request URL
-    (including `infra_hash`) in its default message; `_check_redacted` must
-    strip that before the error reaches the agent.
-    """
+    def test_override_on_a_visible_field_is_still_applied_with_protected_fields(self) -> None:
+        pairs = [("hdnInfraItemId", "76861634-123"), ("txtDescricao", "old")]
+        overrides = [{"name": "txtDescricao", "value": "new"}]
 
-    def test_404_error_message_has_hash_redacted(self) -> None:
-        url = "https://sei.example/sei/controlador.php?acao=rel_excluir&infra_hash=supersecrethash"
-        request = httpx.Request("GET", url)
-        response = httpx.Response(404, request=request)
+        result = _apply_values(pairs, [], overrides, protected_fields=frozenset({"hdnInfraItemId"}))
 
-        with pytest.raises(SEINotFoundError) as excinfo:
-            _check_redacted(response)
+        assert ("hdnInfraItemId", "76861634-123") in result
+        assert ("txtDescricao", "new") in result
 
-        assert "supersecrethash" not in str(excinfo.value)
-        assert "<redacted>" in str(excinfo.value)
+
+class TestHiddenFieldNames:
+    def test_finds_hidden_input_names_ignoring_disabled_and_visible(self) -> None:
+        soup = BeautifulSoup(
+            """
+            <form>
+              <input type="hidden" name="hdnInfraItemId" value="123">
+              <input type="hidden" name="hdnDisabled" value="x" disabled>
+              <input type="text" name="txtDescricao" value="visible">
+            </form>
+            """,
+            "html.parser",
+        )
+
+        assert _hidden_field_names(soup.form) == frozenset({"hdnInfraItemId"})
+
+
+class TestFollowRedirectsSameOrigin:
+    """Regression test for the missing-redirect-following finding (RFC 0025
+    review): SEI's write actions commonly answer with a redirect (PRG
+    pattern) whose target page carries the real success/error indicator —
+    the executor must follow it (validating origin per hop) instead of
+    inspecting the near-empty redirect response itself."""
+
+    def test_follows_one_redirect_and_validates_origin_per_hop(self) -> None:
+        first_request = httpx.Request("POST", "https://sei.example/sei/controlador.php?acao=x")
+        first_response = httpx.Response(302, request=first_request)
+        next_request = httpx.Request("GET", "https://sei.example/sei/controlador.php?acao=y")
+        first_response.next_request = next_request
+
+        final_response = httpx.Response(200, request=next_request)
+        final_response.next_request = None
+
+        client = MagicMock()
+        client.validar_mesma_origem = MagicMock(side_effect=lambda url, **_: url)
+        client.http_send = AsyncMock(return_value=final_response)
+
+        result = asyncio.run(_follow_redirects_same_origin(client, first_response))
+
+        assert result is final_response
+        client.validar_mesma_origem.assert_called_once_with(str(next_request.url))
+        client.http_send.assert_awaited_once_with(next_request, follow_redirects=False)
+
+    def test_no_redirect_returns_response_unchanged(self) -> None:
+        request = httpx.Request("GET", "https://sei.example/sei/controlador.php?acao=x")
+        response = httpx.Response(200, request=request)
+        response.next_request = None
+
+        client = MagicMock()
+        client.http_send = AsyncMock()
+
+        result = asyncio.run(_follow_redirects_same_origin(client, response))
+
+        assert result is response
+        client.http_send.assert_not_awaited()
+
+    def test_redirect_to_foreign_origin_is_rejected(self) -> None:
+        request = httpx.Request("POST", "https://sei.example/sei/controlador.php?acao=x")
+        response = httpx.Response(302, request=request)
+        response.next_request = httpx.Request("GET", "https://attacker.evil/roubar")
+
+        client = MagicMock()
+        client.validar_mesma_origem = MagicMock(side_effect=SEIValidationError("fora da origem"))
+        client.http_send = AsyncMock()
+
+        with pytest.raises(SEIValidationError):
+            asyncio.run(_follow_redirects_same_origin(client, response))
+        client.http_send.assert_not_awaited()

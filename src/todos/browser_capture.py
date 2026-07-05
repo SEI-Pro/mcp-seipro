@@ -53,8 +53,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from todos.exceptions import SEIAuthError, SEIConnectionError, SEIError
-from todos.html_utils import is_login_page
+from todos.exceptions import SEIAuthError, SEIConnectionError, SEIError, SEIValidationError
+from todos.html_utils import action_name, is_login_page, is_read_action
 
 if TYPE_CHECKING:
     import httpx
@@ -121,6 +121,15 @@ def _httpx_cookies_to_playwright(cookies: httpx.Cookies) -> list[_CookiePlaywrig
 
 
 _NAO_ALFANUMERICO = re.compile(r"[^\w\-]")
+# Mesmas capacidades assinadas que `html_utils.redact_signed_capabilities`
+# remove de saída diagnóstica — aqui removidas ANTES de derivar o nome do
+# arquivo, já que `tempfile.gettempdir()` é um diretório compartilhado
+# (frequentemente legível por outros processos/usuários do mesmo host) e o
+# slug pega os últimos caracteres da URL, onde `infra_hash`/tokens
+# tipicamente aparecem.
+_CAPACIDADE_ASSINADA = re.compile(
+    r"(?i)[?&](?:infra_hash|hdnToken\w*|token|csrf(?:_token)?)=[^&#]*"
+)
 
 
 def _caminho_screenshot(url: str, selector: str | None) -> Path:
@@ -133,7 +142,8 @@ def _caminho_screenshot(url: str, selector: str | None) -> Path:
     sequência (ex.: antes/depois de uma ação) e cada captura deve gerar um
     arquivo novo, não sobrescrever a anterior.
     """
-    slug = _NAO_ALFANUMERICO.sub("_", url)[-_SLUG_MAX_LEN:]
+    url_sem_capacidades = _CAPACIDADE_ASSINADA.sub("", url)
+    slug = _NAO_ALFANUMERICO.sub("_", url_sem_capacidades)[-_SLUG_MAX_LEN:]
     sufixo_selector = f"_{_NAO_ALFANUMERICO.sub('_', selector)}" if selector else ""
     ts_ms = int(time.time() * 1000)
     nome = f"SEI_tela_{slug}{sufixo_selector}_{ts_ms}.png"
@@ -164,7 +174,13 @@ async def capturar_tela(
     Levanta:
     - `SEIError` se o extra `playwright` não estiver instalado
     - `SEIValidationError` (via `_validar_mesma_origem`) se `url` for de fora
-      da instância SEI configurada
+      da instância SEI configurada, ou se `acao` de `url` não for classificada
+      como leitura (GET não é sinônimo de seguro no SEI — algumas ações
+      mutantes, ex. `linkReabrirProcesso`, também usam GET; ver
+      `todos.html_utils.is_read_action`, mesma restrição de
+      `sei_action_plans._fetch_read_page`, RFC 0025). Um browser real executa
+      a navegação de verdade — diferente de só inspecionar HTML, capturar
+      tela de uma URL mutante executaria a mutação.
     - `SEIConnectionError` se a navegação ou a captura falharem
     - `SEIAuthError` se a página carregada for a tela de login do SEI — causa
       mais provável (confirmada em teste ao vivo): `url` foi resolvida por
@@ -176,6 +192,15 @@ async def capturar_tela(
     # Validação de origem primeiro: barata, e não deve depender de playwright
     # estar instalado nem de rede alguma ter sido tocada.
     url_validada = client.validar_mesma_origem(url)
+
+    acao = action_name(url_validada)
+    if not is_read_action(acao):
+        msg = (
+            f"sei_capturar_tela só navega para rotas de leitura conhecidas; "
+            f"{acao or 'rota sem acao'} não foi classificada como leitura. Um "
+            "browser real executaria a ação em vez de só fotografá-la."
+        )
+        raise SEIValidationError(msg)
 
     if not _PLAYWRIGHT_AVAILABLE:
         msg = (
