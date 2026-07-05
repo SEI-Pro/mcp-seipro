@@ -229,6 +229,7 @@ class _FakeWebClient:
         self.listar_secoes_calls: list[tuple[str, str]] = []
         self.alterar_secoes_calls: list[tuple[str, str, list]] = []
         self.alterar_doc_calls: list[dict] = []
+        self.excluir_documento_calls: list[tuple[str, str, bool]] = []
 
     async def listar_secoes_web(self, protocolo: str, id_documento: str) -> dict:
         self.listar_secoes_calls.append((protocolo, id_documento))
@@ -263,6 +264,12 @@ class _FakeWebClient:
             }
         )
         return {"status": "ok"}
+
+    async def excluir_documento_web(
+        self, protocolo: str, id_documento: str, *, confirmar: bool = False
+    ) -> dict:
+        self.excluir_documento_calls.append((protocolo, id_documento, confirmar))
+        return {"status": "ok", "id_documento": id_documento, "processo": protocolo}
 
 
 def _web_doc_backend(client: _FakeWebClient) -> SEIWebBackend:
@@ -311,6 +318,15 @@ class TestWebDocumentosBackend:
         with pytest.raises(SEINotImplementedError):
             asyncio.run(self.backend.alterar_documento_interno("DOC1", processo=None))
 
+    def test_excluir_documento_delegates_to_web_client(self) -> None:
+        result = asyncio.run(self.backend.excluir_documento("DOC1", processo="PF", confirmar=True))
+        assert result["status"] == "ok"
+        assert self.client.excluir_documento_calls == [("PF", "DOC1", True)]
+
+    def test_excluir_documento_without_processo_raises(self) -> None:
+        with pytest.raises(SEINotImplementedError, match="forneça o parâmetro 'processo'"):
+            asyncio.run(self.backend.excluir_documento("DOC1", processo=None, confirmar=True))
+
     def test_listar_blocos_documento_raises_not_implemented(self) -> None:
         with pytest.raises(SEINotImplementedError, match="mod-wssei"):
             asyncio.run(self.backend.listar_blocos_documento("DOC1"))
@@ -337,8 +353,13 @@ class TestWebDocumentosBackend:
 # photograph), growing the contract from 128 to 129 while REST stays at 112.
 # Unlike inspecionar_pagina/submeter_form, capturar_tela IS implemented by the
 # web mixin (that's the whole feature), so web's numerator grows too: 91→92.
-_REST_COVERAGE_MIN = 112 / 129  # exact fraction; one drop → 111/129 = 0.860 < 0.868 → fails
-_WEB_COVERAGE_MIN = 92 / 129  # exact fraction; one drop → 91/129 = 0.705 < 0.713 → fails
+#
+# `excluir_documento` (RFC 0022, web-only scraper exclusão de documento via
+# `linkExcluirDocumento`) grows the contract from 129 to 130 ops; only the web
+# backend implements it (no REST/mod-wssei equivalent), so REST's implemented
+# count stays at 112 while web's grows from 92 to 93.
+_REST_COVERAGE_MIN = 112 / 130  # exact fraction; one drop → 111/130 = 0.854 < 0.862 → fails
+_WEB_COVERAGE_MIN = 93 / 130  # exact fraction; one drop → 92/130 = 0.708 < 0.715 → fails
 
 
 def _contract_ops() -> set[str]:

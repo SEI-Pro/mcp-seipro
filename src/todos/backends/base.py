@@ -390,6 +390,20 @@ class SEIBackend:
         """Assina um documento com o cargo informado."""
         raise NotImplementedError
 
+    async def excluir_documento(
+        self,
+        id_documento: str,
+        processo: str | None = None,
+        *,
+        confirmar: bool = False,
+    ) -> dict:
+        """Exclui um documento — ação destrutiva e irreversível.
+
+        `confirmar=True` é obrigatório para executar; sem ele a operação é
+        recusada antes de qualquer chamada ao SEI.
+        """
+        raise NotImplementedError
+
     async def cancelar_assinatura(self, id_documento: str) -> dict:
         """Cancela a assinatura de um documento."""
         raise NotImplementedError

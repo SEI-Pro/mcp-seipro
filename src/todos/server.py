@@ -910,7 +910,7 @@ def _cmd_skill_install(
 
 @_app.default
 def _cmd_default() -> None:
-    """MCP Server para o SEI — 131 tools, scraper HTTP + REST híbrido.
+    """MCP Server para o SEI — 132 tools, scraper HTTP + REST híbrido.
 
     Sem subcomando, sobe o servidor MCP (stdio ou HTTP conforme $PORT).
     Além de `setup`/`set-password`, qualquer outro nome vira uma chamada de

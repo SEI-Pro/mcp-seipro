@@ -410,3 +410,30 @@ def sanitize_iso8859(text: str) -> str:
         except UnicodeEncodeError:
             result.append(f"&#{ord(char)};")
     return "".join(result)
+
+
+_LOGIN_PAGE_PEEK_BYTES = 8192  # login forms sit near the top; no need to decode a whole PDF/ZIP
+
+
+def is_login_page(body: str) -> bool:
+    """Detect whether *body* is the SEI login page instead of the page requested.
+
+    A dead SIP session doesn't fail with 401/403 — the server answers HTTP
+    200 with the login form's HTML. Status-code checks can't catch this, so
+    every multi-step scrape must inspect the body for this marker to tell
+    "session expired mid-flow" apart from "a normal parse failure". Lives
+    here (not in `sei_web_client.py`) so that `browser_capture.py` — which
+    needs the same marker for a Playwright-rendered page — can import it
+    without creating a circular import between the two modules.
+    """
+    return 'name="txtUsuario"' in body or 'id="txtUsuario"' in body
+
+
+def peek_is_login_page(content: bytes) -> bool:
+    """Like ``is_login_page``, but only decodes a bounded byte prefix.
+
+    Used where decoding the full body would be wasteful (e.g. a large PDF/ZIP
+    download) — the login form's marker always sits near the top when present.
+    """
+    peek = content[:_LOGIN_PAGE_PEEK_BYTES].decode("utf-8", errors="replace")
+    return is_login_page(peek)

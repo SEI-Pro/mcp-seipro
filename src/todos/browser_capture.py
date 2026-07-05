@@ -22,7 +22,7 @@ continua sendo `SEIWebClient.ensure_authenticated()` (sessão httpx); os
 cookies dessa sessão já autenticada são transplantados para o
 `BrowserContext` do Playwright via `_httpx_cookies_to_playwright` antes de
 qualquer navegação. Se a página carregada acabar sendo a tela de login —
-detectado via `_is_login_page`, mesmo marcador usado pelo scraper HTTP — uma
+detectado via `is_login_page` (`todos.html_utils`), mesmo marcador usado pelo scraper HTTP — uma
 `SEIAuthError` clara é levantada em vez de silenciosamente devolver um PNG da
 tela de login, ou pior, inventar um fluxo de login alternativo com senha.
 
@@ -54,11 +54,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from todos.exceptions import SEIAuthError, SEIConnectionError, SEIError
-from todos.sei_web_client import SEIWebClient, _is_login_page
+from todos.html_utils import is_login_page
 
 if TYPE_CHECKING:
     import httpx
     from playwright.async_api import SetCookieParam
+
+    from todos.sei_web_client import SEIWebClient
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +223,7 @@ async def capturar_tela(
                 await page.wait_for_timeout(aguardar_segundos * 1000)
 
             corpo = await page.content()
-            if _is_login_page(corpo):
+            if is_login_page(corpo):
                 msg = (
                     f"A página carregada em {url_validada} é a tela de login do "
                     "SEI, não o conteúdo esperado. Causa mais provável (confirmada "
