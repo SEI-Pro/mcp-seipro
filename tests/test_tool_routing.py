@@ -871,6 +871,7 @@ _TOOLS_WITHOUT_ROUTING: frozenset[str] = frozenset(
         "sei_gerar_referencia",  # orquestra resolução de doc + gera HTML âncora
         # --- utility: no backend routing (pure static data) ---
         "sei_estilos",  # retorna SEI_STYLES de memória, sem backend
+        "sei_preparar_imagem_para_embed",  # comprime imagem local via Pillow, sem backend SEI (RFC 0024)
         # --- parameterless / pagination-only delegates ---
         # (nenhum sentinel identificável; a single-arg sentinel check seria vazia)
         "sei_unidade_atual",  # backend.unidade_atual() sem args obrigatórios

@@ -12,6 +12,7 @@ import asyncio
 
 import pytest
 from helpers import FakeCtx, aconst
+from PIL import Image
 
 from todos import access_control
 from todos.exceptions import SEIError, SEINotImplementedError, SEIValidationError
@@ -464,3 +465,27 @@ def test_cancelar_assinatura_success(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_cancelar(monkeypatch, _CancelarBackend(locked=False))
     out = asyncio.run(a.sei_cancelar_assinatura("D", ctx=FakeCtx(), backend="web"))
     assert "sucesso" in out
+
+
+# ---------------------------------------------------------------------------
+# sei_preparar_imagem_para_embed (pure local utility, no backend — RFC 0024)
+# ---------------------------------------------------------------------------
+
+
+class TestPrepararImagemParaEmbed:
+    def test_monta_data_uri_e_sugere_editar_secao(self, tmp_path) -> None:
+        caminho = tmp_path / "print.png"
+        Image.new("RGB", (50, 50), color=(10, 20, 30)).save(caminho, "PNG")
+
+        out = asyncio.run(d.sei_preparar_imagem_para_embed(str(caminho)))
+
+        assert out["data_uri"].startswith("data:image/jpeg;base64,")
+        assert out["tamanho_base64_chars"] == len(out["data_uri"])
+        assert out["_next"][0]["tool"] == "sei_editar_secao"
+
+    def test_extensao_nao_permitida_levanta_erro(self, tmp_path) -> None:
+        caminho = tmp_path / "arquivo.txt"
+        caminho.write_text("não é imagem")
+
+        with pytest.raises(SEIValidationError, match="não permitida"):
+            asyncio.run(d.sei_preparar_imagem_para_embed(str(caminho)))
