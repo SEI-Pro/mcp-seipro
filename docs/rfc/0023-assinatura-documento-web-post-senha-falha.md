@@ -1,12 +1,19 @@
 # RFC 0023 — `assinar_documento_web`: POST por senha falhou, causa ainda não isolada
 
-**Status**: Proposta (investigação parcial, sem correção) · **Data**: 2026-07-04
+**Status**: ✅ Resolvida (PR #140) · **Data**: 2026-07-04
 **Autores**: Claude (com Franklin Baldo)
 
-> Revisão de 2026-07-05: título e conclusão corrigidos após review — a
-> hipótese original de fluxo assíncrono/polling estava errada (ver §3).
-> Identificadores de produção (processo, documento, usuário) foram
-> substituídos por placeholders — não são necessários para registrar o bug.
+> Revisão de 2026-07-05 (review): título e conclusão corrigidos — a hipótese
+> original de fluxo assíncrono/polling estava errada (ver §3). Identificadores
+> de produção (processo, documento, usuário) foram substituídos por
+> placeholders — não são necessários para registrar o bug.
+>
+> Revisão de 2026-07-05 (correção): causa raiz isolada e corrigida em
+> franklinbaldo/todos#140 — exatamente os dois defeitos apontados na review
+> do §4 (faltava `hdnFormaAutenticacao="S"`; override de `orgao` usava
+> `selOrgaoAssinante` em vez de `selOrgao`). Confirmado ao vivo contra uma
+> instância SEI real: documento assinado com sucesso, bloco de assinatura
+> eletrônica (código verificador + CRC) presente na releitura do documento.
 
 ## 1. Contexto
 
