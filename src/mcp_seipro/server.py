@@ -625,7 +625,9 @@ def _shape_documento_resumido(doc: dict) -> dict:
         "id": str(doc.get("id", "")),
         "protocoloFormatado": attrs.get("protocoloFormatado", ""),
         "tipo": attrs.get("tipo", ""),
-        "tipo_documento": attrs.get("tipoDocumento", ""),  # I=interno, X=externo
+        # staDocumento do core SEI: I=editor interno, X=externo; formulários e
+        # e-mail usam outras letras (F, A, …) — não assumir só I/X ao filtrar.
+        "tipo_documento": attrs.get("tipoDocumento", ""),
         "unidade": attrs.get("siglaUnidade", ""),
         "nome": attrs.get("nomeComposto") or attrs.get("nome", ""),
         "assinado": str(status.get("documentoAssinado")) == "S",
