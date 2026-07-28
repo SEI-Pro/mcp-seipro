@@ -12,7 +12,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import httpx  # noqa: E402
 
-from mcp_seipro.sei_client import SEIClient, SEICloudflareBlocked  # noqa: E402
+from mcp_seipro.sei_client import (  # noqa: E402
+    SEIAcessoNegado, SEIClient, SEICloudflareBlocked,
+)
 
 URL = "https://exemplo.gov.br/sei/modulos/wssei/controlador_ws.php/api/v2"
 
@@ -126,6 +128,50 @@ def test_raise_http_with_body_inclui_corpo():
         assert False, "deveria levantar"
     except httpx.HTTPStatusError as e:
         assert "documento incompleto" in str(e), str(e)
+
+
+def test_403_do_sei_nao_e_confundido_com_waf():
+    """403 do wssei (permissão/unidade) e 403 da borda pedem ações opostas."""
+    r = httpx.Response(
+        403,
+        json={"sucesso": False, "mensagem": "Acesso ao documento 123 não autorizado."},
+        request=httpx.Request("GET", URL + "/documento/interno/consultar/123"),
+    )
+    assert SEIClient._is_cloudflare_waf_block(r) is False
+    assert SEIClient._is_cloudflare_challenge(r) is False
+    try:
+        SEIClient._raise_acesso_negado(r)
+        assert False, "deveria levantar SEIAcessoNegado"
+    except SEIAcessoNegado as e:
+        assert e.origem == "sei" and e.status == 403
+        assert "não autorizado" in e.corpo
+        assert "sei_trocar_unidade" in str(e)
+
+
+def test_403_cru_da_borda_vira_erro_de_cloudflare():
+    # 403 com server=cloudflare e corpo que não é JSON do wssei → veio da borda
+    r = httpx.Response(
+        403, headers={"server": "cloudflare", "cf-ray": "r1"},
+        content=b"<html><body>error 1020</body></html>",
+        request=httpx.Request("GET", URL + "/versao"),
+    )
+    try:
+        SEIClient._raise_acesso_negado(r)
+        assert False, "deveria levantar SEICloudflareBlocked"
+    except SEICloudflareBlocked as e:
+        assert "borda" in str(e).lower() and "credencial" in str(e).lower()
+
+
+def test_classificacao_de_erro_no_server():
+    import mcp_seipro.server as srv
+    waf = srv._classificar_erro("O Cloudflare bloqueou por uma REGRA DE WAF (managed rule)")
+    borda = srv._classificar_erro("Requisição barrada por um desafio do Cloudflare")
+    sei = srv._classificar_erro("403 do SEI (autenticação/permissão), não do WAF")
+    assert waf["erro_origem"] == "cloudflare_waf"
+    assert borda["erro_origem"] == "cloudflare_borda"
+    assert sei["erro_origem"] == "sei_acesso"
+    assert "sei_trocar_unidade" in sei["erro_acao"]
+    assert srv._classificar_erro("erro qualquer") == {}
 
 
 def test_default_mode_e_auto():

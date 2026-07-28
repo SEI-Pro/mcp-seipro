@@ -13,13 +13,13 @@ from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
 
-from mcp_seipro.sei_client import SEIClient, SEICloudflareBlocked
+from mcp_seipro.sei_client import SEIClient, SEIAcessoNegado, SEICloudflareBlocked
 from mcp_seipro.sei_web_client import SEIWebClient
 from mcp_seipro.shaping import shape_processo_resumido
 from mcp_seipro.html_utils import (
     html_to_text, html_to_markdown,
     pdf_to_text, pdf_to_markdown,
-    sanitize_iso8859,
+    normalizar_entidades_html, sanitize_iso8859,
 )
 from mcp_seipro.sei_styles import (
     SEI_STYLES, STYLE_SHORTCUTS,
@@ -379,8 +379,41 @@ def _json(data) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
 
 
+def _classificar_erro(msg: str) -> dict:
+    """Rotula a origem de um erro para que o agente não trate 403 do WAF como 403 de login.
+
+    Os dois chegam como "403" e pedem ações OPOSTAS: o da borda não melhora com
+    outra credencial; o do SEI não melhora com transporte/bypass. Os marcadores
+    abaixo vêm das mensagens que o próprio sei_client escreve.
+    """
+    m = msg.lower()
+    if "regra de waf" in m or "bloqueio de waf" in m or "managed rule" in m:
+        return {
+            "erro_origem": "cloudflare_waf",
+            "erro_acao": "O corpo do POST casou uma managed rule na borda. Repetir "
+                         "com outra credencial ou outro transporte não muda nada; "
+                         "reduza/simplifique o conteúdo enviado (dry_run ajuda a "
+                         "inspecionar) ou peça exceção de WAF ao órgão.",
+        }
+    if "desafio do cloudflare" in m or "managed challenge" in m or "pela borda" in m:
+        return {
+            "erro_origem": "cloudflare_borda",
+            "erro_acao": "A requisição não chegou ao SEI. Não é erro de credencial. "
+                         "Use SEI_TRANSPORT=browser (Playwright), cookie "
+                         "SEI_CF_CLEARANCE ou regra de bypass no WAF do órgão.",
+        }
+    if "autenticação/permissão" in m or "não autorizado" in m or "nao autorizado" in m:
+        return {
+            "erro_origem": "sei_acesso",
+            "erro_acao": "O SEI recebeu a requisição e recusou. Confira a unidade "
+                         "atual (sei_trocar_unidade) e as permissões do usuário "
+                         "sobre o protocolo — transporte/bypass não têm efeito aqui.",
+        }
+    return {}
+
+
 def _error(msg: str) -> str:
-    return json.dumps({"error": msg}, ensure_ascii=False)
+    return json.dumps({"error": msg, **_classificar_erro(msg)}, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -574,20 +607,61 @@ async def sei_arvore_processo(
         return _error(str(e))
 
 
+def _shape_documento_resumido(doc: dict) -> dict:
+    """List view enxuta de um documento (o payload completo estoura a janela).
+
+    Mantém o que identifica e localiza o documento; o resto sai. Para os
+    metadados completos de um documento específico use
+    sei_consultar_documento_interno / sei_consultar_documento_externo.
+    """
+    attrs = doc.get("atributos", {}) or {}
+    status = attrs.get("status", {}) or {}
+    nivel_bruto = "publico"
+    if str(status.get("documentoSigiloso")) == "S":
+        nivel_bruto = "sigiloso"
+    elif str(status.get("documentoRestrito")) == "S":
+        nivel_bruto = "restrito"
+    return {
+        "id": str(doc.get("id", "")),
+        "protocoloFormatado": attrs.get("protocoloFormatado", ""),
+        "tipo": attrs.get("tipo", ""),
+        "tipo_documento": attrs.get("tipoDocumento", ""),  # I=interno, X=externo
+        "unidade": attrs.get("siglaUnidade", ""),
+        "nome": attrs.get("nomeComposto") or attrs.get("nome", ""),
+        "assinado": str(status.get("documentoAssinado")) == "S",
+        "cancelado": str(status.get("documentoCancelado")) == "S",
+        "acesso": nivel_bruto,
+    }
+
+
 @mcp.tool()
 async def sei_listar_documentos(
     protocolo_formatado: str,
+    ordem: Literal["asc", "desc"] = "asc",
+    limite: int = 50,
+    offset: int = 0,
+    resumido: bool = True,
     ctx: Context = None,
 ) -> str:
-    """Lista todos os documentos de um processo SEI.
+    """Lista os documentos de um processo SEI, com ordenação e paginação.
 
-    Implementação via scraper web (~10× mais rápido que REST).
-    Aceita o protocolo formatado (ex: 50300.000123/2025-00).
+    Aceita o protocolo formatado (ex: 50300.000123/2025-00) ou o IdProcedimento.
 
-    Por padrão usa a REST (`/documento/listar/{id}`): cada documento vem como
-    {id, atributos:{tipoDocumento, tipo, protocoloFormatado, ...}}. Para ler o
-    conteúdo, use sei_ler_documento com o id. O scraper web (inativo desde o
-    SSO Microsoft da ANTAQ) só é usado se SEI_WEB_SCRAPER=1.
+    - ordem: 'asc' (ordem da árvore, o padrão do SEI) ou 'desc' (mais recentes
+      primeiro). Em processo antigo e volumoso, 'desc' é como achar o documento
+      que você acabou de criar sem varrer a lista inteira.
+    - limite/offset: recorte da lista já ordenada (offset é em ITENS, não página).
+    - resumido: True (padrão) devolve id, protocoloFormatado, tipo, unidade,
+      nome, flags de assinado/cancelado e nível de acesso. False devolve o
+      payload bruto da wssei — completo, porém grande o bastante para estourar a
+      janela de contexto em processos com muitos documentos.
+
+    A resposta traz `total` (do servidor), `retornados` e `truncado`. Para ler o
+    conteúdo de um documento, use sei_ler_documento com o `id`. A listagem não
+    inclui data — ela vem de sei_consultar_documento_interno (`dataElaboracao`).
+
+    Nota: com SEI_WEB_SCRAPER=1 a listagem vem do scraper web e estes parâmetros
+    de ordem/paginação não se aplicam (o scraper devolve a árvore inteira).
     """
     try:
         if _web_scraper_enabled():
@@ -595,10 +669,34 @@ async def sei_listar_documentos(
             if web._inbox_url is None:
                 await web.login()
             return _json(await web.listar_documentos(protocolo_formatado))
+
         client = _get_client(ctx)
         id_proc = await _resolver_processo(client, protocolo_formatado)
-        docs = await client.listar_documentos(id_proc, limit=200)
-        return _json({"id_procedimento": id_proc, "documentos": docs, "total": len(docs)})
+
+        # A listagem do wssei é sempre ASC por sequência e sem parâmetro de
+        # ordem: para 'desc' ou offset alto é preciso ter a coleção inteira.
+        pagina_unica = ordem == "asc" and offset + limite <= 200
+        if pagina_unica:
+            dados = await client.listar_documentos_pagina(id_proc, limit=200, start=0)
+            docs, total, truncado = dados["documentos"], dados["total"], False
+        else:
+            dados = await client.listar_documentos_todos(id_proc)
+            docs, total, truncado = dados["documentos"], dados["total"], dados["truncado"]
+
+        if ordem == "desc":
+            docs = list(reversed(docs))
+        recorte = docs[offset:offset + limite] if limite > 0 else docs[offset:]
+
+        return _json({
+            "id_procedimento": id_proc,
+            "total": total,
+            "retornados": len(recorte),
+            "offset": offset,
+            "ordem": ordem,
+            "truncado": truncado,
+            "documentos": [_shape_documento_resumido(d) for d in recorte]
+            if resumido else recorte,
+        })
     except Exception as e:
         return _error(str(e))
 
@@ -688,15 +786,41 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
     - id interno numérico (ex: "3121831") — usa direto
     - número SEI / protocoloFormatado (ex: "2843449") — pesquisa via Solr
 
-    Estratégia otimizada:
-    1. Pesquisa Solr primeiro (encontra pelo protocoloFormatado na maioria dos casos)
-    2. Se Solr não encontrar, tenta como id direto (interno → externo)
+    Estratégia:
+    1. Consulta direta por protocoloFormatado (`/documento/interno/formatado/
+       consultar`) — resolve no banco, então funciona inclusive para documento
+       recém-criado que o Solr ainda não indexou.
+    2. Pesquisa Solr (caminho histórico, cobre casos que a consulta direta não pega)
+    3. Tenta como id interno direto
 
     Retorna (id_documento, tipo_documento) ou levanta exceção.
     """
     referencia = referencia.strip()
 
-    # Estratégia 1: Pesquisa Solr (mais confiável, evita confusão id/proto)
+    # Estratégia 1: consulta direta pelo número SEI (não depende de indexação)
+    if referencia.isdigit():
+        try:
+            doc = await client.consultar_documento_interno_formatado(referencia)
+            id_interno = str(doc.get("idDocumento") or "")
+            if id_interno:
+                tipo = "I"
+                # A consulta por protocolo não devolve o discriminador I/X; ele
+                # vem da listagem do processo (campo `protocolo` = idProcedimento).
+                id_proc = str(doc.get("protocolo") or "")
+                if id_proc:
+                    try:
+                        itens = await client.listar_documentos(id_proc, limit=200)
+                        for d in itens:
+                            if str(d.get("id")) == id_interno:
+                                tipo = d.get("atributos", {}).get("tipoDocumento", "I")
+                                break
+                    except Exception:
+                        pass
+                return id_interno, tipo
+        except Exception:
+            pass
+
+    # Estratégia 2: Pesquisa Solr (mais confiável, evita confusão id/proto)
     try:
         result = await client.pesquisar_processos(palavras_chave=referencia, limit=20)
         processos = result.get("processos", [])
@@ -718,7 +842,7 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
     except Exception:
         pass
 
-    # Estratégia 2: Tentar como id direto (para quando o usuário informa o id interno)
+    # Estratégia 3: Tentar como id direto (para quando o usuário informa o id interno)
     # Só tenta se o Solr não encontrou nada — para evitar confusão
     # entre protocoloFormatado e id (são números diferentes no SEI)
     try:
@@ -755,6 +879,79 @@ def _secao_cabecalho_base64(secao: dict) -> bool:
         return False
     cont = secao.get("conteudo", "") or ""
     return "data:image" in cont or ";base64," in cont
+
+
+def _msg_waf_esgotado(tentativas: list[dict], doc_id: str) -> str:
+    """Relata o que a escada tentou, sem afirmar uma causa raiz que não foi medida.
+
+    O Cloudflare não diz QUAL trecho casou a regra; qualquer diagnóstico aqui
+    seria chute. A mensagem lista as tentativas e os caminhos disponíveis, e
+    deixa a conclusão para quem tem como verificar.
+    """
+    linhas = "\n".join(
+        f"  {i}) {t['estrategia']} → {t['resultado']}"
+        for i, t in enumerate(tentativas, 1)
+    )
+    return (
+        f"Não foi possível gravar as seções do documento {doc_id}: o Cloudflare "
+        "devolveu bloqueio de WAF em todas as tentativas.\n"
+        f"Tentativas:\n{linhas}\n"
+        "O que se sabe: alguma coisa no corpo do POST casou uma managed rule. "
+        "O Cloudflare não informa qual trecho, então a origem exata (conteúdo "
+        "novo, conteúdo pré-existente do documento ou tamanho) NÃO está "
+        "determinada.\n"
+        "Caminhos possíveis: (a) chamar de novo com dry_run=true e inspecionar o "
+        "payload exato; (b) gravar por partes, uma seção por vez, para isolar o "
+        "gatilho; (c) simplificar o HTML do trecho novo (blobs base64, tags "
+        "aninhadas em excesso, atributos style longos); (d) editar pela interface "
+        "web; (e) pedir ao órgão exceção de WAF para /sei/modulos/wssei/."
+    )
+
+
+_RE_ANCORA_SEI = re.compile(r"""id\s*=\s*["']lnkSei(\d+)["']""", re.IGNORECASE)
+_MAX_ANCORAS_VALIDADAS = 12
+
+
+async def _validar_ancoras_sei(client: SEIClient, conteudos: list[str]) -> list[dict]:
+    """Detecta âncoras `id="lnkSeiNNNN"` que usam nº SEI em vez do id interno.
+
+    É o erro mais fácil de cometer (os dois são inteiros de magnitude parecida) e
+    só aparece depois, como link morto na interface. A checagem pergunta ao SEI
+    se o número é um protocoloFormatado; se for, o id interno correto é outro.
+    Best-effort: falha de rede aqui nunca bloqueia a edição.
+    """
+    numeros: list[str] = []
+    for c in conteudos:
+        for n in _RE_ANCORA_SEI.findall(c or ""):
+            if n not in numeros:
+                numeros.append(n)
+    if not numeros:
+        return []
+
+    avisos: list[dict] = []
+    for numero in numeros[:_MAX_ANCORAS_VALIDADAS]:
+        try:
+            doc = await client.consultar_documento_interno_formatado(numero)
+        except Exception:
+            continue  # não é protocoloFormatado conhecido → provavelmente id interno
+        id_interno = str(doc.get("idDocumento") or "")
+        if not id_interno or id_interno == numero:
+            continue
+        avisos.append({
+            "ancora": f"lnkSei{numero}",
+            "problema": f"{numero} é o número SEI (protocoloFormatado), não o id "
+                        "interno — a interface renderiza isso como link morto.",
+            "id_interno_correto": id_interno,
+            "documento": doc.get("nomeDocumento", ""),
+            "correcao": f'troque id="lnkSei{numero}" por id="lnkSei{id_interno}" '
+                        "(sei_gerar_referencia monta o HTML já com o id certo).",
+        })
+    if len(numeros) > _MAX_ANCORAS_VALIDADAS:
+        avisos.append({
+            "info": f"{len(numeros)} âncoras encontradas; só as "
+                    f"{_MAX_ANCORAS_VALIDADAS} primeiras foram verificadas.",
+        })
+    return avisos
 
 
 async def _identidade_documento(client: SEIClient, doc_id: str) -> dict:
@@ -1106,6 +1303,8 @@ async def sei_editar_secao(
     id_documento: str,
     secoes: list[dict],
     versao: str = "",
+    dry_run: bool = False,
+    validar_referencias: bool = True,
     ctx: Context = None,
 ) -> str:
     """Altera o conteúdo de seções editáveis de um documento interno SEI.
@@ -1118,9 +1317,17 @@ async def sei_editar_secao(
       (não é necessário incluir seções somenteLeitura — são preenchidas
        automaticamente com o conteúdo original)
     - versao: versão do documento (se omitida, obtida automaticamente)
+    - dry_run: NÃO grava nada; devolve o payload exato que seria enviado
+      (todas as seções, já normalizadas, com tamanhos em bytes). Use para
+      inspecionar/isolar um problema numa chamada só, em vez de tentativa e erro.
+    - validar_referencias: confere se alguma âncora `id="lnkSeiNNNN"` está usando
+      número SEI em vez do id interno (link morto). Avisos vão em `_avisos`.
 
     O conteúdo deve ser HTML com as classes CSS do SEI (ex: Texto_Justificado).
-    Caracteres fora do ISO-8859-1 são convertidos automaticamente.
+    Entidades HTML (`&nbsp;`, `&ccedil;`, `&#233;`, …) são convertidas para UTF-8
+    literal antes do envio — o SEI aceita, e isso evita que elas se acumulem a
+    cada ciclo ler→reenviar. Caracteres fora do ISO-8859-1 continuam sendo
+    convertidos para entidades numéricas (exigência do wssei).
 
     IMPORTANTE: O SEI exige que TODAS as seções sejam enviadas. Esta tool
     faz isso automaticamente — basta informar as seções que deseja alterar.
@@ -1129,11 +1336,9 @@ async def sei_editar_secao(
     resolvido automaticamente e o documento resolvido é ecoado no retorno
     (`_documento_resolvido`), para evitar gravar no documento errado.
 
-    Se o Cloudflare bloquear a escrita por WAF (managed rule que casa a imagem
-    base64 do cabeçalho), a tool contorna automaticamente reenviando o cabeçalho
-    vazio (o SEI o regenera) e verifica a regeneração; nesse caso a resposta traz
-    `_waf_contornado`. Se o gatilho estiver no conteúdo do próprio documento,
-    só a exceção de WAF no órgão resolve.
+    Se o Cloudflare bloquear a escrita por WAF, a tool sobe uma escada de
+    tentativas (normalização → neutralização do cabeçalho base64 regenerável) e,
+    se ainda assim falhar, relata exatamente o que foi tentado.
     """
     try:
         client = _get_client(ctx)
@@ -1170,13 +1375,17 @@ async def sei_editar_secao(
                 continue
 
             if str(modelo) in alteracoes:
-                # Seção alterada pelo usuário
+                # Seção alterada pelo usuário — já vem como HTML real
                 conteudo = alteracoes[str(modelo)]
             else:
-                # Seção original — fazer unescape do HTML-escaped
+                # Seção original: o wssei devolve HTML-escaped no transporte
                 conteudo = html_module.unescape(s.get("conteudo", "") or "")
                 if _secao_cabecalho_base64(s):
                     cabecalhos_base64.add(str(modelo))
+
+            # Normaliza entidades em TODAS as seções — inclusive nas relidas do
+            # próprio SEI, que é onde elas nascem e se acumulam.
+            conteudo = normalizar_entidades_html(conteudo)
 
             secoes_enviar.append({
                 "id": str(sid),
@@ -1184,36 +1393,108 @@ async def sei_editar_secao(
                 "conteudo": sanitize_iso8859(conteudo),
             })
 
+        # idSecaoModelo que não existe no documento seria gravado como no-op e
+        # devolveria "sucesso" — falso positivo caro, porque o agente segue em frente.
+        modelos_doc = {sec["idSecaoModelo"] for sec in secoes_enviar}
+        nao_encontrados = [m for m in alteracoes if m not in modelos_doc]
+        if nao_encontrados and len(nao_encontrados) == len(alteracoes):
+            return _error(
+                f"Nenhuma das seções informadas existe no documento {doc_id}: "
+                f"{nao_encontrados}. Seções disponíveis: {sorted(modelos_doc)}. "
+                "Confira os idSecaoModelo com sei_listar_secoes — gravar assim "
+                "não alteraria nada e ainda assim retornaria sucesso."
+            )
+
+        avisos = []
+        if nao_encontrados:
+            avisos.append({
+                "secoes_ignoradas": nao_encontrados,
+                "problema": "idSecaoModelo não existe neste documento — o conteúdo "
+                            "correspondente NÃO foi gravado.",
+                "secoes_disponiveis": sorted(modelos_doc),
+            })
+        if validar_referencias and alteracoes:
+            try:
+                avisos += await _validar_ancoras_sei(client, list(alteracoes.values()))
+            except Exception as e:  # validação nunca bloqueia a edição
+                logger.info("Validação de âncoras falhou: %s", e)
+
+        if dry_run:
+            saida = {
+                "dry_run": True,
+                "nada_foi_gravado": True,
+                "endpoint": "POST /documento/secao/alterar",
+                "documento": str(doc_id),
+                "versao": versao,
+                "secoes": secoes_enviar,
+                "resumo": [
+                    {
+                        "idSecaoModelo": sec["idSecaoModelo"],
+                        "id": sec["id"],
+                        "alterada_por_voce": sec["idSecaoModelo"] in alteracoes,
+                        "cabecalho_base64_regeneravel":
+                            sec["idSecaoModelo"] in cabecalhos_base64,
+                        "bytes": len(sec["conteudo"].encode("utf-8", "replace")),
+                    }
+                    for sec in secoes_enviar
+                ],
+                "bytes_total": sum(
+                    len(sec["conteudo"].encode("utf-8", "replace")) for sec in secoes_enviar
+                ),
+                "_documento_resolvido": await _identidade_documento(client, doc_id),
+            }
+            if avisos:
+                saida["_avisos"] = avisos
+            return _json(saida)
+
+        # --- Escada de tentativas -------------------------------------------
+        # Cada degrau é seguro e verificável; nenhum altera o conteúdo que o
+        # usuário escreveu. O que foi tentado é relatado no fim, em qualquer caso.
+        tentativas: list[dict] = []
+        placeholder = sanitize_iso8859("<p>&nbsp;</p>")
+
         try:
             result = await client.alterar_secao_documento(
                 id_documento=doc_id, secoes=secoes_enviar, versao=versao,
             )
+            tentativas.append({
+                "estrategia": "envio normalizado (entidades HTML → UTF-8 literal)",
+                "resultado": "sucesso",
+            })
             waf_info = None
-        except SEICloudflareBlocked:
-            # Bloqueio de WAF (managed rule) por causa do conteúdo. Contorno:
-            # reenviar VAZIAS as seções de cabeçalho com imagem base64 (o SEI
-            # as regenera), removendo o blob que dispara o WAF. Só age nelas.
+        except SEICloudflareBlocked as e1:
+            tentativas.append({
+                "estrategia": "envio normalizado (entidades HTML → UTF-8 literal)",
+                "resultado": f"bloqueado pelo Cloudflare: {e1}",
+            })
             if not cabecalhos_base64:
-                raise  # nada regenerável p/ neutralizar → erro claro de WAF
-            placeholder = sanitize_iso8859("<p>&nbsp;</p>")
+                raise Exception(_msg_waf_esgotado(tentativas, doc_id)) from e1
+
+            # A 1ª tentativa falhou no WAF (403, não gravou) → versao intacta.
+            # Reenvia VAZIAS só as seções de cabeçalho com imagem base64: o SEI
+            # as regenera ao salvar, então o blob sai do corpo sem perda.
             secoes_wa = [
                 {**sec, "conteudo": placeholder}
                 if sec["idSecaoModelo"] in cabecalhos_base64 else sec
                 for sec in secoes_enviar
             ]
             try:
-                # A 1ª tentativa falhou no WAF (403, não gravou) → versao intacta.
                 result = await client.alterar_secao_documento(
                     id_documento=doc_id, secoes=secoes_wa, versao=versao,
                 )
+                tentativas.append({
+                    "estrategia": "cabeçalho base64 regenerável neutralizado "
+                                  f"(seções {sorted(cabecalhos_base64)})",
+                    "resultado": "sucesso",
+                })
             except SEICloudflareBlocked as e2:
-                raise Exception(
-                    "Contorno de WAF tentado (cabeçalho base64 neutralizado) mas o "
-                    "bloqueio do Cloudflare PERSISTE — o gatilho está em conteúdo "
-                    "não-regenerável (provavelmente no próprio conteúdo do "
-                    "documento). Só a exceção de WAF no /sei/modulos/wssei/ (lado "
-                    f"do órgão) resolve. Detalhe: {e2}"
-                ) from e2
+                tentativas.append({
+                    "estrategia": "cabeçalho base64 regenerável neutralizado "
+                                  f"(seções {sorted(cabecalhos_base64)})",
+                    "resultado": f"bloqueado pelo Cloudflare: {e2}",
+                })
+                raise Exception(_msg_waf_esgotado(tentativas, doc_id)) from e2
+
             # Verificação: as seções de cabeçalho DEVEM ter regenerado (voltar
             # com a imagem base64). Se ficaram com o placeholder, houve corrupção.
             verif = await client.listar_secao_documento(doc_id)
@@ -1229,22 +1510,22 @@ async def sei_editar_secao(
                     f"Contorno de WAF: as seções de cabeçalho {corrompidas} NÃO "
                     "foram regeneradas pelo SEI (ficaram com o placeholder) — o "
                     f"cabeçalho do documento {doc_id} pode estar danificado. "
-                    "Evite reeditar; corrija o cabeçalho na interface web. Fix "
-                    "definitivo: exceção de WAF no Cloudflare do órgão."
+                    "Evite reeditar; corrija o cabeçalho na interface web."
                 )
             waf_info = {
                 "info": "Bloqueio de WAF do Cloudflare contornado: seções de "
                         "cabeçalho com imagem base64 reenviadas vazias e "
                         "regeneradas pelo SEI. Conteúdo editável preservado.",
                 "secoes_cabecalho_neutralizadas": sorted(cabecalhos_base64),
-                "recomendacao": "Solução definitiva é exceção de WAF no "
-                                "Cloudflare do órgão para /sei/modulos/wssei/.",
+                "tentativas": tentativas,
             }
 
         out = result if isinstance(result, dict) else {"resultado": result}
         out["_documento_resolvido"] = await _identidade_documento(client, doc_id)
         if waf_info:
             out["_waf_contornado"] = waf_info
+        if avisos:
+            out["_avisos"] = avisos
         return _json(out)
     except Exception as e:
         return _error(str(e))
@@ -2368,31 +2649,120 @@ async def sei_pesquisar_contatos(
         return _error(str(e))
 
 
+# Teto local do upload por base64. O limite do próprio SEI não serve de teto
+# prático (na ANTAQ, p.ex., SEI_TAM_MB_DOC_EXTERNO = 5124 MB): o gargalo real é
+# trafegar o arquivo inteiro dentro de uma mensagem MCP, em base64 (+33%).
+_MAX_UPLOAD_BASE64_MB = float(os.environ.get("SEI_MAX_UPLOAD_BASE64_MB", "50"))
+
+
+async def _limite_upload_bytes(client: SEIClient, nome_arquivo: str = "") -> int:
+    """Limite de upload do SEI em bytes (0 = não foi possível determinar).
+
+    `/upload/parametros` devolve tamanhos em MB: `tamanhoDocDefault` e um
+    `tamanho` por extensão. Best-effort — se a consulta falhar, o upload segue e
+    quem recusa é o SEI.
+    """
+    try:
+        params = await client.parametros_upload()
+    except Exception:
+        return 0
+    mb = params.get("tamanhoDocDefault")
+    ext = nome_arquivo.rsplit(".", 1)[-1].lower() if "." in nome_arquivo else ""
+    if ext:
+        for e in params.get("extensoes", []) or []:
+            if str(e.get("extensao", "")).lower() == ext and e.get("tamanho"):
+                mb = e["tamanho"]
+                break
+    try:
+        return int(float(mb) * 1024 * 1024)
+    except (TypeError, ValueError):
+        return 0
+
+
 @mcp.tool()
 async def sei_criar_documento_externo(
     processo: str,
     id_serie: str,
-    arquivo_path: str,
+    arquivo_path: str = "",
     descricao: str = "",
     nivel_acesso: str = "0",
+    arquivo_base64: str = "",
+    nome_arquivo: str = "",
+    data_elaboracao: str = "",
     ctx: Context = None,
 ) -> str:
     """Cria um documento externo (upload de arquivo) em um processo SEI.
 
     - processo: protocolo formatado ou IdProcedimento
     - id_serie: tipo do documento (use sei_pesquisar_tipos_documento)
-    - arquivo_path: caminho local do arquivo (PDF, imagem, etc.)
     - descricao: descrição do documento
     - nivel_acesso: 0=público (padrão), 1=restrito, 2=sigiloso
+    - data_elaboracao: dd/mm/aaaa (padrão: hoje)
+
+    O arquivo entra por UM dos dois caminhos:
+    - arquivo_base64 + nome_arquivo: conteúdo do arquivo em base64. É o caminho
+      a usar quando o arquivo não está no disco do servidor MCP — por exemplo
+      um PDF vindo do Drive, gerado na conversa ou baixado de outra tool.
+      O nome_arquivo importa: o SEI usa a extensão para tipar o anexo.
+    - arquivo_path: caminho local NO SERVIDOR onde o MCP roda (não no seu
+      computador). Só serve para arquivos que já estão lá.
+
+    O limite de tamanho é o do próprio SEI (veja sei_parametros_upload).
     """
     try:
         client = _get_client(ctx)
+
+        if arquivo_base64 and arquivo_path:
+            return _error("Informe arquivo_base64 OU arquivo_path, não os dois.")
+        if not arquivo_base64 and not arquivo_path:
+            return _error(
+                "Informe arquivo_base64 + nome_arquivo (conteúdo em memória) ou "
+                "arquivo_path (caminho no servidor onde o MCP roda)."
+            )
+
+        conteudo = b""
+        if arquivo_base64:
+            if not nome_arquivo:
+                return _error(
+                    "nome_arquivo é obrigatório com arquivo_base64 — o SEI usa a "
+                    "extensão (ex: 'parecer.pdf') para determinar o tipo do anexo."
+                )
+            try:
+                # Aceita data URI (data:application/pdf;base64,...) e base64 puro
+                bruto = arquivo_base64.split(",", 1)[-1] if arquivo_base64.startswith("data:") \
+                    else arquivo_base64
+                conteudo = base64.b64decode(bruto, validate=True)
+            except Exception:
+                return _error("arquivo_base64 não é base64 válido.")
+            if not conteudo:
+                return _error("arquivo_base64 decodificou para 0 bytes.")
+
+            teto_local = int(_MAX_UPLOAD_BASE64_MB * 1024 * 1024)
+            if len(conteudo) > teto_local:
+                return _error(
+                    f"Arquivo com {len(conteudo) / 1048576:.1f} MB excede o teto "
+                    f"desta tool para envio em base64 ({_MAX_UPLOAD_BASE64_MB:g} MB, "
+                    "ajustável em SEI_MAX_UPLOAD_BASE64_MB). Para arquivos maiores, "
+                    "coloque-o no disco do servidor MCP e use arquivo_path."
+                )
+
+            limite = await _limite_upload_bytes(client, nome_arquivo)
+            if limite and len(conteudo) > limite:
+                return _error(
+                    f"Arquivo com {len(conteudo)} bytes excede o limite do SEI "
+                    f"({limite} bytes). Veja sei_parametros_upload."
+                )
+
         id_proc = await _resolver_processo(client, processo)
         result = await client.criar_documento_externo(
             id_procedimento=id_proc, id_serie=id_serie,
             arquivo_path=arquivo_path, descricao=descricao,
             nivel_acesso=nivel_acesso,
+            arquivo_bytes=conteudo, nome_arquivo=nome_arquivo,
+            data_elaboracao=data_elaboracao,
         )
+        if isinstance(result, dict):
+            result = {**result, "bytes_enviados": len(conteudo) or None}
         return _json(result)
     except Exception as e:
         return _error(str(e))

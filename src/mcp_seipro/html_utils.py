@@ -218,6 +218,45 @@ def pdf_to_markdown(content: bytes) -> str:
     return "\n\n".join(result)
 
 
+# Entidades que NÃO podem ser desescapadas: são estruturais no HTML.
+# Trocá-las por '<', '>', '&', '"' mudaria a árvore do documento (texto vira tag).
+_ENTIDADES_ESTRUTURAIS = {
+    "lt", "gt", "amp", "quot", "apos",
+    "#60", "#62", "#38", "#34", "#39",
+    "#x3c", "#x3e", "#x26", "#x22", "#x27",
+}
+
+_RE_ENTIDADE = re.compile(r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]{1,31});")
+
+
+def normalizar_entidades_html(texto: str) -> str:
+    """Converte entidades HTML em caracteres UTF-8 literais, preservando as estruturais.
+
+    Motivação: o SEI devolve o conteúdo das seções cheio de entidades
+    (`&nbsp;`, `&ccedil;`, `&#233;`, …) e aceita UTF-8 literal sem reclamar. Cada
+    ciclo ler→reenviar re-escapa o conteúdo, então as entidades se acumulam,
+    incham o corpo do POST e aumentam a superfície que uma managed rule do WAF
+    pode casar. Normalizar elimina essa classe inteira de problema.
+
+    `&lt;`, `&gt;`, `&amp;`, `&quot;` e `&apos;` (e seus equivalentes numéricos)
+    ficam intactos — desescapá-los transformaria texto literal em marcação.
+
+    `&nbsp;` vira o NBSP literal (U+00A0), que sobrevive ao ISO-8859-1 do wssei.
+    """
+    if not texto or "&" not in texto:
+        return texto
+
+    def _sub(m: re.Match) -> str:
+        corpo = m.group(1)
+        if corpo.lower() in _ENTIDADES_ESTRUTURAIS:
+            return m.group(0)
+        decodificado = html_module.unescape(m.group(0))
+        # Entidade desconhecida (unescape devolve o texto original) → preservar
+        return decodificado if decodificado != m.group(0) else m.group(0)
+
+    return _RE_ENTIDADE.sub(_sub, texto)
+
+
 def sanitize_iso8859(text: str) -> str:
     """Converte caracteres fora do ISO-8859-1 para entidades HTML numéricas.
 
