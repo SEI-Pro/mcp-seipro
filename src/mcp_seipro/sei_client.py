@@ -22,6 +22,22 @@ class SEICloudflareBlocked(Exception):
     """
 
 
+class SEIAcessoNegado(Exception):
+    """401/403 vindo do SEI (autenticação/permissão), NÃO da borda.
+
+    Distinto de SEICloudflareBlocked: aqui a requisição CHEGOU ao wssei e foi o
+    SEI que recusou — credencial inválida, sessão sem permissão na unidade
+    atual, ou acesso restrito ao protocolo. O tratamento é oposto ao do WAF:
+    trocar de unidade / conferir credencial resolve; mexer em transporte, não.
+    """
+
+    def __init__(self, mensagem: str, status: int = 403, corpo: str = ""):
+        super().__init__(mensagem)
+        self.status = status
+        self.corpo = corpo
+        self.origem = "sei"
+
+
 class SEIClient:
     """Cliente REST assíncrono para qualquer instância do SEI com mod-wssei v2."""
 
@@ -248,6 +264,39 @@ class SEIClient:
         )
 
     @staticmethod
+    def _raise_acesso_negado(resp: httpx.Response) -> None:
+        """401/403 que sobreviveu à re-autenticação: separa borda de SEI.
+
+        O 403 chega igual nos dois casos, mas pedem tratamento oposto — por isso
+        a mensagem diz de onde veio e o que fazer. Desafio e managed-rule já
+        foram descartados antes (_handle_cloudflare / _raise_if_waf_block).
+        """
+        corpo = (resp.text or "").strip()
+        corpo_curto = corpo[:600] + ("…" if len(corpo) > 600 else "")
+        servidor_borda = "cloudflare" in resp.headers.get("server", "").lower()
+        ray = resp.headers.get("cf-ray", "")
+
+        if servidor_borda and not corpo.lstrip().startswith("{"):
+            # Sem JSON do wssei no corpo → a resposta foi fabricada na borda.
+            raise SEICloudflareBlocked(
+                f"{resp.status_code} devolvido pela BORDA (Cloudflare) — a "
+                "requisição não chegou ao wssei, e o corpo não é JSON do SEI. "
+                "Não é erro de credencial: repetir com outro login dá o mesmo "
+                "resultado. Caminhos: regra de bypass no WAF do órgão para "
+                "/sei/modulos/wssei/, SEI_TRANSPORT=browser, ou SEI_CF_CLEARANCE."
+                + (f" (cf-ray={ray})" if ray else "")
+            )
+
+        raise SEIAcessoNegado(
+            f"{resp.status_code} do SEI (autenticação/permissão), não do WAF: a "
+            "requisição chegou ao wssei e foi recusada lá. Confira se a "
+            "credencial é válida e se a UNIDADE ATUAL tem acesso ao protocolo "
+            "(sei_trocar_unidade). Resposta do SEI: " + (corpo_curto or "(vazia)"),
+            status=resp.status_code,
+            corpo=corpo,
+        )
+
+    @staticmethod
     def _raise_http_with_body(resp: httpx.Response) -> None:
         """Como raise_for_status, mas inclui o CORPO da resposta na mensagem.
 
@@ -304,6 +353,10 @@ class SEIClient:
             resp = await self._client.request(method, f"{self.base_url}{path}", **kwargs)
             await self._handle_cloudflare(resp)
             self._raise_if_waf_block(resp)
+            if resp.status_code in (401, 403):
+                # Sobreviveu à re-autenticação e não é desafio nem managed rule:
+                # é recusa de acesso do próprio SEI (ou 403 cru da borda).
+                self._raise_acesso_negado(resp)
         self._raise_http_with_body(resp)  # inclui o corpo do wssei no erro
         return resp
 
@@ -428,11 +481,15 @@ class SEIClient:
         # d1 tem IdProcedimento, ProtocoloProcedimentoFormatado, NomeTipoProcedimento
         return {**d1, **rich}
 
-    async def listar_documentos(
+    async def listar_documentos_pagina(
         self, id_procedimento: str, limit: int = 200, start: int = 0
-    ) -> list[dict]:
-        """Lista documentos de um processo.
-        Retorna array de: {id, atributos: {tipoDocumento, tipo, protocoloFormatado, ...}}
+    ) -> dict:
+        """Uma página de documentos do processo, com o total do servidor.
+
+        `start` é o número da PÁGINA (0-indexed), não offset — é assim que o
+        wssei repassa para `setNumPaginaAtual`.
+        Retorna {documentos: [...], total: N} — `total` é `getNumTotalRegistros`
+        do wssei, ou seja, quantos documentos o processo tem ao todo.
         """
         resp = await self._request(
             "GET",
@@ -442,7 +499,67 @@ class SEIClient:
         data = resp.json()
         if not data.get("sucesso"):
             raise Exception(f"Erro ao listar documentos: {data.get('mensagem')}")
-        return data.get("data", [])
+        itens = data.get("data", []) or []
+        total = data.get("total")
+        return {
+            "documentos": itens,
+            "total": int(total) if str(total).isdigit() else len(itens),
+        }
+
+    async def listar_documentos(
+        self, id_procedimento: str, limit: int = 200, start: int = 0
+    ) -> list[dict]:
+        """Lista documentos de um processo.
+        Retorna array de: {id, atributos: {tipoDocumento, tipo, protocoloFormatado, ...}}
+        """
+        return (await self.listar_documentos_pagina(id_procedimento, limit, start))["documentos"]
+
+    async def listar_documentos_todos(
+        self, id_procedimento: str, max_paginas: int = 25, tam_pagina: int = 200
+    ) -> dict:
+        """Lista TODOS os documentos do processo, paginando até esgotar.
+
+        Necessário porque a listagem do wssei é ordenada por sequência crescente
+        e sem parâmetro de ordem: para ver os documentos MAIS RECENTES de um
+        processo antigo é preciso ter a coleção inteira.
+        Retorna {documentos, total, truncado, paginas_lidas}.
+        """
+        pagina = await self.listar_documentos_pagina(id_procedimento, tam_pagina, 0)
+        docs = list(pagina["documentos"])
+        total = pagina["total"]
+        lidas = 1
+        while len(docs) < total and lidas < max_paginas:
+            proxima = await self.listar_documentos_pagina(id_procedimento, tam_pagina, lidas)
+            novos = proxima["documentos"]
+            if not novos:
+                break
+            docs.extend(novos)
+            total = proxima["total"] or total
+            lidas += 1
+        return {
+            "documentos": docs,
+            "total": total,
+            "truncado": len(docs) < total,
+            "paginas_lidas": lidas,
+        }
+
+    async def consultar_documento_interno_formatado(self, protocolo_formatado: str) -> dict:
+        """Consulta um documento pelo protocoloFormatado (o número SEI visível).
+
+        Resolve nº SEI → id interno direto no banco (ProtocoloRN::consultarRN0186),
+        sem depender da indexação do Solr — por isso funciona para documentos
+        recém-criados. Retorna o mesmo payload de consultar_documento_interno
+        (idDocumento, nomeDocumento, protocolo=idProcedimento, …).
+        """
+        resp = await self._request(
+            "GET", f"/documento/interno/formatado/consultar/{protocolo_formatado}"
+        )
+        data = resp.json()
+        if not data.get("sucesso"):
+            raise Exception(
+                f"Documento {protocolo_formatado} não encontrado: {data.get('mensagem')}"
+            )
+        return data["data"]
 
     async def consultar_documento_interno(self, id_documento: str) -> dict:
         """Consulta metadados de um documento interno pelo id.
@@ -500,8 +617,13 @@ class SEIClient:
         nivel_acesso: str = "",
         id_hipotese_legal: str = "",
         arquivo_path: str = "",
+        arquivo_bytes: bytes = b"",
+        nome_arquivo: str = "",
     ) -> dict:
         """Altera metadados de um documento externo (e opcionalmente substitui o arquivo).
+
+        O arquivo de substituição aceita caminho local (`arquivo_path`) ou
+        conteúdo em memória (`arquivo_bytes` + `nome_arquivo`).
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
         payload: dict = {}
@@ -512,16 +634,11 @@ class SEIClient:
         if id_hipotese_legal:
             payload["idHipoteseLegal"] = id_hipotese_legal
 
-        if arquivo_path:
-            import os
-            headers = await self._get_headers()
-            with open(arquivo_path, "rb") as f:
-                resp = await self._client.post(
-                    f"{self.base_url}/documento/externo/{id_documento}/alterar",
-                    headers=headers,
-                    data=payload,
-                    files={"anexo": (os.path.basename(arquivo_path), f)},
-                )
+        if arquivo_path or arquivo_bytes:
+            nome, conteudo = self._ler_arquivo(arquivo_path, arquivo_bytes, nome_arquivo)
+            resp = await self._post_multipart(
+                f"/documento/externo/{id_documento}/alterar", payload, (nome, conteudo)
+            )
         else:
             resp = await self._request(
                 "POST", f"/documento/externo/{id_documento}/alterar", data=payload
@@ -1791,74 +1908,107 @@ class SEIClient:
     # Documento externo (upload)
     # ------------------------------------------------------------------
 
+    async def _post_multipart(self, path: str, data: dict, arquivo: tuple) -> httpx.Response:
+        """POST multipart com o mesmo tratamento de borda/re-auth do _request.
+
+        `arquivo` é (nome, bytes). Mantém os bytes em memória para poder repetir
+        a requisição após re-autenticar (um file object já teria sido consumido).
+        """
+        import io
+
+        nome, conteudo = arquivo
+        url = f"{self.base_url}{path}"
+
+        async def _enviar() -> httpx.Response:
+            headers = await self._get_headers()
+            return await self._client.post(
+                url, headers=headers, data=data,
+                files={"anexo": (nome, io.BytesIO(conteudo))},
+            )
+
+        resp = await _enviar()
+        if await self._handle_cloudflare(resp):
+            resp = await _enviar()
+            await self._handle_cloudflare(resp)
+        self._raise_if_waf_block(resp)
+        if resp.status_code in (401, 403):
+            self._token = None  # força re-autenticação em _get_headers
+            resp = await _enviar()
+            await self._handle_cloudflare(resp)
+            self._raise_if_waf_block(resp)
+            if resp.status_code in (401, 403):
+                self._raise_acesso_negado(resp)
+        self._raise_http_with_body(resp)
+        return resp
+
+    @staticmethod
+    def _ler_arquivo(
+        arquivo_path: str = "", arquivo_bytes: bytes = b"", nome_arquivo: str = ""
+    ) -> tuple[str, bytes]:
+        """Resolve a origem do anexo para (nome, bytes).
+
+        Aceita caminho local (útil no servidor) OU bytes já em memória (o único
+        caminho possível quando quem chama a tool está do outro lado da rede).
+        """
+        import os
+
+        if arquivo_bytes:
+            if not nome_arquivo:
+                raise Exception(
+                    "nome_arquivo é obrigatório ao enviar o conteúdo em memória "
+                    "(o SEI usa a extensão para determinar o tipo do anexo)."
+                )
+            return os.path.basename(nome_arquivo), arquivo_bytes
+        if not arquivo_path:
+            raise Exception("Informe arquivo_path ou arquivo_bytes + nome_arquivo.")
+        if not os.path.exists(arquivo_path):
+            raise Exception(f"Arquivo não encontrado: {arquivo_path}")
+        with open(arquivo_path, "rb") as f:
+            return os.path.basename(nome_arquivo or arquivo_path), f.read()
+
     async def criar_documento_externo(
         self,
         id_procedimento: str,
         id_serie: str,
-        arquivo_path: str,
+        arquivo_path: str = "",
         descricao: str = "",
         nivel_acesso: str = "0",
         id_unidade: str = "",
+        arquivo_bytes: bytes = b"",
+        nome_arquivo: str = "",
+        data_elaboracao: str = "",
     ) -> dict:
         """Cria documento externo com upload de arquivo em um processo SEI.
-        arquivo_path: caminho local do arquivo (PDF, imagem, etc.)
+
+        O anexo pode vir de `arquivo_path` (caminho local ao servidor) ou de
+        `arquivo_bytes` + `nome_arquivo` (conteúdo em memória).
         Retorna: {idDocumento, protocoloDocumentoFormatado}
         """
-        import os
         from datetime import datetime
-        if not os.path.exists(arquivo_path):
-            raise Exception(f"Arquivo não encontrado: {arquivo_path}")
 
-        nome_arquivo = os.path.basename(arquivo_path)
-        data_hoje = datetime.now().strftime("%d/%m/%Y")
-        headers = await self._get_headers()
-
-        with open(arquivo_path, "rb") as f:
-            resp = await self._client.post(
-                f"{self.base_url}/documento/{id_procedimento}/externo/criar",
-                headers=headers,
-                data={
-                    "idSerie": id_serie,
-                    "numero": "",
-                    "descricao": descricao,
-                    "dataElaboracao": data_hoje,
-                    "nivelAcesso": nivel_acesso,
-                    "idHipoteseLegal": "",
-                    "grauSigilo": "",
-                    "idUnidadeGeradoraProtocolo": id_unidade,
-                    "assuntos": "",
-                    "interessados": "",
-                    "remetente": "",
-                    "destinatarios": "",
-                    "observacao": "",
-                    "idTextoPadraoInterno": "",
-                    "idTipoConferencia": "",
-                    "protocoloDocumentoModelo": "",
-                },
-                files={"anexo": (nome_arquivo, f)},
-            )
-
-        if resp.status_code in (401, 403):
-            await self.autenticar()
-            headers = {"token": self._token}
-            with open(arquivo_path, "rb") as f:
-                resp = await self._client.post(
-                    f"{self.base_url}/documento/{id_procedimento}/externo/criar",
-                    headers=headers,
-                    data={
-                        "idSerie": id_serie, "numero": "", "descricao": descricao,
-                        "dataElaboracao": data_hoje, "nivelAcesso": nivel_acesso,
-                        "idHipoteseLegal": "", "grauSigilo": "",
-                        "idUnidadeGeradoraProtocolo": id_unidade,
-                        "assuntos": "", "interessados": "", "remetente": "",
-                        "destinatarios": "", "observacao": "",
-                        "idTextoPadraoInterno": "", "idTipoConferencia": "",
-                        "protocoloDocumentoModelo": "",
-                    },
-                    files={"anexo": (nome_arquivo, f)},
-                )
-
-        resp.raise_for_status()
+        nome, conteudo = self._ler_arquivo(arquivo_path, arquivo_bytes, nome_arquivo)
+        resp = await self._post_multipart(
+            f"/documento/{id_procedimento}/externo/criar",
+            {
+                "idSerie": id_serie,
+                "numero": "",
+                "descricao": descricao,
+                "dataElaboracao": data_elaboracao or datetime.now().strftime("%d/%m/%Y"),
+                "nivelAcesso": nivel_acesso,
+                "idHipoteseLegal": "",
+                "grauSigilo": "",
+                "idUnidadeGeradoraProtocolo": id_unidade,
+                "assuntos": "",
+                "interessados": "",
+                "remetente": "",
+                "destinatarios": "",
+                "observacao": "",
+                "idTextoPadraoInterno": "",
+                "idTipoConferencia": "",
+                "protocoloDocumentoModelo": "",
+            },
+            (nome, conteudo),
+        )
         data = resp.json()
         if not data.get("sucesso"):
             raise Exception(f"Erro ao criar documento externo: {data.get('mensagem')}")

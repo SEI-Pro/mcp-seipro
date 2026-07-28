@@ -94,6 +94,32 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - **Correção definitiva (lado ANTAQ/infra):** exceção de WAF para `/sei/modulos/wssei/` (ou desabilitar as managed rules nesse path). Verificado ao vivo 01/07/2026 no proc de teste 50300.018905/2018-67
 - `_request` agora inclui o **corpo da resposta** no erro HTTP (`_raise_http_with_body`) — antes o `raise_for_status` engolia o `mensagem`/`exception` do wssei (ex.: "Conteúdo do documento incompleto")
 
+### Normalização de entidades + escada de tentativas em `sei_editar_secao`
+- **Entidades HTML são desescapadas antes do POST** (`normalizar_entidades_html` em html_utils.py) em TODAS as seções — inclusive nas relidas do próprio SEI, que é onde elas nascem e se acumulam a cada ciclo ler→reenviar. O SEI aceita UTF-8 literal. `&nbsp;` → ` ` (sobrevive ao ISO-8859-1). As **estruturais** (`&lt; &gt; &amp; &quot; &apos;` + numéricas equivalentes) são preservadas — desescapá-las viraria texto em marcação. Validado ao vivo: payload do doc 2953648 saiu com **zero** entidades
+- **Escada de tentativas** no 403-WAF: (1) envio normalizado → (2) cabeçalho base64 regenerável neutralizado + verificação de regeneração → (3) falha relatando o que foi tentado. A mensagem antiga afirmava causa raiz não medida ("o gatilho está em conteúdo não-regenerável", "só a exceção de WAF resolve") e induzia a desistir da API; agora `_msg_waf_esgotado` lista as tentativas e os caminhos (dry_run, gravar por partes, simplificar HTML, interface web, exceção de WAF) sem prescrever causa
+- **`dry_run=True`** devolve o payload exato (todas as seções normalizadas + bytes por seção + total) sem POST — isola o gatilho numa chamada só
+- **`validar_referencias=True`** (padrão) detecta âncora `id="lnkSeiNNNN"` que usa nº SEI em vez do id interno (link morto que só aparece depois). Usa a rota formatada; avisos vão em `_avisos`, nunca bloqueiam a edição
+- **`idSecaoModelo` inexistente não vira mais falso sucesso**: antes o POST gravava as seções atuais (no-op) e retornava sucesso. Agora: erro se NENHUM modelo informado existe (com a lista dos disponíveis); aviso em `_avisos` se só alguns
+
+### Resolver nº SEI → id interno sem Solr
+- `GET /documento/interno/formatado/consultar/{protocoloFormatado}` (ProtocoloRN::consultarRN0186) resolve **direto no banco** → funciona para documento **recém-criado**, que o Solr ainda não indexou. É a estratégia 1 de `_resolver_documento` (Solr virou a 2, id direto a 3)
+- Retorna `idDocumento` (id interno), `nomeDocumento`, `protocolo` (= idProcedimento). NÃO devolve o discriminador I/X — o tipo vem da listagem do processo
+- Validado ao vivo em SEI 5.0.4 / wssei 3.0.2: `2953648` → `3242105`
+
+### `sei_listar_documentos`: ordem, paginação e list view
+- A listagem do wssei é sempre ASC por sequência e **sem parâmetro de ordem** (`setOrdNumSequencia(ASC)`); `start` é PÁGINA. Para `ordem='desc'` ou offset alto, o cliente pagina o processo inteiro (`listar_documentos_todos`, teto de 25 páginas) e ordena client-side
+- A resposta do wssei traz `total` (`getNumTotalRegistros`) — exposto como `total`, com `retornados`/`truncado`
+- `resumido=True` (padrão) → id, protocoloFormatado, tipo, tipo_documento, unidade, nome, assinado, cancelado, acesso. O bruto (`resumido=False`) estoura a janela em processos grandes. **Não há data na listagem** — o wssei não a devolve nesse endpoint; use `sei_consultar_documento_interno` (campo `dataElaboracao`)
+
+### Upload de documento externo por base64
+- `sei_criar_documento_externo` aceita `arquivo_base64` + `nome_arquivo` (aceita data URI) além de `arquivo_path` — que só serve para arquivos no disco do SERVIDOR onde o MCP roda. `alterar_documento_externo` idem, via `arquivo_bytes`
+- `_post_multipart` no cliente dá ao upload o mesmo tratamento de borda/re-auth do `_request` (antes o upload usava `_client.post` cru e engolia Cloudflare/403)
+- Teto: `SEI_MAX_UPLOAD_BASE64_MB` (padrão 50 MB). O limite do SEI **não** serve de teto prático — na ANTAQ `SEI_TAM_MB_DOC_EXTERNO` = **5124 MB**
+
+### 403 do WAF ≠ 403 de autenticação
+- Os dois chegam como 403 e pedem ações OPOSTAS. `SEIAcessoNegado` (nova exceção) é levantada quando o 403/401 sobrevive à re-autenticação e o corpo é JSON do wssei → é o SEI recusando (unidade/permissão). Se o corpo não é JSON e `server: cloudflare`, vira `SEICloudflareBlocked` (borda)
+- As respostas de erro das tools agora trazem `erro_origem` (`cloudflare_waf` | `cloudflare_borda` | `sei_acesso`) e `erro_acao` (`_classificar_erro` no server.py)
+
 ### Resolução de id nas tools de seção (número SEI ≠ id interno)
 - `sei_listar_secoes` e `sei_editar_secao` agora resolvem via `_resolver_documento` (igual `sei_ler_documento`) — antes tratavam o argumento como id interno cru → passar um `protocoloFormatado` retornava **outro documento silenciosamente** (colisão de namespace: ambos são inteiros de magnitude parecida)
 - Ambas ecoam `_documento_resolvido` ({id_documento, nome, protocoloFormatado, idProcedimento}) — `nomeDocumento` (ex.: "Despacho 2949729") é o rótulo mais inequívoco. No `consultar_documento_interno`, o campo `protocolo` é o **idProcedimento** (não o nº do doc), e o nº SEI do doc sai do fim de `nomeDocumento`
@@ -115,6 +141,7 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - Ocorria ANTES de validar credenciais → "falha com qualquer credencial". Corrigido pela TI da ANTAQ (arquivo recriado). Mantido aqui como referência caso reincida após updates do módulo
 
 ### Limitações conhecidas
+- **Cancelar/excluir DOCUMENTO não existe na API**: o mod-wssei (conferido no master, 3.x) não tem rota nem RN para isso — as únicas rotas "cancelar" são `/bloco/assinatura/{id}/disponibilizacao/cancelar` e `/processo/{protocolo}/cancelar/sobrestamento`. Uma minuta indesejada só sai pela interface web (ou pelo scraper, hoje inoperante por SSO). Não há como fechar esse ciclo de erro do agente sem mudança no módulo
 - Cancelar assinatura: a função `DocumentoRN::cancelarAssinaturaInternoControlado` existe no core SEI (linha 4026) mas NÃO está exposta na API REST
 - `sei_marcar_nao_lido` usa workaround de enviar processo para a própria unidade
 - Upload de doc externo: multipart/form-data com campo `anexo`, requer `dataElaboracao`

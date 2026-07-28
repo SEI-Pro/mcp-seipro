@@ -202,7 +202,7 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 |------|-----------|
 | `sei_arvore_processo` | Árvore completa via scraper web (~10× mais rápido que REST). Aceita protocolo formatado |
 | `sei_buscar_documento` | Busca documento pelo número SEI (via Solr) |
-| `sei_listar_documentos` | Lista documentos via scraper web (~10× mais rápido). Aceita protocolo formatado |
+| `sei_listar_documentos` | Lista documentos com `ordem` (asc/desc), `limite`/`offset` e list view enxuta (`resumido`) |
 | `sei_ler_documento` | Lê documento (HTML ou PDF/OCR) em Markdown |
 | `sei_baixar_anexo` | Baixa documento externo em base64 (max 10MB) |
 | `sei_consultar_documento_externo` | Consulta metadados de documento externo |
@@ -214,11 +214,11 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 | Tool | Descrição |
 |------|-----------|
 | `sei_criar_documento` | Cria documento interno vazio |
-| `sei_criar_documento_externo` | Cria documento externo com upload de arquivo |
+| `sei_criar_documento_externo` | Cria documento externo — upload por `arquivo_base64` (+`nome_arquivo`) ou `arquivo_path` |
 | `sei_alterar_documento_interno` | Altera metadados de documento interno |
 | `sei_alterar_documento_externo` | Altera metadados/arquivo de documento externo |
 | `sei_listar_secoes` | Lista seções editáveis de um documento |
-| `sei_editar_secao` | Altera conteúdo HTML (preenche somenteLeitura auto) |
+| `sei_editar_secao` | Altera conteúdo HTML (preenche somenteLeitura auto). `dry_run` inspeciona o payload sem gravar |
 | `sei_assinar_documento` | Assinatura eletrônica |
 | `sei_cancelar_assinatura` | Tenta cancelar assinatura via edição |
 | `sei_gerar_referencia` | Gera hiperlink dinâmico para documento citado |
@@ -351,6 +351,8 @@ Se algum endpoint falhar com erro inesperado, use `sei_versao` para verificar a 
 ## Arquitetura híbrida REST + Web scraper
 
 A maioria das tools usa a **REST mod-wssei v2** (estável, oficial, disponível desde SEI 4.0.x). Mas duas operações críticas para latência ganham com um caminho alternativo via **scraping HTTP do frontend web do SEI**:
+
+> **Desde jun/2026 o caminho web é opt-in** (`SEI_WEB_SCRAPER=1`): o login do frontend da ANTAQ virou SSO Microsoft e o scraper não autentica mais. As tools abaixo rodam por REST por padrão; os ganhos medidos valem quando o scraper está ativo e o órgão usa login local.
 
 | Tool | Estratégia | Ganho medido |
 |---|---|---|

@@ -45,7 +45,7 @@ class _FakeClient:
         return [{"sucesso": True}]
 
 
-def _run(cli, secoes):
+def _run(cli, secoes, **kwargs):
     # neutraliza resolução/identidade (dependeriam de REST) e roda a tool real
     orig_res, orig_ident = srv._resolver_documento, srv._identidade_documento
 
@@ -57,9 +57,11 @@ def _run(cli, secoes):
 
     srv._resolver_documento = fake_res
     srv._identidade_documento = fake_ident
+    kwargs.setdefault("validar_referencias", False)
     try:
         return json.loads(asyncio.run(
-            srv.sei_editar_secao(id_documento="3", secoes=secoes, versao="", ctx=_Ctx(cli))
+            srv.sei_editar_secao(id_documento="3", secoes=secoes, versao="",
+                                 ctx=_Ctx(cli), **kwargs)
         ))
     finally:
         srv._resolver_documento, srv._identidade_documento = orig_res, orig_ident
@@ -89,6 +91,103 @@ def test_fallback_aborta_se_corromper():
     res = _run(cli, [{"idSecaoModelo": "658", "conteudo": "<p>novo</p>"}])
     assert res.get("error"), "deveria abortar com erro de corrupção"
     assert "não foram regeneradas" in res["error"].lower() or "regeneradas" in res["error"].lower()
+
+
+def test_mensagem_de_falha_lista_tentativas_sem_prescrever_causa():
+    """A mensagem antiga afirmava causa raiz não medida ('está em conteúdo
+    não-regenerável', 'só a exceção de WAF resolve') e levava a desistir da API."""
+    class SempreBloqueia(_FakeClient):
+        async def alterar_secao_documento(self, id_documento, secoes, versao):
+            self.alterar_calls.append(secoes)
+            raise SEICloudflareBlocked("WAF managed rule block")
+
+    res = _run(SempreBloqueia(), [{"idSecaoModelo": "658", "conteudo": "<p>x</p>"}])
+    erro = res.get("error", "")
+    assert erro, "deveria falhar após esgotar a escada"
+    assert "Tentativas:" in erro, erro
+    assert "envio normalizado" in erro and "cabeçalho base64" in erro, erro
+    assert "NÃO está determinada" in erro or "não está determinada" in erro.lower(), erro
+    assert "dry_run" in erro, "deve apontar o caminho de isolamento"
+    # nada de conclusão categórica sobre onde está o gatilho
+    assert "só a exceção de WAF" not in erro.lower()
+    assert res.get("erro_origem") == "cloudflare_waf", res
+
+
+def test_dry_run_nao_grava_e_devolve_payload():
+    cli = _FakeClient()
+    res = _run(cli, [{"idSecaoModelo": "658", "conteudo": "<p>novo</p>"}], dry_run=True)
+    assert res["dry_run"] is True and res["nada_foi_gravado"] is True
+    assert cli.alterar_calls == [], "dry_run não pode fazer POST"
+    modelos = {s["idSecaoModelo"] for s in res["secoes"]}
+    assert modelos == {"656", "658"}, "payload deve trazer TODAS as seções"
+    assert res["bytes_total"] > 0
+    resumo = {r["idSecaoModelo"]: r for r in res["resumo"]}
+    assert resumo["658"]["alterada_por_voce"] is True
+    assert resumo["656"]["cabecalho_base64_regeneravel"] is True
+
+
+def test_entidades_normalizadas_no_payload_enviado():
+    cli = _FakeClient()
+    _run(cli, [{"idSecaoModelo": "658", "conteudo": "<p>Aten&ccedil;&atilde;o&nbsp;final</p>"}])
+    enviado = {s["idSecaoModelo"]: s["conteudo"] for s in cli.alterar_calls[0]}
+    assert "&ccedil;" not in enviado["658"] and "Atenção" in enviado["658"]
+    assert "&nbsp;" not in enviado["658"]
+    # a estrutura do HTML permanece intacta
+    assert enviado["658"].startswith("<p>") and enviado["658"].endswith("</p>")
+
+
+def test_secao_inexistente_nao_vira_falso_sucesso():
+    cli = _FakeClient()
+    res = _run(cli, [{"idSecaoModelo": "999", "conteudo": "<p>x</p>"}])
+    assert res.get("error"), "gravar num idSecaoModelo inexistente não pode dar sucesso"
+    assert "999" in res["error"] and "658" in res["error"], res["error"]
+    assert cli.alterar_calls == [], "não deve chegar a fazer o POST"
+
+
+def test_secao_inexistente_parcial_vira_aviso():
+    cli = _FakeClient()
+    res = _run(cli, [
+        {"idSecaoModelo": "658", "conteudo": "<p>vale</p>"},
+        {"idSecaoModelo": "999", "conteudo": "<p>não existe</p>"},
+    ])
+    assert not res.get("error"), res
+    avisos = res.get("_avisos") or []
+    assert avisos and avisos[0]["secoes_ignoradas"] == ["999"]
+    enviado = {s["idSecaoModelo"]: s["conteudo"] for s in cli.alterar_calls[0]}
+    assert "vale" in enviado["658"], "a seção válida deve ter sido gravada"
+
+
+def test_ancora_com_numero_sei_gera_aviso():
+    class ComProtocolo(_FakeClient):
+        async def consultar_documento_interno_formatado(self, numero):
+            if numero == "2949729":
+                return {"idDocumento": "3151234", "nomeDocumento": "Despacho 2949729"}
+            raise Exception("não encontrado")
+
+    cli = ComProtocolo()
+    res = _run(
+        cli,
+        [{"idSecaoModelo": "658",
+          "conteudo": '<a class="ancoraSei" id="lnkSei2949729">SEI 2949729</a>'}],
+        validar_referencias=True,
+    )
+    avisos = res.get("_avisos") or []
+    assert avisos, "âncora com nº SEI deveria gerar aviso"
+    assert avisos[0]["id_interno_correto"] == "3151234"
+    assert "lnkSei3151234" in avisos[0]["correcao"]
+
+
+def test_ancora_com_id_interno_nao_gera_aviso():
+    class SemProtocolo(_FakeClient):
+        async def consultar_documento_interno_formatado(self, numero):
+            raise Exception("Documento não encontrado")  # não é protocoloFormatado
+
+    res = _run(
+        SemProtocolo(),
+        [{"idSecaoModelo": "658", "conteudo": '<a id="lnkSei3151234">ref</a>'}],
+        validar_referencias=True,
+    )
+    assert not res.get("_avisos"), res.get("_avisos")
 
 
 def test_sem_cabecalho_base64_propaga_erro_waf():
