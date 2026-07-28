@@ -4,14 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-seipro"
-version = "0.4.0"
+version = "0.4.1"
 description = "MCP server for SEI (Sistema Eletronico de Informacoes) - 116 tools for mod-wssei v2 REST API"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 keywords = ["mcp", "sei", "governo", "documentos", "claude"]
 dependencies = [
-    "mcp[cli]>=1.12",
+    # Teto em <2: o SDK 2.0.0 removeu `mcp.server.fastmcp`, de onde vêm FastMCP e
+    # Context — com ele o servidor nem importa. Migrar é trabalho à parte.
+    "mcp[cli]>=1.12,<2",
     "httpx>=0.27",
     "beautifulsoup4>=4",
     "markdownify>=0.14",
