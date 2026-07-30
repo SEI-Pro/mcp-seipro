@@ -23,26 +23,60 @@ class _Ctx:
 
 
 class _FakeClient:
-    """header 656 (somenteLeitura, base64) + editável 658."""
-    def __init__(self, regenera=True):
+    """cabeçalho 656 (dinâmica, base64) + editável 658 + 660 (somenteLeitura NÃO dinâmica)."""
+    def __init__(self, regenera=True, bloqueia_primeira=False):
         self.alterar_calls = []
         self._regenera = regenera
+        self._bloqueia_primeira = bloqueia_primeira
 
     async def listar_secao_documento(self, doc_id):
-        # após a escrita benigna, o cabeçalho regenera (volta base64) ou não
+        # o SEI regenera a seção dinâmica ao salvar (volta o base64) ou não
         header = HEADER_B64
         if self.alterar_calls and not self._regenera:
-            header = "&lt;p&gt;&amp;nbsp;&lt;/p&gt;"  # ficou o placeholder → corrompido
+            header = ""  # ficou vazia → o SEI NÃO regenerou
         return {"ultimaVersaoDocumento": "1", "secoes": [
-            {"id": "1", "idSecaoModelo": "656", "somenteLeitura": "S", "conteudo": header},
-            {"id": "2", "idSecaoModelo": "658", "somenteLeitura": "N", "conteudo": "&lt;p&gt;orig&lt;/p&gt;"},
+            {"id": "1", "idSecaoModelo": "656", "somenteLeitura": "S",
+             "DinamicaSecaoDocumento": "S", "conteudo": header},
+            {"id": "2", "idSecaoModelo": "658", "somenteLeitura": "N",
+             "DinamicaSecaoDocumento": "N", "conteudo": "&lt;p&gt;orig&lt;/p&gt;"},
+            {"id": "3", "idSecaoModelo": "660", "somenteLeitura": "S",
+             "DinamicaSecaoDocumento": "N", "conteudo": "&lt;p&gt;fixa&lt;/p&gt;"},
         ]}
 
     async def alterar_secao_documento(self, id_documento, secoes, versao):
         self.alterar_calls.append(secoes)
-        if len(self.alterar_calls) == 1:
+        if self._bloqueia_primeira and len(self.alterar_calls) == 1:
             raise SEICloudflareBlocked("WAF managed rule block")
         return [{"sucesso": True}]
+
+
+def test_secao_dinamica_vai_vazia_na_primeira_tentativa():
+    """O SEI descarta o conteúdo de seção dinâmica (EditorRN::montarConteudoSecao
+    usa ConteudoOriginal do banco). Reenviá-la só engorda o corpo do POST — que é
+    exatamente o que o WAF inspeciona. Deve sair vazia já na 1ª tentativa."""
+    cli = _FakeClient()
+    res = _run(cli, [{"idSecaoModelo": "658", "conteudo": "<p>novo</p>"}])
+    assert res.get("error") is None, res
+    assert len(cli.alterar_calls) == 1, "não deve precisar de fallback"
+    enviado = {s["idSecaoModelo"]: s["conteudo"] for s in cli.alterar_calls[0]}
+    assert enviado["656"] == "", "seção dinâmica deveria ir vazia"
+    assert "novo" in enviado["658"]
+
+
+def test_somenteLeitura_nao_dinamica_nunca_e_esvaziada():
+    """Caso vizinho perigoso: somenteLeitura='S' com SinDinamica='N' cai no ramo
+    else do montarConteudoSecao e GRAVA o que enviamos — esvaziar apagaria a seção."""
+    cli = _FakeClient()
+    _run(cli, [{"idSecaoModelo": "658", "conteudo": "<p>novo</p>"}])
+    enviado = {s["idSecaoModelo"]: s["conteudo"] for s in cli.alterar_calls[0]}
+    assert "fixa" in enviado["660"], "seção somenteLeitura NÃO dinâmica não pode ir vazia"
+
+
+def test_aborta_se_secao_dinamica_nao_regenerar():
+    cli = _FakeClient(regenera=False)
+    res = _run(cli, [{"idSecaoModelo": "658", "conteudo": "<p>novo</p>"}])
+    assert res.get("error"), "deveria abortar ao detectar que o SEI não regenerou"
+    assert "regener" in res["error"].lower(), res["error"]
 
 
 def _run(cli, secoes, **kwargs):
@@ -67,50 +101,58 @@ def _run(cli, secoes, **kwargs):
         srv._resolver_documento, srv._identidade_documento = orig_res, orig_ident
 
 
-def test_helper_detecta_cabecalho_base64():
-    assert srv._secao_cabecalho_base64({"somenteLeitura": "S", "conteudo": HEADER_B64}) is True
-    assert srv._secao_cabecalho_base64({"somenteLeitura": "N", "conteudo": HEADER_B64}) is False
-    assert srv._secao_cabecalho_base64({"somenteLeitura": "S", "conteudo": "<p>x</p>"}) is False
+def test_helper_detecta_secao_regenerada():
+    """O critério é SinDinamica, não somenteLeitura — ver montarConteudoSecao."""
+    assert srv._secao_regenerada_pelo_sei({"DinamicaSecaoDocumento": "S"}) is True
+    assert srv._secao_regenerada_pelo_sei({"DinamicaSecaoDocumento": "N"}) is False
+    # somenteLeitura sozinho NÃO autoriza esvaziar
+    assert srv._secao_regenerada_pelo_sei(
+        {"somenteLeitura": "S", "DinamicaSecaoDocumento": "N", "conteudo": HEADER_B64}
+    ) is False
 
 
-def test_fallback_contorna_e_preserva():
-    cli = _FakeClient(regenera=True)
-    res = _run(cli, [{"idSecaoModelo": "658", "conteudo": "<p>novo</p>"}])
-    assert res.get("error") is None, res
-    assert res.get("_waf_contornado"), "deveria ter contornado o WAF"
-    # a 2ª chamada de alterar benignou SÓ o cabeçalho 656, manteve a 658
-    seg = cli.alterar_calls[1]
-    h656 = next(s for s in seg if s["idSecaoModelo"] == "656")
-    h658 = next(s for s in seg if s["idSecaoModelo"] == "658")
-    assert "base64" not in h656["conteudo"] and "nbsp" in h656["conteudo"]
-    assert "novo" in h658["conteudo"]
-
-
-def test_fallback_aborta_se_corromper():
-    cli = _FakeClient(regenera=False)  # cabeçalho NÃO regenera → corrupção
-    res = _run(cli, [{"idSecaoModelo": "658", "conteudo": "<p>novo</p>"}])
-    assert res.get("error"), "deveria abortar com erro de corrupção"
-    assert "não foram regeneradas" in res["error"].lower() or "regeneradas" in res["error"].lower()
+class _SempreBloqueia(_FakeClient):
+    async def alterar_secao_documento(self, id_documento, secoes, versao):
+        self.alterar_calls.append(secoes)
+        raise SEICloudflareBlocked("WAF managed rule block")
 
 
 def test_mensagem_de_falha_lista_tentativas_sem_prescrever_causa():
     """A mensagem antiga afirmava causa raiz não medida ('está em conteúdo
     não-regenerável', 'só a exceção de WAF resolve') e levava a desistir da API."""
-    class SempreBloqueia(_FakeClient):
-        async def alterar_secao_documento(self, id_documento, secoes, versao):
-            self.alterar_calls.append(secoes)
-            raise SEICloudflareBlocked("WAF managed rule block")
-
-    res = _run(SempreBloqueia(), [{"idSecaoModelo": "658", "conteudo": "<p>x</p>"}])
+    res = _run(_SempreBloqueia(), [{"idSecaoModelo": "658", "conteudo": "<p>x</p>"}])
     erro = res.get("error", "")
     assert erro, "deveria falhar após esgotar a escada"
     assert "Tentativas:" in erro, erro
-    assert "envio normalizado" in erro and "cabeçalho base64" in erro, erro
-    assert "NÃO está determinada" in erro or "não está determinada" in erro.lower(), erro
     assert "dry_run" in erro, "deve apontar o caminho de isolamento"
-    # nada de conclusão categórica sobre onde está o gatilho
     assert "só a exceção de WAF" not in erro.lower()
     assert res.get("erro_origem") == "cloudflare_waf", res
+
+
+def test_localizador_de_gatilho_nao_grava_e_aponta_a_secao():
+    """Quando o WAF barra, a tool localiza o trecho culpado com sondas de versão
+    inválida — que o SEI recusa ANTES de escrever (EditorRN valida versao primeiro)."""
+    class BloqueiaSoCom660(_FakeClient):
+        """Só bloqueia enquanto a seção 660 for enviada com conteúdo."""
+        def __init__(self):
+            super().__init__()
+            self.versoes_sondadas = []
+
+        async def alterar_secao_documento(self, id_documento, secoes, versao):
+            self.alterar_calls.append(secoes)
+            self.versoes_sondadas.append(versao)
+            c660 = next((s["conteudo"] for s in secoes if s["idSecaoModelo"] == "660"), "")
+            if "fixa" in c660:
+                raise SEICloudflareBlocked("WAF managed rule block")
+            raise Exception("Existe uma nova versão (nº 1) para este documento")
+
+    cli = BloqueiaSoCom660()
+    res = _run(cli, [{"idSecaoModelo": "658", "conteudo": "<p>x</p>"}])
+    erro = res.get("error", "")
+    assert "660" in erro, f"deveria apontar a seção culpada: {erro}"
+    # toda sonda usou versão inválida — nenhuma poderia ter gravado
+    sondas = cli.versoes_sondadas[1:]
+    assert sondas and all(v == srv._VERSAO_SONDA_WAF for v in sondas), cli.versoes_sondadas
 
 
 def test_dry_run_nao_grava_e_devolve_payload():
@@ -119,11 +161,12 @@ def test_dry_run_nao_grava_e_devolve_payload():
     assert res["dry_run"] is True and res["nada_foi_gravado"] is True
     assert cli.alterar_calls == [], "dry_run não pode fazer POST"
     modelos = {s["idSecaoModelo"] for s in res["secoes"]}
-    assert modelos == {"656", "658"}, "payload deve trazer TODAS as seções"
+    assert modelos == {"656", "658", "660"}, "payload deve trazer TODAS as seções"
     assert res["bytes_total"] > 0
     resumo = {r["idSecaoModelo"]: r for r in res["resumo"]}
     assert resumo["658"]["alterada_por_voce"] is True
-    assert resumo["656"]["cabecalho_base64_regeneravel"] is True
+    assert resumo["656"]["regenerada_pelo_sei"] is True
+    assert resumo["660"]["regenerada_pelo_sei"] is False
 
 
 def test_entidades_normalizadas_no_payload_enviado():
@@ -142,6 +185,17 @@ def test_secao_inexistente_nao_vira_falso_sucesso():
     assert res.get("error"), "gravar num idSecaoModelo inexistente não pode dar sucesso"
     assert "999" in res["error"] and "658" in res["error"], res["error"]
     assert cli.alterar_calls == [], "não deve chegar a fazer o POST"
+
+
+def test_alterar_secao_dinamica_avisa_que_o_sei_ignora():
+    """Pedir alteração numa seção dinâmica é no-op silencioso no SEI — tem que avisar."""
+    cli = _FakeClient()
+    res = _run(cli, [
+        {"idSecaoModelo": "658", "conteudo": "<p>vale</p>"},
+        {"idSecaoModelo": "656", "conteudo": "<p>não vai pegar</p>"},
+    ])
+    avisos = json.dumps(res.get("_avisos") or [], ensure_ascii=False)
+    assert "656" in avisos and "dinâmic" in avisos.lower(), res.get("_avisos")
 
 
 def test_secao_inexistente_parcial_vira_aviso():
@@ -190,14 +244,15 @@ def test_ancora_com_id_interno_nao_gera_aviso():
     assert not res.get("_avisos"), res.get("_avisos")
 
 
-def test_sem_cabecalho_base64_propaga_erro_waf():
-    class SemHeader(_FakeClient):
+def test_sem_secao_dinamica_propaga_erro_waf():
+    class SemDinamica(_SempreBloqueia):
         async def listar_secao_documento(self, doc_id):
             return {"ultimaVersaoDocumento": "1", "secoes": [
-                {"id": "2", "idSecaoModelo": "658", "somenteLeitura": "N", "conteudo": "&lt;p&gt;orig&lt;/p&gt;"},
+                {"id": "2", "idSecaoModelo": "658", "somenteLeitura": "N",
+                 "DinamicaSecaoDocumento": "N", "conteudo": "&lt;p&gt;orig&lt;/p&gt;"},
             ]}
-    res = _run(SemHeader(), [{"idSecaoModelo": "658", "conteudo": "<p>x</p>"}])
-    assert res.get("error"), "sem cabeçalho regenerável, o erro de WAF deve propagar"
+    res = _run(SemDinamica(), [{"idSecaoModelo": "658", "conteudo": "<p>x</p>"}])
+    assert res.get("error"), "sem seção regenerável, o erro de WAF deve propagar"
 
 
 if __name__ == "__main__":
