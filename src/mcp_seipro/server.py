@@ -869,45 +869,144 @@ async def _resolver_documento(client: SEIClient, referencia: str) -> tuple[str, 
     )
 
 
-def _secao_cabecalho_base64(secao: dict) -> bool:
-    """Heurística: seção somenteLeitura que carrega imagem base64 (data URI).
+def _secao_regenerada_pelo_sei(secao: dict) -> bool:
+    """Seção cujo conteúdo o SEI reconstrói sozinho — o que enviamos é descartado.
 
-    É o cabeçalho/brasão do template — conteúdo que o WAF do Cloudflare bloqueia
-    (blob base64) E que o SEI REGENERA sozinho ao salvar. Logo, é seguro
-    reenviá-la vazia (o SEI reconstrói) para contornar o WAF. Ver
-    docs/spec... e o fallback em sei_editar_secao.
+    `EditorRN::montarConteudoSecao` (core do SEI; verificado idêntico em 3.1.7 e
+    5.0.x): quando SinDinamica == 'S' o conteúdo gravado vem de ConteudoOriginal,
+    lido do banco, com as tags substituídas — `getStrConteudo()`, que é o que veio
+    no POST, nem chega a ser consultado. Enviar essas seções VAZIAS é portanto
+    lossless, e tira do corpo do POST bytes que não são nossos: o brasão em
+    base64, o rodapé e o título do template.
+
+    O critério é SinDinamica, NÃO somenteLeitura. Uma seção somenteLeitura='S'
+    com SinDinamica='N' cai no ramo `else` e grava o que enviamos — esvaziá-la
+    apagaria a seção do documento.
     """
-    if str(secao.get("somenteLeitura")) != "S":
+    return str(secao.get("DinamicaSecaoDocumento") or "") == "S"
+
+
+# Versão que não pode existir. EditorRN::adicionarVersaoInterno compara `versao`
+# com a última do documento e lança a validação ANTES de qualquer escrita, então
+# uma sonda com esta versão atravessa o WAF com o corpo real e o SEI a recusa sem
+# tocar no documento. É o que torna a localização do gatilho segura.
+_VERSAO_SONDA_WAF = "999999999"
+_MAX_SONDAS_WAF = 14
+
+
+async def _waf_localizar_gatilho(
+    client: SEIClient, doc_id: str, secoes_enviar: list[dict]
+) -> dict:
+    """Descobre, SEM GRAVAR NADA, qual seção (e qual trecho) o WAF está barrando.
+
+    Cada sonda repete o POST real trocando só a `versao` pela `_VERSAO_SONDA_WAF`:
+    o corpo inteiro passa pela inspeção da borda, e o SEI recusa por versão antes
+    de escrever. Primeiro descobre a seção culpada esvaziando uma de cada vez;
+    depois bissecta por prefixo dentro dela.
+
+    Best-effort e limitado a `_MAX_SONDAS_WAF` requisições: diagnóstico nunca é
+    obrigatório, e falhar aqui não pode piorar o erro original.
+    """
+    sondas = 0
+
+    async def bloqueia(secoes: list[dict]) -> bool:
+        """True = barrado na borda; False = chegou ao SEI (recusa por versão)."""
+        nonlocal sondas
+        sondas += 1
+        try:
+            await client.alterar_secao_documento(
+                id_documento=doc_id, secoes=secoes, versao=_VERSAO_SONDA_WAF,
+            )
+        except SEICloudflareBlocked:
+            return True
+        except Exception:
+            return False  # erro do próprio SEI ⇒ o corpo passou pelo WAF
         return False
-    cont = secao.get("conteudo", "") or ""
-    return "data:image" in cont or ";base64," in cont
+
+    def com(idx: int, conteudo: str) -> list[dict]:
+        return [
+            {**sec, "conteudo": conteudo} if i == idx else sec
+            for i, sec in enumerate(secoes_enviar)
+        ]
+
+    try:
+        candidatos = [i for i, s in enumerate(secoes_enviar) if s["conteudo"]]
+        culpada = None
+        for i in candidatos:
+            if sondas >= _MAX_SONDAS_WAF:
+                break
+            if not await bloqueia(com(i, "")):
+                culpada = i  # sem esta seção o corpo passa
+                break
+        if culpada is None:
+            return {}
+
+        sec = secoes_enviar[culpada]
+        achado = {
+            "secao_culpada": sec["idSecaoModelo"],
+            "bytes_da_secao": len(sec["conteudo"].encode("utf-8", "replace")),
+        }
+
+        # bissecção por prefixo: menor pedaço do início que já dispara a regra
+        texto = sec["conteudo"]
+        lo, hi = 0, len(texto)
+        while hi - lo > 1 and sondas < _MAX_SONDAS_WAF:
+            mid = (lo + hi) // 2
+            if await bloqueia(com(culpada, texto[:mid])):
+                hi = mid
+            else:
+                lo = mid
+        if hi < len(texto) or lo > 0:
+            achado["trecho_ate_o_gatilho"] = texto[max(0, hi - 160):hi]
+            achado["posicao_no_texto"] = hi
+        achado["sondas_usadas"] = sondas
+        return achado
+    except Exception as e:  # diagnóstico nunca pode mascarar o erro original
+        logger.info("Localização do gatilho de WAF falhou: %s", e)
+        return {}
 
 
-def _msg_waf_esgotado(tentativas: list[dict], doc_id: str) -> str:
-    """Relata o que a escada tentou, sem afirmar uma causa raiz que não foi medida.
+def _msg_waf_esgotado(tentativas: list[dict], doc_id: str, gatilho: dict = None) -> str:
+    """Relata o que foi tentado e, quando a sondagem conseguiu, ONDE está o gatilho.
 
-    O Cloudflare não diz QUAL trecho casou a regra; qualquer diagnóstico aqui
-    seria chute. A mensagem lista as tentativas e os caminhos disponíveis, e
-    deixa a conclusão para quem tem como verificar.
+    Quando a localização não conclui, não substitui o vazio por palpite: o
+    Cloudflare não informa qual regra casou, e afirmar causa aqui seria chute.
     """
     linhas = "\n".join(
         f"  {i}) {t['estrategia']} → {t['resultado']}"
         for i, t in enumerate(tentativas, 1)
     )
-    return (
+    msg = (
         f"Não foi possível gravar as seções do documento {doc_id}: o Cloudflare "
         "devolveu bloqueio de WAF em todas as tentativas.\n"
         f"Tentativas:\n{linhas}\n"
-        "O que se sabe: alguma coisa no corpo do POST casou uma managed rule. "
-        "O Cloudflare não informa qual trecho, então a origem exata (conteúdo "
-        "novo, conteúdo pré-existente do documento ou tamanho) NÃO está "
-        "determinada.\n"
-        "Caminhos possíveis: (a) chamar de novo com dry_run=true e inspecionar o "
-        "payload exato; (b) gravar por partes, uma seção por vez, para isolar o "
-        "gatilho; (c) simplificar o HTML do trecho novo (blobs base64, tags "
-        "aninhadas em excesso, atributos style longos); (d) editar pela interface "
-        "web; (e) pedir ao órgão exceção de WAF para /sei/modulos/wssei/."
     )
+    if gatilho and gatilho.get("secao_culpada"):
+        msg += (
+            f"\nLocalização (sondas com versão inválida, nada foi gravado): o corpo "
+            f"passa a ser aceito quando a seção {gatilho['secao_culpada']} sai do "
+            f"POST — o gatilho está nela.\n"
+        )
+        if gatilho.get("trecho_ate_o_gatilho"):
+            msg += (
+                f"O bloqueio começa por volta do caractere "
+                f"{gatilho['posicao_no_texto']} dessa seção, logo após:\n"
+                f"  …{gatilho['trecho_ate_o_gatilho']}\n"
+                "Reescrever esse trecho (cores hexadecimais como #333, atributos "
+                "style longos, tags auto-fechadas) costuma bastar.\n"
+            )
+    else:
+        msg += (
+            "O que se sabe: alguma coisa no corpo do POST casou uma managed rule. "
+            "O Cloudflare não informa qual trecho, e a sondagem automática não "
+            "conseguiu isolar — a origem exata NÃO está determinada.\n"
+        )
+    msg += (
+        "Caminhos possíveis: (a) chamar de novo com dry_run=true e inspecionar o "
+        "payload exato; (b) simplificar o HTML do trecho apontado; (c) editar pela "
+        "interface web; (d) pedir ao órgão exceção de WAF para /sei/modulos/wssei/."
+    )
+    return msg
 
 
 _RE_ANCORA_SEI = re.compile(r"""id\s*=\s*["']lnkSei(\d+)["']""", re.IGNORECASE)
@@ -1331,16 +1430,19 @@ async def sei_editar_secao(
     cada ciclo ler→reenviar. Caracteres fora do ISO-8859-1 continuam sendo
     convertidos para entidades numéricas (exigência do wssei).
 
-    IMPORTANTE: O SEI exige que TODAS as seções sejam enviadas. Esta tool
-    faz isso automaticamente — basta informar as seções que deseja alterar.
+    IMPORTANTE: O SEI exige que TODAS as seções sejam enviadas (lista parcial dá
+    "Conteúdo do documento incompleto"). Esta tool faz isso automaticamente —
+    basta informar as seções que deseja alterar. As seções dinâmicas (cabeçalho
+    com brasão, título, rodapé) vão VAZIAS: o SEI as reconstrói do banco e
+    descarta o que for enviado, então mandá-las de volta só engordaria o POST.
 
     O id_documento aceita número SEI (protocoloFormatado) ou id interno — é
     resolvido automaticamente e o documento resolvido é ecoado no retorno
     (`_documento_resolvido`), para evitar gravar no documento errado.
 
-    Se o Cloudflare bloquear a escrita por WAF, a tool sobe uma escada de
-    tentativas (normalização → neutralização do cabeçalho base64 regenerável) e,
-    se ainda assim falhar, relata exatamente o que foi tentado.
+    Se o Cloudflare bloquear a escrita por WAF, a tool localiza o trecho culpado
+    com sondas de versão inválida — que o SEI recusa antes de escrever, então
+    nada é gravado — e relata a seção e a posição aproximada do gatilho.
     """
     try:
         client = _get_client(ctx)
@@ -1363,11 +1465,14 @@ async def sei_editar_secao(
             if modelo:
                 alteracoes[modelo] = s.get("conteudo", "")
 
-        # Montar payload completo com TODAS as seções. Também identifica as
-        # seções de cabeçalho (imagem base64) NÃO alteradas pelo usuário —
-        # candidatas ao contorno de WAF (o SEI as regenera).
+        # Montar payload completo com TODAS as seções (o SEI recusa lista parcial:
+        # EditorRN compara a contagem com a do banco e lança "Conteúdo do documento
+        # incompleto"). As seções dinâmicas, porém, vão VAZIAS: o SEI as reconstrói
+        # a partir do banco e descarta o que enviamos, então reenviá-las só engorda
+        # o corpo do POST — que é justamente o que o WAF da borda inspeciona.
         secoes_enviar = []
-        cabecalhos_base64: set[str] = set()
+        regeneradas: set[str] = set()
+        dinamicas_pedidas: list[str] = []
         for s in secoes_atuais:
             if not isinstance(s, dict):
                 continue
@@ -1376,14 +1481,17 @@ async def sei_editar_secao(
             if not sid or not modelo:
                 continue
 
-            if str(modelo) in alteracoes:
+            if _secao_regenerada_pelo_sei(s):
+                if str(modelo) in alteracoes:
+                    dinamicas_pedidas.append(str(modelo))
+                conteudo = ""
+                regeneradas.add(str(modelo))
+            elif str(modelo) in alteracoes:
                 # Seção alterada pelo usuário — já vem como HTML real
                 conteudo = alteracoes[str(modelo)]
             else:
                 # Seção original: o wssei devolve HTML-escaped no transporte
                 conteudo = html_module.unescape(s.get("conteudo", "") or "")
-                if _secao_cabecalho_base64(s):
-                    cabecalhos_base64.add(str(modelo))
 
             # Normaliza entidades em TODAS as seções — inclusive nas relidas do
             # próprio SEI, que é onde elas nascem e se acumulam.
@@ -1408,6 +1516,15 @@ async def sei_editar_secao(
             )
 
         avisos = []
+        if dinamicas_pedidas:
+            avisos.append({
+                "secoes_ignoradas": dinamicas_pedidas,
+                "problema": "são seções dinâmicas: o SEI as reconstrói a partir do "
+                            "banco ao salvar e descarta o conteúdo enviado, então "
+                            "o texto informado NÃO foi gravado.",
+                "onde_editar": "cabeçalho, título e rodapé vêm do modelo do "
+                               "documento — mudam pelo template, não por esta tool.",
+            })
         if nao_encontrados:
             avisos.append({
                 "secoes_ignoradas": nao_encontrados,
@@ -1434,8 +1551,8 @@ async def sei_editar_secao(
                         "idSecaoModelo": sec["idSecaoModelo"],
                         "id": sec["id"],
                         "alterada_por_voce": sec["idSecaoModelo"] in alteracoes,
-                        "cabecalho_base64_regeneravel":
-                            sec["idSecaoModelo"] in cabecalhos_base64,
+                        "regenerada_pelo_sei":
+                            sec["idSecaoModelo"] in regeneradas,
                         "bytes": len(sec["conteudo"].encode("utf-8", "replace")),
                     }
                     for sec in secoes_enviar
@@ -1449,83 +1566,56 @@ async def sei_editar_secao(
                 saida["_avisos"] = avisos
             return _json(saida)
 
-        # --- Escada de tentativas -------------------------------------------
-        # Cada degrau é seguro e verificável; nenhum altera o conteúdo que o
-        # usuário escreveu. O que foi tentado é relatado no fim, em qualquer caso.
+        # --- Envio -----------------------------------------------------------
         tentativas: list[dict] = []
-        placeholder = sanitize_iso8859("<p>&nbsp;</p>")
-
+        estrategia = (
+            "envio normalizado, seções dinâmicas vazias "
+            f"({sorted(regeneradas)})" if regeneradas else "envio normalizado"
+        )
         try:
             result = await client.alterar_secao_documento(
                 id_documento=doc_id, secoes=secoes_enviar, versao=versao,
             )
-            tentativas.append({
-                "estrategia": "envio normalizado (entidades HTML → UTF-8 literal)",
-                "resultado": "sucesso",
-            })
-            waf_info = None
+            tentativas.append({"estrategia": estrategia, "resultado": "sucesso"})
         except SEICloudflareBlocked as e1:
+            # 403 da borda ⇒ nada foi gravado. Antes de desistir, descobre ONDE
+            # está o gatilho com sondas que o SEI recusa antes de escrever.
             tentativas.append({
-                "estrategia": "envio normalizado (entidades HTML → UTF-8 literal)",
+                "estrategia": estrategia,
                 "resultado": f"bloqueado pelo Cloudflare: {e1}",
             })
-            if not cabecalhos_base64:
-                raise Exception(_msg_waf_esgotado(tentativas, doc_id)) from e1
-
-            # A 1ª tentativa falhou no WAF (403, não gravou) → versao intacta.
-            # Reenvia VAZIAS só as seções de cabeçalho com imagem base64: o SEI
-            # as regenera ao salvar, então o blob sai do corpo sem perda.
-            secoes_wa = [
-                {**sec, "conteudo": placeholder}
-                if sec["idSecaoModelo"] in cabecalhos_base64 else sec
-                for sec in secoes_enviar
-            ]
-            try:
-                result = await client.alterar_secao_documento(
-                    id_documento=doc_id, secoes=secoes_wa, versao=versao,
-                )
+            gatilho = await _waf_localizar_gatilho(client, doc_id, secoes_enviar)
+            if gatilho:
                 tentativas.append({
-                    "estrategia": "cabeçalho base64 regenerável neutralizado "
-                                  f"(seções {sorted(cabecalhos_base64)})",
-                    "resultado": "sucesso",
+                    "estrategia": f"localização do gatilho ({gatilho.get('sondas_usadas')} "
+                                  "sondas com versão inválida, sem gravar)",
+                    "resultado": f"gatilho na seção {gatilho.get('secao_culpada')}",
                 })
-            except SEICloudflareBlocked as e2:
-                tentativas.append({
-                    "estrategia": "cabeçalho base64 regenerável neutralizado "
-                                  f"(seções {sorted(cabecalhos_base64)})",
-                    "resultado": f"bloqueado pelo Cloudflare: {e2}",
-                })
-                raise Exception(_msg_waf_esgotado(tentativas, doc_id)) from e2
+            raise Exception(_msg_waf_esgotado(tentativas, doc_id, gatilho)) from e1
 
-            # Verificação: as seções de cabeçalho DEVEM ter regenerado (voltar
-            # com a imagem base64). Se ficaram com o placeholder, houve corrupção.
+        # Verificação: as seções dinâmicas foram enviadas vazias porque o SEI
+        # deveria reconstruí-las. Se alguma voltou vazia, ele NÃO reconstruiu e o
+        # documento perdeu cabeçalho/rodapé — falha alto em vez de reportar sucesso.
+        if regeneradas:
             verif = await client.listar_secao_documento(doc_id)
-            corrompidas = [
+            vazias = [
                 str(v.get("idSecaoModelo"))
                 for v in verif.get("secoes", [])
-                if str(v.get("idSecaoModelo")) in cabecalhos_base64
-                and "data:image" not in (v.get("conteudo", "") or "")
-                and ";base64," not in (v.get("conteudo", "") or "")
+                if str(v.get("idSecaoModelo")) in regeneradas
+                and not (v.get("conteudo") or "").strip()
             ]
-            if corrompidas:
+            if vazias:
                 raise Exception(
-                    f"Contorno de WAF: as seções de cabeçalho {corrompidas} NÃO "
-                    "foram regeneradas pelo SEI (ficaram com o placeholder) — o "
-                    f"cabeçalho do documento {doc_id} pode estar danificado. "
-                    "Evite reeditar; corrija o cabeçalho na interface web."
+                    f"As seções dinâmicas {vazias} do documento {doc_id} NÃO foram "
+                    "regeneradas pelo SEI e ficaram vazias — cabeçalho/rodapé podem "
+                    "ter sido perdidos. Confira o documento na interface web antes "
+                    "de continuar editando."
                 )
-            waf_info = {
-                "info": "Bloqueio de WAF do Cloudflare contornado: seções de "
-                        "cabeçalho com imagem base64 reenviadas vazias e "
-                        "regeneradas pelo SEI. Conteúdo editável preservado.",
-                "secoes_cabecalho_neutralizadas": sorted(cabecalhos_base64),
-                "tentativas": tentativas,
-            }
 
         out = result if isinstance(result, dict) else {"resultado": result}
         out["_documento_resolvido"] = await _identidade_documento(client, doc_id)
-        if waf_info:
-            out["_waf_contornado"] = waf_info
+        if regeneradas:
+            out["_secoes_regeneradas_pelo_sei"] = sorted(regeneradas)
         if avisos:
             out["_avisos"] = avisos
         return _json(out)
