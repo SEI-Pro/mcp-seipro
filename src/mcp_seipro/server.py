@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import html
 import json
 import logging
 import os
@@ -886,6 +887,41 @@ def _secao_regenerada_pelo_sei(secao: dict) -> bool:
     return str(secao.get("DinamicaSecaoDocumento") or "") == "S"
 
 
+_RE_STYLE_ATTR = re.compile(r"""(style\s*=\s*)(["'])(.*?)\2""", re.IGNORECASE | re.DOTALL)
+_RE_COR_HEX = re.compile(r"#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b")
+
+
+def _converter_cores_hex(conteudo: str) -> tuple[str, int]:
+    """Troca cores hexadecimais CSS por `rgb()` equivalente. Renderiza idêntico.
+
+    Medido em produção: o managed ruleset do Cloudflare pontua o `#` dentro de
+    atributo como marcador de comentário SQL e barra o POST inteiro. Basta o
+    próprio template do SEI (`border-top:medium double #333`) ou um `color:#000000`
+    vindo de conteúdo colado para o documento ficar inescrevível pela API.
+
+    A troca é restrita ao VALOR de atributos `style` — de propósito. Um regex solto
+    casaria entidades numéricas (`&#233;` → `&#233` + `;`) e corromperia o texto.
+
+    Devolve (conteúdo, quantidade de cores trocadas).
+    """
+    trocas = 0
+
+    def _rgb(m: re.Match) -> str:
+        h = m.group(1)
+        if len(h) == 3:
+            h = "".join(ch * 2 for ch in h)
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        return f"rgb({r},{g},{b})"
+
+    def _no_style(m: re.Match) -> str:
+        nonlocal trocas
+        valor, n = _RE_COR_HEX.subn(_rgb, m.group(3))
+        trocas += n
+        return f"{m.group(1)}{m.group(2)}{valor}{m.group(2)}"
+
+    return _RE_STYLE_ATTR.sub(_no_style, conteudo), trocas
+
+
 # Versão que não pode existir. EditorRN::adicionarVersaoInterno compara `versao`
 # com a última do documento e lança a validação ANTES de qualquer escrita, então
 # uma sonda com esta versão atravessa o WAF com o corpo real e o SEI a recusa sem
@@ -1009,47 +1045,67 @@ def _msg_waf_esgotado(tentativas: list[dict], doc_id: str, gatilho: dict = None)
     return msg
 
 
-_RE_ANCORA_SEI = re.compile(r"""id\s*=\s*["']lnkSei(\d+)["']""", re.IGNORECASE)
+_RE_ANCORA_SEI = re.compile(
+    r"""<a\b[^>]*\bid\s*=\s*["']lnkSei(\d+)["'][^>]*>(.*?)</a\s*>""",
+    re.IGNORECASE | re.DOTALL,
+)
+_RE_TAGS = re.compile(r"<[^>]+>")
+_RE_NUM_PROCESSO = re.compile(r"^\d{4,6}\.\d{6}/\d{4}-\d{2}$")
 _MAX_ANCORAS_VALIDADAS = 12
 
 
 async def _validar_ancoras_sei(client: SEIClient, conteudos: list[str]) -> list[dict]:
-    """Detecta âncoras `id="lnkSeiNNNN"` que usam nº SEI em vez do id interno.
+    """Detecta âncora `id="lnkSeiNNNN"` cujo id não corresponde ao texto do link.
 
-    É o erro mais fácil de cometer (os dois são inteiros de magnitude parecida) e
-    só aparece depois, como link morto na interface. A checagem pergunta ao SEI
-    se o número é um protocoloFormatado; se for, o id interno correto é outro.
+    Espelha a regra do core (`EditorRN::processarLinkProtocolo`): a âncora só
+    sobrevive ao salvamento se o TEXTO do link for exatamente o protocoloFormatado
+    do protocolo cujo id está em `lnkSei`; senão o SEI descarta a tag e deixa só o
+    texto. Então a checagem parte do texto — que é o que o usuário vê — e pergunta
+    ao SEI qual id lhe corresponde.
+
+    Não opina sobre âncora de PROCESSO (texto no formato NNNNN.NNNNNN/AAAA-NN):
+    `idProtocolo` abrange processos, e a rota de consulta aqui é de documento, então
+    qualquer veredito seria chute. A versão anterior avisava nesses casos e chegou a
+    induzir a "correção" de uma âncora que estava certa, quebrando o link.
+
     Best-effort: falha de rede aqui nunca bloqueia a edição.
     """
-    numeros: list[str] = []
+    ancoras: list[tuple[str, str]] = []
     for c in conteudos:
-        for n in _RE_ANCORA_SEI.findall(c or ""):
-            if n not in numeros:
-                numeros.append(n)
-    if not numeros:
+        for id_ancora, texto in _RE_ANCORA_SEI.findall(c or ""):
+            texto = html.unescape(_RE_TAGS.sub("", texto)).replace("\xa0", " ").strip()
+            if (id_ancora, texto) not in ancoras:
+                ancoras.append((id_ancora, texto))
+    if not ancoras:
         return []
 
     avisos: list[dict] = []
-    for numero in numeros[:_MAX_ANCORAS_VALIDADAS]:
+    for id_ancora, texto in ancoras[:_MAX_ANCORAS_VALIDADAS]:
+        if _RE_NUM_PROCESSO.match(texto):
+            continue  # âncora de processo — fora do alcance desta checagem
+        if not texto.isdigit():
+            continue  # texto não é um nº SEI puro; nada a comparar
         try:
-            doc = await client.consultar_documento_interno_formatado(numero)
+            doc = await client.consultar_documento_interno_formatado(texto)
         except Exception:
-            continue  # não é protocoloFormatado conhecido → provavelmente id interno
-        id_interno = str(doc.get("idDocumento") or "")
-        if not id_interno or id_interno == numero:
-            continue
+            continue  # nº não resolvido → sem base para opinar
+        id_correto = str(doc.get("idDocumento") or "")
+        if not id_correto or id_correto == id_ancora:
+            continue  # id bate com o texto: âncora correta
         avisos.append({
-            "ancora": f"lnkSei{numero}",
-            "problema": f"{numero} é o número SEI (protocoloFormatado), não o id "
-                        "interno — a interface renderiza isso como link morto.",
-            "id_interno_correto": id_interno,
+            "ancora": f"lnkSei{id_ancora}",
+            "texto_do_link": texto,
+            "problema": f"o texto do link é o nº SEI {texto}, cujo id interno é "
+                        f"{id_correto} — mas a âncora aponta para {id_ancora}. O SEI "
+                        "exige que os dois correspondam, senão descarta a tag ao salvar.",
+            "id_interno_correto": id_correto,
             "documento": doc.get("nomeDocumento", ""),
-            "correcao": f'troque id="lnkSei{numero}" por id="lnkSei{id_interno}" '
+            "correcao": f'troque id="lnkSei{id_ancora}" por id="lnkSei{id_correto}" '
                         "(sei_gerar_referencia monta o HTML já com o id certo).",
         })
-    if len(numeros) > _MAX_ANCORAS_VALIDADAS:
+    if len(ancoras) > _MAX_ANCORAS_VALIDADAS:
         avisos.append({
-            "info": f"{len(numeros)} âncoras encontradas; só as "
+            "info": f"{len(ancoras)} âncoras encontradas; só as "
                     f"{_MAX_ANCORAS_VALIDADAS} primeiras foram verificadas.",
         })
     return avisos
@@ -1572,26 +1628,55 @@ async def sei_editar_secao(
             "envio normalizado, seções dinâmicas vazias "
             f"({sorted(regeneradas)})" if regeneradas else "envio normalizado"
         )
+        waf_info = None
         try:
             result = await client.alterar_secao_documento(
                 id_documento=doc_id, secoes=secoes_enviar, versao=versao,
             )
             tentativas.append({"estrategia": estrategia, "resultado": "sucesso"})
         except SEICloudflareBlocked as e1:
-            # 403 da borda ⇒ nada foi gravado. Antes de desistir, descobre ONDE
-            # está o gatilho com sondas que o SEI recusa antes de escrever.
+            # 403 da borda ⇒ nada foi gravado, versão intacta.
             tentativas.append({
                 "estrategia": estrategia,
                 "resultado": f"bloqueado pelo Cloudflare: {e1}",
             })
-            gatilho = await _waf_localizar_gatilho(client, doc_id, secoes_enviar)
-            if gatilho:
+
+            # Degrau 2: cores hexadecimais → rgb(). É o gatilho medido em produção
+            # e a troca é neutra na renderização, então não altera o documento aos
+            # olhos de quem o lê.
+            secoes_rgb, trocas = [], 0
+            for sec in secoes_enviar:
+                novo, n = _converter_cores_hex(sec["conteudo"])
+                trocas += n
+                secoes_rgb.append({**sec, "conteudo": novo})
+
+            if not trocas:
+                gatilho = await _waf_localizar_gatilho(client, doc_id, secoes_enviar)
+                raise Exception(_msg_waf_esgotado(tentativas, doc_id, gatilho)) from e1
+
+            try:
+                result = await client.alterar_secao_documento(
+                    id_documento=doc_id, secoes=secoes_rgb, versao=versao,
+                )
                 tentativas.append({
-                    "estrategia": f"localização do gatilho ({gatilho.get('sondas_usadas')} "
-                                  "sondas com versão inválida, sem gravar)",
-                    "resultado": f"gatilho na seção {gatilho.get('secao_culpada')}",
+                    "estrategia": f"cores hexadecimais trocadas por rgb() ({trocas})",
+                    "resultado": "sucesso",
                 })
-            raise Exception(_msg_waf_esgotado(tentativas, doc_id, gatilho)) from e1
+                waf_info = {
+                    "info": "O Cloudflare barrou o corpo por causa de cor hexadecimal "
+                            "em atributo style ('#' lido como comentário SQL pelo "
+                            "managed ruleset). As cores foram reescritas como rgb(), "
+                            "que renderiza igual, e a gravação passou.",
+                    "cores_convertidas": trocas,
+                    "tentativas": tentativas,
+                }
+            except SEICloudflareBlocked as e2:
+                tentativas.append({
+                    "estrategia": f"cores hexadecimais trocadas por rgb() ({trocas})",
+                    "resultado": f"bloqueado pelo Cloudflare: {e2}",
+                })
+                gatilho = await _waf_localizar_gatilho(client, doc_id, secoes_rgb)
+                raise Exception(_msg_waf_esgotado(tentativas, doc_id, gatilho)) from e2
 
         # Verificação: as seções dinâmicas foram enviadas vazias porque o SEI
         # deveria reconstruí-las. Se alguma voltou vazia, ele NÃO reconstruiu e o
@@ -1614,6 +1699,8 @@ async def sei_editar_secao(
 
         out = result if isinstance(result, dict) else {"resultado": result}
         out["_documento_resolvido"] = await _identidade_documento(client, doc_id)
+        if waf_info:
+            out["_waf_contornado"] = waf_info
         if regeneradas:
             out["_secoes_regeneradas_pelo_sei"] = sorted(regeneradas)
         if avisos:

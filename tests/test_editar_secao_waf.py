@@ -101,6 +101,45 @@ def _run(cli, secoes, **kwargs):
         srv._resolver_documento, srv._identidade_documento = orig_res, orig_ident
 
 
+def test_converte_cor_hex_so_dentro_de_style():
+    """O '#' de cor hex em atributo é o que o managed ruleset do Cloudflare pontua
+    como injeção. rgb() renderiza idêntico. Mas a troca TEM que ser restrita ao
+    style: um regex solto casaria entidades numéricas (&#233;) e corromperia texto."""
+    f = srv._converter_cores_hex
+    out, n = f('<p style="color:#000000;font-size:16px;">x</p>')
+    assert "rgb(0,0,0)" in out and "#000000" not in out and n == 1
+    out, n = f('<hr style="border-top:medium double #333" />')
+    assert "rgb(51,51,51)" in out and n == 1
+    # entidade numérica fora de style: intocada (seria corrupção)
+    out, n = f("<p>Aten&#231;&#227;o &#233; teste</p>")
+    assert out == "<p>Aten&#231;&#227;o &#233; teste</p>" and n == 0
+    # '#' em texto comum: intocado
+    out, n = f("<p>item #333 do contrato</p>")
+    assert out == "<p>item #333 do contrato</p>" and n == 0
+    # aspas simples também valem
+    out, n = f("<p style='color:#ABC'>x</p>")
+    assert "rgb(170,187,204)" in out and n == 1
+
+
+def test_fallback_troca_hex_por_rgb_quando_o_waf_bloqueia():
+    class BloqueiaComHex(_FakeClient):
+        """Só bloqueia enquanto houver '#' de cor no corpo."""
+        async def alterar_secao_documento(self, id_documento, secoes, versao):
+            self.alterar_calls.append(secoes)
+            if any("#000000" in s["conteudo"] for s in secoes):
+                raise SEICloudflareBlocked("WAF managed rule block")
+            return [{"sucesso": True}]
+
+    cli = BloqueiaComHex()
+    res = _run(cli, [{"idSecaoModelo": "658",
+                      "conteudo": '<p style="color:#000000">novo</p>'}])
+    assert res.get("error") is None, res
+    assert len(cli.alterar_calls) == 2, "deveria ter tentado de novo sem o hex"
+    enviado = {s["idSecaoModelo"]: s["conteudo"] for s in cli.alterar_calls[1]}
+    assert "rgb(0,0,0)" in enviado["658"] and "novo" in enviado["658"]
+    assert res.get("_waf_contornado"), res
+
+
 def test_helper_detecta_secao_regenerada():
     """O critério é SinDinamica, não somenteLeitura — ver montarConteudoSecao."""
     assert srv._secao_regenerada_pelo_sei({"DinamicaSecaoDocumento": "S"}) is True
@@ -211,34 +250,52 @@ def test_secao_inexistente_parcial_vira_aviso():
     assert "vale" in enviado["658"], "a seção válida deve ter sido gravada"
 
 
-def test_ancora_com_numero_sei_gera_aviso():
-    class ComProtocolo(_FakeClient):
-        async def consultar_documento_interno_formatado(self, numero):
-            if numero == "2949729":
-                return {"idDocumento": "3151234", "nomeDocumento": "Despacho 2949729"}
-            raise Exception("não encontrado")
+class _ComProtocolo(_FakeClient):
+    """nº SEI 2949729 corresponde ao id interno 3151234."""
+    async def consultar_documento_interno_formatado(self, numero):
+        if numero == "2949729":
+            return {"idDocumento": "3151234", "nomeDocumento": "Despacho 2949729"}
+        raise Exception("não encontrado")
 
-    cli = ComProtocolo()
+
+def test_ancora_com_numero_sei_gera_aviso():
     res = _run(
-        cli,
+        _ComProtocolo(),
         [{"idSecaoModelo": "658",
-          "conteudo": '<a class="ancoraSei" id="lnkSei2949729">SEI 2949729</a>'}],
+          "conteudo": '<a class="ancoraSei" id="lnkSei2949729">2949729</a>'}],
         validar_referencias=True,
     )
     avisos = res.get("_avisos") or []
-    assert avisos, "âncora com nº SEI deveria gerar aviso"
+    assert avisos, "âncora cujo id não corresponde ao texto deveria avisar"
     assert avisos[0]["id_interno_correto"] == "3151234"
     assert "lnkSei3151234" in avisos[0]["correcao"]
 
 
 def test_ancora_com_id_interno_nao_gera_aviso():
-    class SemProtocolo(_FakeClient):
+    """id bate com o texto do link → correta, nada a avisar."""
+    res = _run(
+        _ComProtocolo(),
+        [{"idSecaoModelo": "658", "conteudo": '<a id="lnkSei3151234">2949729</a>'}],
+        validar_referencias=True,
+    )
+    assert not res.get("_avisos"), res.get("_avisos")
+
+
+def test_ancora_de_processo_nunca_gera_aviso():
+    """Regressão real: o texto é nº de PROCESSO, e idProtocolo abrange processos.
+    A versão anterior avisava aqui e induziu a 'correção' de uma âncora correta,
+    que o SEI então descartou — o link sumiu do documento."""
+    class ColideComDocumento(_FakeClient):
         async def consultar_documento_interno_formatado(self, numero):
-            raise Exception("Documento não encontrado")  # não é protocoloFormatado
+            # 2378553 TAMBÉM existe como nº SEI de um documento — a colisão que
+            # produzia o falso positivo.
+            return {"idDocumento": "2600907", "nomeDocumento": "Anexo (2378553)"}
 
     res = _run(
-        SemProtocolo(),
-        [{"idSecaoModelo": "658", "conteudo": '<a id="lnkSei3151234">ref</a>'}],
+        ColideComDocumento(),
+        [{"idSecaoModelo": "658",
+          "conteudo": '<a class="ancora_sei" id="lnkSei2378553">'
+                      '50300.004460/2024-86</a>'}],
         validar_referencias=True,
     )
     assert not res.get("_avisos"), res.get("_avisos")
