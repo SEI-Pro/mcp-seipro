@@ -511,7 +511,7 @@ Variáveis de segurança recomendadas:
 
 | Variável | Padrão | Para quê |
 |----------|--------|----------|
-| `SEI_ALLOWED_HOSTS` | vazio (qualquer host público) | Hosts do SEI aceitos no login, separados por vírgula (`sei.orgao.gov.br`, `*.gov.br`). Fecha SSRF e DNS rebinding — **defina em produção** |
+| `SEI_ALLOWED_HOSTS` | vazio (qualquer host público) | Hosts do SEI aceitos no login, separados por vírgula: exato (`sei.orgao.gov.br`), sufixo (`*.gov.br`) ou curinga de um rótulo (`sei.*.gov.br`). Fecha SSRF e DNS rebinding — **defina em produção** |
 | `OAUTH_ALLOWED_REDIRECT_HOSTS` | `claude.ai,claude.com` | Hosts https aceitos como `redirect_uri` de clientes OAuth. Loopback (`localhost`) é sempre aceito. `*` libera qualquer https |
 | `SEI_SECRET_HOSTS` | host de `SEI_URL` | Hosts que podem receber `SEI_EXTRA_HEADERS` / `SEI_CF_CLEARANCE`. Para outros hosts esses segredos não são enviados |
 | `OAUTH_ACCESS_TTL` / `OAUTH_REFRESH_TTL` / `OAUTH_SESSION_MAX` | 1 h / 14 d / 30 d | Validade do access token, do refresh token (rotativo) e teto absoluto da sessão, em segundos |

@@ -32,15 +32,28 @@ def _lista_env(nome: str) -> list[str]:
 
 
 def _casa_host(host: str, padroes: list[str]) -> bool:
-    """`sei.orgao.gov.br` exato, ou `*.gov.br` / `.gov.br` para sufixo."""
+    """Padrões aceitos:
+
+    - `sei.orgao.gov.br` — host exato;
+    - `*.gov.br` / `.gov.br` — sufixo (qualquer profundidade);
+    - `sei.*.gov.br` — `*` no meio vale exatamente UM rótulo (sem pontos):
+      casa `sei.mg.gov.br`, não `sei.a.b.gov.br`.
+    """
     host = host.lower().rstrip(".")
     for p in padroes:
         if p in ("*", "*.*"):
             return True
-        if p.startswith("*."):
+        if p.startswith("*.") and "*" not in p[2:]:
             p = p[1:]
         if p.startswith("."):
             if host.endswith(p):
+                return True
+        elif "*" in p:
+            rotulos = p.split(".")
+            alvo = host.split(".")
+            if len(rotulos) == len(alvo) and all(
+                r == "*" or r == a for r, a in zip(rotulos, alvo)
+            ):
                 return True
         elif host == p:
             return True

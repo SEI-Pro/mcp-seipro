@@ -266,6 +266,15 @@ def test_allowlist_de_hosts_sei(monkeypatch):
     assert seg.validar_url_sei_sem_rede("https://sei.antaq.gov.br.atacante.example/x")
 
 
+def test_curinga_no_meio_vale_um_rotulo(monkeypatch):
+    monkeypatch.setenv("SEI_ALLOWED_HOSTS", "sei.*.gov.br")
+    assert seg.validar_url_sei_sem_rede("https://sei.antaq.gov.br/x") is None
+    assert seg.validar_url_sei_sem_rede("https://sei.mg.gov.br/x") is None
+    assert seg.validar_url_sei_sem_rede("https://sei.a.b.gov.br/x")
+    assert seg.validar_url_sei_sem_rede("https://sei.x.gov.br.atacante.example/x")
+    assert seg.validar_url_sei_sem_rede("https://treinamentosei.antaq.gov.br/x")
+
+
 def test_segredos_do_operador_so_vao_para_o_host_configurado(monkeypatch):
     monkeypatch.setenv("SEI_URL", "https://sei.antaq.gov.br/sei/modulos/wssei/api/v2")
     monkeypatch.setenv("SEI_EXTRA_HEADERS", '{"X-Bypass":"segredo"}')
