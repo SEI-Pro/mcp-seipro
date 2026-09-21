@@ -56,6 +56,11 @@ class SEIClient:
         self._cache: dict[str, tuple[float, Any]] = {}
         self._cache_ttl: float = 3600.0  # 1 hora
 
+        # Leitura de arquivo do disco do servidor (arquivo_path). No modo HTTP
+        # o servidor passa False: ali quem chama é remoto e arquivo_path seria
+        # leitura arbitrária de arquivos do servidor (/proc/self/environ...).
+        self._permitir_arquivo_local = bool(kwargs.get("permitir_arquivo_local", True))
+
         verify_ssl = kwargs.get("sei_verify_ssl", os.environ.get("SEI_VERIFY_SSL", "true"))
         if isinstance(verify_ssl, str):
             verify_ssl = verify_ssl.lower() != "false"
@@ -74,17 +79,28 @@ class SEIClient:
                 ),
             ),
         }
-        default_headers.update(
-            self._parse_extra_headers(
-                kwargs.get("sei_extra_headers", os.environ.get("SEI_EXTRA_HEADERS", ""))
+        # Os valores do AMBIENTE (header secreto, cf_clearance) são segredos do
+        # operador, criados para um host específico. Só acompanham requisições a
+        # esse host — no modo HTTP a URL vem do usuário e poderia apontar para
+        # um servidor que os coletasse. Ver seguranca.host_recebe_segredos.
+        from .seguranca import host_recebe_segredos
+        segredos_env = host_recebe_segredos(self.base_url)
+        extra_headers = self._parse_extra_headers(
+            kwargs.get(
+                "sei_extra_headers",
+                os.environ.get("SEI_EXTRA_HEADERS", "") if segredos_env else "",
             )
         )
+        default_headers.update(extra_headers)
 
         # Escape hatch temporário: cookie cf_clearance obtido manualmente num
         # browser para atravessar o desafio do Cloudflare. Frágil (expira e é
         # atrelado a IP+UA) — a solução correta é a regra de bypass no WAF.
         cookies = None
-        cf_clearance = kwargs.get("sei_cf_clearance", os.environ.get("SEI_CF_CLEARANCE", ""))
+        cf_clearance = kwargs.get(
+            "sei_cf_clearance",
+            os.environ.get("SEI_CF_CLEARANCE", "") if segredos_env else "",
+        )
         if cf_clearance:
             cookies = {"cf_clearance": cf_clearance}
 
@@ -96,9 +112,7 @@ class SEIClient:
         #   browser — força o transporte via browser desde o início.
         self._verify_ssl = verify_ssl
         self._default_headers = default_headers
-        self._extra_headers = self._parse_extra_headers(
-            kwargs.get("sei_extra_headers", os.environ.get("SEI_EXTRA_HEADERS", ""))
-        )
+        self._extra_headers = extra_headers
         self._transport_mode = kwargs.get(
             "sei_transport", os.environ.get("SEI_TRANSPORT", "auto")
         ).lower()
@@ -635,7 +649,9 @@ class SEIClient:
             payload["idHipoteseLegal"] = id_hipotese_legal
 
         if arquivo_path or arquivo_bytes:
-            nome, conteudo = self._ler_arquivo(arquivo_path, arquivo_bytes, nome_arquivo)
+            nome, conteudo = self._ler_arquivo(
+                arquivo_path, arquivo_bytes, nome_arquivo, self._permitir_arquivo_local
+            )
             resp = await self._post_multipart(
                 f"/documento/externo/{id_documento}/alterar", payload, (nome, conteudo)
             )
@@ -1943,7 +1959,8 @@ class SEIClient:
 
     @staticmethod
     def _ler_arquivo(
-        arquivo_path: str = "", arquivo_bytes: bytes = b"", nome_arquivo: str = ""
+        arquivo_path: str = "", arquivo_bytes: bytes = b"", nome_arquivo: str = "",
+        permitir_local: bool = True,
     ) -> tuple[str, bytes]:
         """Resolve a origem do anexo para (nome, bytes).
 
@@ -1961,6 +1978,11 @@ class SEIClient:
             return os.path.basename(nome_arquivo), arquivo_bytes
         if not arquivo_path:
             raise Exception("Informe arquivo_path ou arquivo_bytes + nome_arquivo.")
+        if not permitir_local:
+            raise Exception(
+                "arquivo_path está desabilitado neste servidor (modo remoto). "
+                "Envie o conteúdo em base64."
+            )
         if not os.path.exists(arquivo_path):
             raise Exception(f"Arquivo não encontrado: {arquivo_path}")
         with open(arquivo_path, "rb") as f:
@@ -1986,7 +2008,9 @@ class SEIClient:
         """
         from datetime import datetime
 
-        nome, conteudo = self._ler_arquivo(arquivo_path, arquivo_bytes, nome_arquivo)
+        nome, conteudo = self._ler_arquivo(
+            arquivo_path, arquivo_bytes, nome_arquivo, self._permitir_arquivo_local
+        )
         resp = await self._post_multipart(
             f"/documento/{id_procedimento}/externo/criar",
             {

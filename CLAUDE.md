@@ -145,6 +145,14 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - Causa: o arquivo de config do módulo (`<raiz>/sei/config/mod-wssei/ConfiguracaoMdWSSEI.php`) não foi recriado na migração — não é versionado (`.gitignore` do pengovbr/mod-wssei), é criado copiando `ConfiguracaoMdWSSEI.exemplo.php` (passo 6 do `docs/INSTALACAO.md`)
 - Ocorria ANTES de validar credenciais → "falha com qualquer credencial". Corrigido pela TI da ANTAQ (arquivo recriado). Mantido aqui como referência caso reincida após updates do módulo
 
+### Segurança do modo HTTP (OAuth, deploy remoto)
+- `auth.py`: tokens são **AES-256-GCM** (`s2.` + nonce‖ciphertext, chave via HKDF de `JWT_SECRET`), não mais base64+HMAC — a senha ficava legível no token. `JWT_SECRET` < 32 bytes → servidor não sobe
+- Access 1 h, refresh 14 d **rotativo** (reuso fora de 30 s revoga a sessão inteira), teto de sessão 30 d. `/revoke` derruba a sessão (`sid`). Estado de revogação é **em memória** (restart esquece)
+- `client_id` do registro dinâmico é **selado** (`c2.` + metadados criptografados) → sobrevive a restart sem banco. Sem isso, com access curto, todo deploy forçaria relogin
+- `redirect_uri` só https em `OAUTH_ALLOWED_REDIRECT_HOSTS` (padrão claude.ai, claude.com) ou http loopback. A tela de login mostra cliente e destino; tudo escapado e servido com CSP sem script
+- `seguranca.py`: URL do SEI no login exige https, host em `SEI_ALLOWED_HOSTS` (se definido) e IPs só públicos (anti-SSRF). `SEI_EXTRA_HEADERS`/`SEI_CF_CLEARANCE` só vão ao host de `SEI_URL` (ou `SEI_SECRET_HOSTS`)
+- `arquivo_path` desabilitado em modo HTTP (era leitura arbitrária de arquivos do servidor, ex. `/proc/self/environ`). Testes: `tests/test_seguranca_http.py`
+
 ### Limitações conhecidas
 - **Cancelar/excluir DOCUMENTO não existe na API**: o mod-wssei (conferido no master, 3.x) não tem rota nem RN para isso — as únicas rotas "cancelar" são `/bloco/assinatura/{id}/disponibilizacao/cancelar` e `/processo/{protocolo}/cancelar/sobrestamento`. Uma minuta indesejada só sai pela interface web (ou pelo scraper, hoje inoperante por SSO). Não há como fechar esse ciclo de erro do agente sem mudança no módulo
 - Cancelar assinatura: a função `DocumentoRN::cancelarAssinaturaInternoControlado` existe no core SEI (linha 4026) mas NÃO está exposta na API REST

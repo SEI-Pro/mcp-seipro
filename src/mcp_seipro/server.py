@@ -53,6 +53,19 @@ async def lifespan(server: FastMCP):
             await web_client.close()
 
 
+def _exigir_url_permitida(creds: dict) -> None:
+    """Revalida a URL do token contra SEI_ALLOWED_HOSTS atual.
+
+    A validação completa (com DNS) acontece no /login; aqui é a checagem barata
+    que pega tokens emitidos antes de o operador restringir a allowlist.
+    """
+    from mcp_seipro.seguranca import validar_url_sei_sem_rede
+
+    erro = validar_url_sei_sem_rede(creds.get("sei_url", ""))
+    if erro:
+        raise ValueError(f"{erro} Reconecte o MCP.")
+
+
 def _get_client(ctx: Context) -> SEIClient:
     """Obtém o SEIClient REST, criando sob demanda em modo HTTP."""
     client = ctx.request_context.lifespan_context.get("sei")
@@ -71,8 +84,9 @@ def _get_client(ctx: Context) -> SEIClient:
         creds = get_sei_credentials_from_token(access_token.token)
         if not creds:
             raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
+        _exigir_url_permitida(creds)
 
-        client = SEIClient(**creds)
+        client = SEIClient(**creds, permitir_arquivo_local=False)
         ctx.request_context.lifespan_context["sei"] = client
         return client
 
@@ -110,6 +124,7 @@ def _get_web_client(ctx: Context) -> SEIWebClient:
         creds = get_sei_credentials_from_token(access_token.token)
         if not creds:
             raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
+        _exigir_url_permitida(creds)
         client = SEIWebClient(**creds)
         ctx.request_context.lifespan_context["sei_web"] = client
         return client
@@ -2858,6 +2873,43 @@ async def _limite_upload_bytes(client: SEIClient, nome_arquivo: str = "") -> int
         return 0
 
 
+def _decodificar_upload_base64(arquivo_base64: str, nome_arquivo: str) -> tuple[bytes, str]:
+    """Decodifica o anexo em base64 (aceita data URI). Retorna (bytes, erro)."""
+    if not nome_arquivo:
+        return b"", (
+            "nome_arquivo é obrigatório com arquivo_base64 — o SEI usa a "
+            "extensão (ex: 'parecer.pdf') para determinar o tipo do anexo."
+        )
+    try:
+        # Aceita data URI (data:application/pdf;base64,...) e base64 puro
+        bruto = arquivo_base64.split(",", 1)[-1] if arquivo_base64.startswith("data:") \
+            else arquivo_base64
+        conteudo = base64.b64decode(bruto, validate=True)
+    except Exception:
+        return b"", "arquivo_base64 não é base64 válido."
+    if not conteudo:
+        return b"", "arquivo_base64 decodificou para 0 bytes."
+
+    teto_local = int(_MAX_UPLOAD_BASE64_MB * 1024 * 1024)
+    if len(conteudo) > teto_local:
+        dica = "" if _http_mode else (
+            " Para arquivos maiores, coloque-o no disco do servidor MCP e use arquivo_path."
+        )
+        return b"", (
+            f"Arquivo com {len(conteudo) / 1048576:.1f} MB excede o teto "
+            f"desta tool para envio em base64 ({_MAX_UPLOAD_BASE64_MB:g} MB, "
+            f"ajustável em SEI_MAX_UPLOAD_BASE64_MB).{dica}"
+        )
+    return conteudo, ""
+
+
+_ERRO_ARQUIVO_PATH_REMOTO = (
+    "arquivo_path está desabilitado neste servidor: ele roda remotamente e o "
+    "caminho seria lido do disco DELE, não do seu. Envie o arquivo em "
+    "arquivo_base64 + nome_arquivo."
+)
+
+
 @mcp.tool()
 async def sei_criar_documento_externo(
     processo: str,
@@ -2884,11 +2936,15 @@ async def sei_criar_documento_externo(
       um PDF vindo do Drive, gerado na conversa ou baixado de outra tool.
       O nome_arquivo importa: o SEI usa a extensão para tipar o anexo.
     - arquivo_path: caminho local NO SERVIDOR onde o MCP roda (não no seu
-      computador). Só serve para arquivos que já estão lá.
+      computador). Só serve para arquivos que já estão lá, e só no modo local
+      (stdio) — no servidor remoto está desabilitado.
 
     O limite de tamanho é o do próprio SEI (veja sei_parametros_upload).
     """
     try:
+        if arquivo_path and _http_mode:
+            return _error(_ERRO_ARQUIVO_PATH_REMOTO)
+
         client = _get_client(ctx)
 
         if arquivo_base64 and arquivo_path:
@@ -2901,29 +2957,9 @@ async def sei_criar_documento_externo(
 
         conteudo = b""
         if arquivo_base64:
-            if not nome_arquivo:
-                return _error(
-                    "nome_arquivo é obrigatório com arquivo_base64 — o SEI usa a "
-                    "extensão (ex: 'parecer.pdf') para determinar o tipo do anexo."
-                )
-            try:
-                # Aceita data URI (data:application/pdf;base64,...) e base64 puro
-                bruto = arquivo_base64.split(",", 1)[-1] if arquivo_base64.startswith("data:") \
-                    else arquivo_base64
-                conteudo = base64.b64decode(bruto, validate=True)
-            except Exception:
-                return _error("arquivo_base64 não é base64 válido.")
-            if not conteudo:
-                return _error("arquivo_base64 decodificou para 0 bytes.")
-
-            teto_local = int(_MAX_UPLOAD_BASE64_MB * 1024 * 1024)
-            if len(conteudo) > teto_local:
-                return _error(
-                    f"Arquivo com {len(conteudo) / 1048576:.1f} MB excede o teto "
-                    f"desta tool para envio em base64 ({_MAX_UPLOAD_BASE64_MB:g} MB, "
-                    "ajustável em SEI_MAX_UPLOAD_BASE64_MB). Para arquivos maiores, "
-                    "coloque-o no disco do servidor MCP e use arquivo_path."
-                )
+            conteudo, erro = _decodificar_upload_base64(arquivo_base64, nome_arquivo)
+            if erro:
+                return _error(erro)
 
             limite = await _limite_upload_bytes(client, nome_arquivo)
             if limite and len(conteudo) > limite:
@@ -3671,6 +3707,8 @@ async def sei_alterar_documento_externo(
     nivel_acesso: str = "",
     hipotese_legal: str = "",
     arquivo_path: str = "",
+    arquivo_base64: str = "",
+    nome_arquivo: str = "",
     ctx: Context = None,
 ) -> str:
     """Altera metadados de um documento externo (e opcionalmente substitui o arquivo).
@@ -3679,12 +3717,25 @@ async def sei_alterar_documento_externo(
     - descricao: nova descrição
     - nivel_acesso: 0=público, 1=restrito, 2=sigiloso
     - hipotese_legal: ID da hipótese (obrigatório se restrito/sigiloso)
-    - arquivo_path: caminho local de novo arquivo para substituir (opcional)
+    - arquivo_base64 + nome_arquivo: novo arquivo para substituir (opcional)
+    - arquivo_path: caminho de novo arquivo NO SERVIDOR do MCP (opcional; só
+      no modo local/stdio — desabilitado no servidor remoto)
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
     Se falhar com erro inesperado, use sei_versao para verificar a versão instalada.
     """
     try:
+        if arquivo_path and _http_mode:
+            return _error(_ERRO_ARQUIVO_PATH_REMOTO)
+        if arquivo_base64 and arquivo_path:
+            return _error("Informe arquivo_base64 OU arquivo_path, não os dois.")
+
+        conteudo = b""
+        if arquivo_base64:
+            conteudo, erro = _decodificar_upload_base64(arquivo_base64, nome_arquivo)
+            if erro:
+                return _error(erro)
+
         client = _get_client(ctx)
         result = await client.alterar_documento_externo(
             id_documento=id_documento,
@@ -3692,6 +3743,8 @@ async def sei_alterar_documento_externo(
             nivel_acesso=nivel_acesso,
             id_hipotese_legal=hipotese_legal,
             arquivo_path=arquivo_path,
+            arquivo_bytes=conteudo,
+            nome_arquivo=nome_arquivo,
         )
         return _json(result)
     except Exception as e:

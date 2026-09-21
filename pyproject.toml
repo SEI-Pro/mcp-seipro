@@ -21,6 +21,8 @@ dependencies = [
     "pdf2image>=1.16",
     "pytesseract>=0.3",
     "uvicorn[standard]>=0.30",
+    # AES-GCM dos tokens OAuth (modo HTTP) — auth.py
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

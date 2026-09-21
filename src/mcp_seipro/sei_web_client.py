@@ -90,7 +90,9 @@ class SEIWebClient:
         }
         # Header secreto para regra de bypass do WAF (Cloudflare). Mesmo
         # mecanismo do SEIClient REST — ver SEI_EXTRA_HEADERS.
-        extra = os.environ.get("SEI_EXTRA_HEADERS", "").strip()
+        from .seguranca import host_recebe_segredos
+        segredos_env = host_recebe_segredos(sei_url)
+        extra = os.environ.get("SEI_EXTRA_HEADERS", "").strip() if segredos_env else ""
         if extra:
             if extra.startswith("{"):
                 try:
@@ -104,7 +106,7 @@ class SEIWebClient:
                         _headers[k.strip()] = v.strip()
 
         cookies = None
-        cf_clearance = os.environ.get("SEI_CF_CLEARANCE", "").strip()
+        cf_clearance = os.environ.get("SEI_CF_CLEARANCE", "").strip() if segredos_env else ""
         if cf_clearance:
             cookies = {"cf_clearance": cf_clearance}
 

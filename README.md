@@ -502,10 +502,21 @@ railway variables set \
   BASE_URL="https://SEU-PROJETO.up.railway.app"
 ```
 
-- **`JWT_SECRET`** — chave para encriptar os tokens OAuth (gerada automaticamente pelo comando acima)
+- **`JWT_SECRET`** — chave mestra dos tokens OAuth (gerada pelo comando acima). **Obrigatória, com no mínimo 32 bytes**: sem ela o servidor se recusa a subir. Trocá-la derruba todas as sessões.
 - **`BASE_URL`** — URL pública do seu servidor (será definida no passo 9)
 
-> **Nota:** as credenciais do SEI (URL, usuário, senha) **não** ficam no servidor. São informadas pelo usuário na tela de login OAuth e encriptadas dentro do token.
+> **Nota:** as credenciais do SEI (URL, usuário, senha) **não** ficam gravadas no servidor. São informadas pelo usuário na tela de login OAuth e criptografadas (AES-256-GCM) dentro do token.
+
+Variáveis de segurança recomendadas:
+
+| Variável | Padrão | Para quê |
+|----------|--------|----------|
+| `SEI_ALLOWED_HOSTS` | vazio (qualquer host público) | Hosts do SEI aceitos no login, separados por vírgula (`sei.orgao.gov.br`, `*.gov.br`). Fecha SSRF e DNS rebinding — **defina em produção** |
+| `OAUTH_ALLOWED_REDIRECT_HOSTS` | `claude.ai,claude.com` | Hosts https aceitos como `redirect_uri` de clientes OAuth. Loopback (`localhost`) é sempre aceito. `*` libera qualquer https |
+| `SEI_SECRET_HOSTS` | host de `SEI_URL` | Hosts que podem receber `SEI_EXTRA_HEADERS` / `SEI_CF_CLEARANCE`. Para outros hosts esses segredos não são enviados |
+| `OAUTH_ACCESS_TTL` / `OAUTH_REFRESH_TTL` / `OAUTH_SESSION_MAX` | 1 h / 14 d / 30 d | Validade do access token, do refresh token (rotativo) e teto absoluto da sessão, em segundos |
+
+No modo remoto, `arquivo_path` (upload a partir do disco do servidor) é desabilitado: use `arquivo_base64`.
 
 ### 8. Gerar domínio público
 
@@ -556,7 +567,7 @@ O servidor detecta automaticamente o ambiente:
 | Local | ausente | stdio | Claude Code / Claude Desktop |
 | Railway | presente (injetada) | Streamable HTTP + OAuth | Claude mobile / web / remoto |
 
-No modo remoto, as credenciais do SEI são encriptadas dentro do token JWT e nunca armazenadas no servidor. O `Dockerfile` inclui `tesseract-ocr` para OCR de PDFs escaneados.
+No modo remoto, as credenciais do SEI são criptografadas (AES-256-GCM) dentro do token e não ficam gravadas no servidor. O `Dockerfile` inclui `tesseract-ocr` para OCR de PDFs escaneados.
 
 ### Domínio customizado (opcional)
 
