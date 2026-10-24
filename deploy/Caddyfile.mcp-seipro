@@ -1,0 +1,25 @@
+# mcp-seipro, migrado do Railway em 2026-10-24. Pilha em /srv/mcp-seipro.
+# Sem `import protected`: é servidor MCP com OAuth próprio para o claude.ai; o Authelia
+# na frente quebraria o conector.
+# X-Forwarded-For SUBSTITUÍDO (não acrescentado): o uvicorn confia nele
+# (FORWARDED_ALLOW_IPS) para registrar o IP do cliente no log.
+# Path traversal: o app não serve arquivo por parâmetro, mas o bloqueio fica como
+# padrão da casa. Olha a URI crua, antes do "?", porque os matchers de path do Caddy
+# comparam o caminho já decodificado e limpo.
+# mcp-seipro.claudinha.tech: nome auxiliar com certificado garantido (o curinga já
+# aponta para a VPS); é o destino do proxy do Railway durante a propagação do DNS.
+(mcp_seipro) {
+	import logged
+	@travessia expression `{http.request.uri}.matches("^(?i)[^?]*(\\.\\.|%2e|%2f|%5c|\\\\)")`
+	respond @travessia 400
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8140 {
+		header_up X-Forwarded-For {remote_host}
+		lb_try_duration 10s
+		lb_try_interval 250ms
+	}
+}
+
+mcp.seipro.io, mcp-seipro.claudinha.tech {
+	import mcp_seipro
+}

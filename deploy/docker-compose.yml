@@ -1,0 +1,36 @@
+# mcp-seipro (https://mcp.seipro.io) na VPS Hostinger KVM4. Migrado do Railway em 2026-10-24.
+# Use sempre pelo compose.sh. Código: extraído de /home/pedro/mcp-seipro pelo deploy.sh.
+# Sem banco e sem volume: o estado OAuth vai selado nos próprios tokens (auth.py).
+name: mcp-seipro
+
+services:
+  app:
+    build:
+      context: /srv/mcp-seipro/app
+      dockerfile: Dockerfile
+      args:
+        # Chromium do Playwright: SEI_TRANSPORT=auto cai para o browser quando o SEI
+        # está atrás de WAF/Cloudflare (sei.antaq.gov.br, por exemplo).
+        INSTALL_BROWSER: "true"
+    image: mcp-seipro-app:atual
+    restart: unless-stopped
+    # No Railway: 96 MB parado, pico de 884 MB em 30 dias (Chromium aberto).
+    mem_limit: 1280m
+    memswap_limit: 1280m
+    shm_size: 256mb
+    env_file: [/srv/mcp-seipro/env/app.env]
+    environment:
+      # PORT ligado = modo HTTP com OAuth (server.py).
+      PORT: "8000"
+      # O Caddy SUBSTITUI o X-Forwarded-For pelo IP real; a porta só escuta em
+      # 127.0.0.1, então confiar no cabeçalho é seguro e o log mostra o cliente.
+      FORWARDED_ALLOW_IPS: "*"
+    ports: ["127.0.0.1:8140:8000"]
+    healthcheck:
+      # GET / responde 200 sem login.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
