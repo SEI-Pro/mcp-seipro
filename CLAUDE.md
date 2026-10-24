@@ -9,8 +9,15 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 ## Stack
 
 - Python 3.11+, FastMCP (mcp SDK 1.12+), httpx, BeautifulSoup, markdownify, pdfplumber, pytesseract
-- Transport: stdio (local) ou Streamable HTTP + OAuth (remoto/Railway)
+- Transport: stdio (local) ou Streamable HTTP + OAuth (remoto: `https://mcp.seipro.io`, na VPS KVM4)
 - Configuração: variáveis de ambiente (SEI_URL, SEI_USUARIO, SEI_SENHA, SEI_ORGAO)
+
+## Produção (mcp.seipro.io)
+
+- Roda na VPS Hostinger KVM4 desde 2026-10-24: pilha em `/srv/mcp-seipro`, publicação com `/srv/mcp-seipro/deploy/deploy.sh [commit]` como root, depois de `git pull` no clone `/home/pedro/mcp-seipro`. Arranjo completo em `deploy/README.md`.
+- **Nunca `railway up` no projeto `mcp-seipro` do Railway**: o serviço de lá é o proxy de transição (`deploy/railway-proxy/`), e o upload do código abriria um segundo servidor com outro `JWT_SECRET`.
+- `JWT_SECRET` (em `/srv/mcp-seipro/env/app.env`) sela tokens e clientes OAuth: trocá-lo desconecta todo mundo. O guia de Railway do README é para instâncias de terceiros.
+- DNS de `seipro.io` na Cloudflare (token em `~/.config/cloudflare/pedrohsoares.env` no Mac do Pedro).
 
 ## Arquivos principais
 
@@ -85,7 +92,7 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - **Transporte auto-detectável (multi-órgão), `SEI_TRANSPORT`**:
   - `auto` (PADRÃO) — começa em httpx; ao detectar o desafio do Cloudflare (`_handle_cloudflare` → `_is_cloudflare_challenge`), **escala sozinho** para o browser (Playwright) via `_escalate_to_browser`, re-autentica e refaz a chamada. **Órgãos sem WAF nunca escalam — funciona como sempre funcionou.** Se o Playwright não estiver instalado, levanta `SEICloudflareBlocked` (genérico, sem hardcode de órgão).
   - `httpx` — força httpx (nunca escala). `browser` — força o Chromium desde o início (pula a 1ª tentativa httpx; útil em deploy dedicado a um órgão sabidamente atrás de CF).
-  - `browser_transport.py` roteia o REST por um Chromium real que resolve o desafio; serializa chamadas, pesado. Extra `playwright` + `playwright install chromium`; no Railway `--build-arg INSTALL_BROWSER=true`. Testes: `tests/test_transport.py`. Cobre só o SEIClient REST — o SEIWebClient (scraper, opt-in) ainda cai no CF.
+  - `browser_transport.py` roteia o REST por um Chromium real que resolve o desafio; serializa chamadas, pesado. Extra `playwright` + `playwright install chromium`; na imagem `--build-arg INSTALL_BROWSER=true` (a instância oficial usa). Testes: `tests/test_transport.py`. Cobre só o SEIClient REST — o SEIWebClient (scraper, opt-in) ainda cai no CF.
 
 ### WAF do Cloudflare bloqueia ESCRITA por conteúdo (distinto do desafio)
 - Além do Managed Challenge, o Cloudflare da ANTAQ tem **managed rules (WAF) que inspecionam o CORPO do POST**. O `POST /documento/secao/alterar` leva **403 "Attention Required"** quando o HTML das seções casa um padrão do ruleset — ex.: o conteúdo real de um template de Despacho. Payload benigno (mesmo grande, 22KB) passa; por isso "alguns docs editam, outros dão 403"

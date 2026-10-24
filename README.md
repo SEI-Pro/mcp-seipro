@@ -438,6 +438,8 @@ O fluxo "sem elicit" (atual): modelo recebe JSON estruturado de bloqueio → tra
 
 O servidor pode rodar em modo HTTP para uso via Claude no celular, na web ou em qualquer cliente MCP remoto. Cada órgão faz seu próprio deploy — as credenciais do SEI são informadas pelo usuário na tela de login OAuth e nunca ficam armazenadas no servidor.
 
+> A instância pública **`https://mcp.seipro.io/mcp`** é mantida pelo SEI Pro numa VPS própria, no Brasil (ver [`deploy/README.md`](deploy/README.md)). O guia abaixo é para quem quer hospedar uma instância própria no Railway.
+
 ### O que é o Railway
 
 O [Railway](https://railway.com?referralCode=jJJ7Xz) é uma plataforma de deploy na nuvem que facilita colocar aplicações no ar. Você faz push do código e o Railway cuida de build, domínio, SSL e escalabilidade.

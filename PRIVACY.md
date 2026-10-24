@@ -1,7 +1,7 @@
 # Política de Privacidade — MCP SEI Pro
 
-**Versão:** 1.0
-**Vigência:** 28 de setembro de 2026
+**Versão:** 1.1
+**Vigência:** 24 de outubro de 2026
 
 Esta política descreve como o **MCP SEI Pro** trata dados. O MCP SEI Pro é o servidor MCP (Model Context Protocol) que conecta assistentes de IA, como o Claude, ao SEI (Sistema Eletrônico de Informações). Ele segue a Lei nº 13.709/2018, a Lei Geral de Proteção de Dados Pessoais (LGPD).
 
@@ -25,7 +25,7 @@ Esta política **não** cobre:
 - A senha do SEI fica **criptografada (AES-256-GCM) dentro do token** de acesso entregue ao assistente. Só o servidor tem a chave para abri-lo.
 - O conteúdo do SEI passa pelo servidor **só em trânsito**, quando o usuário pede, e segue para o assistente de IA.
 - Não há publicidade, rastreamento, analytics, telemetria nem venda de dados.
-- A instância remota roda nos **Estados Unidos** (Railway, região US East).
+- A instância remota roda no **Brasil** (servidor da Hostinger em Campinas, SP).
 
 ## 3. Dados tratados no modo remoto
 
@@ -58,10 +58,10 @@ O servidor lê e escreve no SEI apenas o que as ferramentas acionadas exigem. Is
 
 ### 3.3 Registros técnicos (logs)
 
-O servidor e o provedor de hospedagem registram dados técnicos de operação:
+O servidor registra dados técnicos de operação:
 
 - data e hora, método e rota HTTP e código de resposta de cada requisição;
-- o endereço IP de origem, no registro do provedor de hospedagem;
+- o endereço IP de origem e o agente de usuário (User-Agent) do cliente;
 - eventos de funcionamento, como autenticação bem-sucedida, mudança do modo de transporte e mensagens de erro. Uma mensagem de erro pode incluir um trecho da resposta devolvida pelo SEI.
 
 Os registros **não incluem** senhas, tokens nem o conteúdo das ferramentas acionadas.
@@ -102,7 +102,7 @@ Os dados só chegam a quem é necessário para o serviço funcionar:
 | Destinatário | O quê | Por quê |
 |---|---|---|
 | SEI do órgão (e a CDN/WAF do órgão, se houver) | Credenciais e requisições | É o sistema que o usuário quer operar |
-| Railway Corp. (EUA) | Tráfego e registros técnicos | Hospedagem da instância remota |
+| Hostinger (servidor no Brasil) | Tráfego e registros técnicos | Hospedagem da instância remota |
 | Provedor do assistente de IA (ex.: Anthropic) | Resultados das ferramentas acionadas | Entregar a resposta ao usuário |
 
 O provedor do assistente de IA trata esses resultados conforme os próprios termos e política de privacidade e conforme as configurações da conta do usuário ou da organização dele, inclusive quanto ao uso para treinamento de modelos. Veja, por exemplo, a [política de privacidade da Anthropic](https://www.anthropic.com/legal/privacy).
@@ -111,7 +111,7 @@ Os dados também podem ser fornecidos a autoridades, quando houver ordem judicia
 
 ## 7. Transferência internacional
 
-No modo remoto, os dados passam por servidores nos Estados Unidos (Railway, região US East), e o assistente de IA pode processá-los fora do Brasil. Antes de usar o modo remoto, confira se as normas do seu órgão permitem esse tratamento. Se não permitirem, use o modo local ou hospede uma instância própria em infraestrutura aprovada pelo órgão.
+No modo remoto, o servidor fica no Brasil, mas o assistente de IA pode processar os dados fora do país. Antes de usar o modo remoto, confira se as normas do seu órgão permitem esse tratamento. Se não permitirem, use o modo local ou hospede uma instância própria em infraestrutura aprovada pelo órgão.
 
 ## 8. Retenção
 
@@ -123,7 +123,7 @@ No modo remoto, os dados passam por servidores nos Estados Unidos (Railway, regi
 | Sessão, desde o login com senha | no máximo 30 dias; depois disso é preciso logar de novo |
 | Listas de apoio em cache | até 1 hora |
 | Estado em memória (sessões, revogações) | até o próximo reinício do servidor |
-| Registros técnicos (logs) | pelo prazo de retenção do provedor de hospedagem |
+| Registros técnicos (logs) | rotação por tamanho: os mais antigos são apagados à medida que entram novos, sem cópia de segurança |
 
 ## 9. Segurança
 
