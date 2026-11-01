@@ -161,6 +161,20 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - `seguranca.py`: URL do SEI no login exige https, host em `SEI_ALLOWED_HOSTS` (se definido) e IPs só públicos (anti-SSRF). `SEI_EXTRA_HEADERS`/`SEI_CF_CLEARANCE` só vão ao host de `SEI_URL` (ou `SEI_SECRET_HOSTS`)
 - `arquivo_path` desabilitado em modo HTTP (era leitura arbitrária de arquivos do servidor, ex. `/proc/self/environ`). Testes: `tests/test_seguranca_http.py`
 
+### Formulários em ISO-8859-1 (`SEI_FORM_CHARSET`)
+- O wssei repassa os campos de formulário **crus** ao núcleo do SEI (`getParam` não converte), que grava em ISO-8859-1. Campo enviado em UTF-8 vira `AdministraÃ§Ã£o` no banco — e na assinatura o cargo deixa de casar com o cadastro ("Cargo/Função … não está associado com este usuário"). Validado ao vivo em SEI 5.0.5 / wssei 3.0.4 (sei.rr.gov.br)
+- `_request` converte todo `data=dict` em corpo urlencoded ISO-8859-1 (`_codificar_formulario`); multipart idem nos campos (`_campos_multipart`). Tipografia fora do Latin-1 (– — “ ” …) é transliterada, não escapada: em campo de texto puro uma entidade apareceria literal
+- **JSON não precisa**: `secao/alterar` manda as seções via `json.dumps` (ASCII com `\uXXXX`), e o `json_decode` do PHP + conversão do wssei já entregam o texto certo — por isso a edição de seção nunca corrompeu acentos
+- `SEI_FORM_CHARSET=utf-8` restaura o envio antigo (para instalação que já converta do lado do servidor). O browser transport respeita `content=`; upload multipart via browser segue em UTF-8 (limitação do FormData). Testes: `tests/test_codificacao_formulario.py`
+
+### Alterar documento APAGA o que não for enviado
+- `MdWsSeiDocumentoRN::encapsulaDocumento` (wssei 3.0.4) grava todos os campos a partir do POST: o que faltar vira nulo/vazio — descrição, nível de acesso ("Nível de acesso local não informado"), hipótese, grau de sigilo, observação, assuntos (lista vazia), interessados, destinatários, tipo de conferência e, no externo, número, série, data de elaboração e remetente
+- `alterar_documento_interno`/`_externo` consultam o documento primeiro e reenviam tudo (`_payload_alteracao`), trocando só o informado. Tornar público limpa hipótese e grau; restrito limpa grau. Testes: `tests/test_alterar_documento_preserva.py`
+
+### Anotações de bloco e pesquisa de blocos internos
+- As rotas `/bloco/{interno,assinatura}/anotacao/{cadastrar,alterar}` leem o campo `anotacao` (`setStrAnotacao`); `descricao` era ignorado
+- `sei_pesquisar_blocos_internos`: a busca nativa (`filter` → `BlocoRN::pesquisar`) é sensível a acento/charset, então a tool também varre as páginas (teto 20×100) e compara normalizado (sem acento, minúsculas, palavras em qualquer ordem), reparando descrição gravada como `Ã§`. Sem nome, para ao atingir `limit` e devolve `total_encontrado=null` + `tem_mais`. Testes: `tests/test_pesquisar_blocos_internos.py`
+
 ### Limitações conhecidas
 - **Cancelar/excluir DOCUMENTO não existe na API**: o mod-wssei (conferido no master, 3.x) não tem rota nem RN para isso — as únicas rotas "cancelar" são `/bloco/assinatura/{id}/disponibilizacao/cancelar` e `/processo/{protocolo}/cancelar/sobrestamento`. Uma minuta indesejada só sai pela interface web (ou pelo scraper, hoje inoperante por SSO). Não há como fechar esse ciclo de erro do agente sem mudança no módulo
 - Cancelar assinatura: a função `DocumentoRN::cancelarAssinaturaInternoControlado` existe no core SEI (linha 4026) mas NÃO está exposta na API REST

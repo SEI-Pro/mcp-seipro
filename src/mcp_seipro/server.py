@@ -3653,10 +3653,13 @@ async def sei_alterar_documento_interno(
 ) -> str:
     """Altera metadados de um documento interno (não o conteúdo HTML).
 
-    Para alterar o conteúdo, use sei_editar_secao.
+    Para alterar o conteúdo, use sei_editar_secao. Só os campos informados
+    mudam: os demais (descrição, nível de acesso, assuntos, interessados,
+    destinatários, observação) são lidos do documento e reenviados, pois o
+    SEI apagaria o que não viesse na alteração.
     - id_documento: ID interno do documento
-    - descricao: nova descrição
-    - nivel_acesso: 0=público, 1=restrito, 2=sigiloso
+    - descricao: nova descrição (vazio = mantém a atual)
+    - nivel_acesso: 0=público, 1=restrito, 2=sigiloso (vazio = mantém)
     - hipotese_legal: ID da hipótese (obrigatório se restrito/sigiloso)
 
     Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
@@ -3688,9 +3691,13 @@ async def sei_alterar_documento_externo(
 ) -> str:
     """Altera metadados de um documento externo (e opcionalmente substitui o arquivo).
 
+    Só os campos informados mudam: os demais (descrição, nível de acesso,
+    número, tipo, data de elaboração, remetente, assuntos, interessados,
+    destinatários, observação) são lidos do documento e reenviados, pois o
+    SEI apagaria o que não viesse na alteração.
     - id_documento: ID interno do documento
-    - descricao: nova descrição
-    - nivel_acesso: 0=público, 1=restrito, 2=sigiloso
+    - descricao: nova descrição (vazio = mantém a atual)
+    - nivel_acesso: 0=público, 1=restrito, 2=sigiloso (vazio = mantém)
     - hipotese_legal: ID da hipótese (obrigatório se restrito/sigiloso)
     - arquivo_base64 + nome_arquivo: novo arquivo para substituir (opcional)
     - arquivo_path: caminho de novo arquivo NO SERVIDOR do MCP (opcional; só
@@ -4290,6 +4297,148 @@ async def sei_historico_marcador_processo(
 # -- Bloco Interno: operações adicionais --
 
 
+_ESTADOS_BLOCO = {
+    "A": "Aberto",
+    "D": "Disponibilizado",
+    "R": "Retornado",
+    "C": "Concluído",
+    "B": "Recebido",
+}
+_MAX_PAGINAS_BLOCOS = 20
+_TAM_PAGINA_BLOCOS = 100
+
+
+def _normalizar_busca(texto: str) -> str:
+    """Minúsculas, sem acento e com espaços simples — para comparar nomes.
+
+    Repara antes o texto gravado com acento corrompido ("AdministraÃ§Ã£o",
+    UTF-8 lido como Latin-1), comum em blocos criados antes da correção de
+    charset dos formulários.
+    """
+    import unicodedata
+
+    texto = html.unescape(str(texto or ""))
+    if "Ã" in texto or "Â" in texto:
+        try:
+            texto = texto.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    sem_acento = "".join(
+        c for c in unicodedata.normalize("NFKD", texto) if not unicodedata.combining(c)
+    )
+    return " ".join(sem_acento.lower().split())
+
+
+def _bloco_resumido(bloco: dict) -> dict:
+    estado = str(bloco.get("estado") or "")
+    descricao = str(bloco.get("descricao") or "")
+    if "Ã" in descricao or "Â" in descricao:
+        try:
+            descricao = descricao.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    return {
+        "id": str(bloco.get("id") or ""),
+        "descricao": descricao,
+        "estado": estado,
+        "estado_descricao": _ESTADOS_BLOCO.get(estado, estado),
+        "unidade": bloco.get("siglaUnidade"),
+        "numero_processos": bloco.get("numeroProcessos"),
+    }
+
+
+@mcp.tool()
+async def sei_pesquisar_blocos_internos(
+    nome: str = "",
+    estado: str = "",
+    limit: int = 50,
+    ctx: Context = None,
+) -> str:
+    """Pesquisa blocos internos da unidade atual pelo nome (descrição).
+
+    A busca ignora acentos e maiúsculas e aceita as palavras em qualquer
+    ordem: "contratos sejuc" encontra "SEJUC – Contratos 2026". Sem `nome`,
+    lista os blocos (mais recentes primeiro).
+
+    Os blocos são da unidade ativa — use sei_trocar_unidade antes para
+    pesquisar em outra. Use o `id` retornado em sei_listar_processos_bloco_interno,
+    sei_incluir_processo_bloco_interno etc.
+
+    Parâmetros:
+    - nome: palavras do nome do bloco (vazio = todos)
+    - estado: filtra por estado, códigos separados por vírgula:
+      A=Aberto, C=Concluído, D=Disponibilizado, R=Retornado, B=Recebido
+    - limit: máximo de blocos devolvidos (padrão 50)
+    """
+    try:
+        client = _get_client(ctx)
+        estado = ",".join(e.strip().upper() for e in estado.split(",") if e.strip())
+        termos = _normalizar_busca(nome).split()
+
+        # 1) Busca do próprio SEI (rápida, mas sensível a acento/charset).
+        # 2) Varredura paginada com comparação normalizada no servidor MCP —
+        #    garante o acerto quando o nome tem acento ou está corrompido.
+        encontrados: dict[str, dict] = {}
+        varridos = 0
+        truncado = False
+        parou_cedo = False  # listagem sem nome: parou ao atingir `limit`
+
+        def considerar(itens):
+            for bruto in itens or []:
+                if not isinstance(bruto, dict):
+                    continue
+                bloco = _bloco_resumido(bruto)
+                alvo = _normalizar_busca(bloco["descricao"])
+                if bloco["id"] and all(t in alvo for t in termos):
+                    encontrados.setdefault(bloco["id"], bloco)
+
+        if termos:
+            try:
+                r = await client.pesquisar_blocos_internos(
+                    filtro=nome, limit=_TAM_PAGINA_BLOCOS, estado=estado
+                )
+                considerar(r.get("blocos"))
+            except Exception:
+                logger.debug("Busca nativa de blocos falhou; seguindo na varredura", exc_info=True)
+
+        for pagina in range(_MAX_PAGINAS_BLOCOS):
+            if not termos and len(encontrados) >= limit:
+                parou_cedo = True
+                break
+            r = await client.pesquisar_blocos_internos(
+                limit=_TAM_PAGINA_BLOCOS, start=pagina, estado=estado
+            )
+            itens = r.get("blocos") or []
+            varridos += len(itens)
+            considerar(itens)
+            if len(itens) < _TAM_PAGINA_BLOCOS:
+                break
+        else:
+            truncado = True
+
+        blocos = sorted(encontrados.values(), key=lambda b: int(b["id"] or 0), reverse=True)
+        resultado = {
+            "nome_pesquisado": nome,
+            "estado": estado or "todos",
+            "total_encontrado": len(blocos),
+            "retornados": min(len(blocos), limit),
+            "tem_mais": parou_cedo or len(blocos) > limit,
+            "blocos": blocos[:limit],
+        }
+        if parou_cedo:
+            # Sem nome a varredura para cedo (cada página custa ao SEI uma
+            # contagem de processos por bloco), então o total é parcial.
+            resultado["total_encontrado"] = None
+        if truncado:
+            resultado["_aviso"] = (
+                f"A unidade tem mais de {varridos} blocos; só os "
+                f"{varridos} mais recentes foram verificados. Refine o nome ou o estado."
+            )
+        return _json(resultado)
+    except Exception as e:
+        return _error(str(e))
+
+
 @mcp.tool()
 async def sei_listar_processos_bloco_interno(
     id_bloco: str,
@@ -4677,6 +4826,7 @@ _TITULOS_TOOLS = {
     "sei_disponibilizar_bloco_assinatura": "Disponibilizar bloco de assinatura",
     "sei_cancelar_disponibilizacao_bloco": "Cancelar disponibilização de bloco",
     "sei_pesquisar_blocos_assinatura": "Pesquisar blocos de assinatura",
+    "sei_pesquisar_blocos_internos": "Pesquisar blocos internos",
     "sei_criar_anotacao": "Criar anotação no processo",
     "sei_versao": "Versão do SEI e do wssei",
     "sei_listar_orgaos": "Listar órgãos",

@@ -210,6 +210,7 @@ class BrowserClient:
         json: Any = None,
         headers: Optional[dict] = None,
         files: Any = None,
+        content: Any = None,
         **_ignored: Any,
     ) -> httpx.Response:
         await self._ensure()
@@ -224,7 +225,12 @@ class BrowserClient:
             if files:
                 result = await self._do_multipart(method, full_url, req_headers, data, files)
             else:
-                body, ctype = self._encode_body(data, json)
+                # `content` (corpo já serializado, ex.: formulário em ISO-8859-1
+                # percent-encoded) tem precedência — é ASCII, então vira str
+                # sem perda no fetch do Chromium.
+                body, ctype = self._encode_body(
+                    content if content is not None and data is None else data, json
+                )
                 if ctype and "content-type" not in {k.lower() for k in req_headers}:
                     req_headers["Content-Type"] = ctype
                 result = await self._page.evaluate(_JS_FETCH, [full_url, method, req_headers, body])
@@ -276,7 +282,13 @@ class BrowserClient:
         if isinstance(raw, str):
             raw = raw.encode()
         file_b64 = base64.b64encode(raw).decode()
-        fields = {k: ("" if v is None else str(v)) for k, v in (data or {}).items()}
+        # Campos podem chegar como bytes ISO-8859-1 (SEIClient._campos_multipart).
+        # O FormData do navegador sempre envia UTF-8; aqui só se evita o
+        # "b'...'" de str(bytes). Acentos em upload via browser seguem em UTF-8.
+        fields = {
+            k: ("" if v is None else v.decode("iso-8859-1") if isinstance(v, bytes) else str(v))
+            for k, v in (data or {}).items()
+        }
         return await self._page.evaluate(
             _JS_FETCH_MULTIPART,
             [url, method, headers, fields, field, file_name, file_b64, file_type],

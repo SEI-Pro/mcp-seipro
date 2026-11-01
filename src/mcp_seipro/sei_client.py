@@ -49,6 +49,13 @@ class SEIClient:
         self._contexto = kwargs.get("sei_contexto", os.environ.get("SEI_CONTEXTO", ""))
         self._token: Optional[str] = None
         self._unidade_ativa: Optional[str] = None
+        # Charset dos campos de formulário. O wssei repassa os campos crus ao
+        # núcleo do SEI, que grava em ISO-8859-1: UTF-8 vira "Ã§" no banco.
+        # "utf-8" restaura o comportamento antigo para instalações que já
+        # convertem do lado do servidor.
+        self._form_charset = str(
+            kwargs.get("sei_form_charset", os.environ.get("SEI_FORM_CHARSET", "iso-8859-1"))
+        ).strip().lower()
         self._id_usuario: Optional[str] = None
         self._id_orgao_usuario: Optional[str] = None
         # Cache de metadados estáticos (TTL 1 hora). Evita chamadas REST
@@ -349,6 +356,7 @@ class SEIClient:
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         """Faz request com re-autenticação automática em caso de 401/403."""
+        self._codificar_formulario(kwargs)
         headers = await self._get_headers()
         kwargs.setdefault("headers", {}).update(headers)
         resp = await self._client.request(method, f"{self.base_url}{path}", **kwargs)
@@ -599,6 +607,70 @@ class SEIClient:
             raise Exception(f"Erro ao consultar documento externo {id_documento}: {data.get('mensagem')}")
         return data["data"]
 
+    @staticmethod
+    def _ids_csv(itens) -> str:
+        if isinstance(itens, dict):
+            itens = [itens]
+        ids = []
+        for item in itens or []:
+            if isinstance(item, dict):
+                ident = item.get("id") or item.get("idContato") or item.get("idAssunto")
+            else:
+                ident = item
+            if ident not in (None, ""):
+                ids.append(str(ident))
+        return ",".join(ids)
+
+    @classmethod
+    def _payload_alteracao(
+        cls,
+        atual: dict,
+        descricao: str = "",
+        nivel_acesso: str = "",
+        id_hipotese_legal: str = "",
+        externo: bool = False,
+    ) -> dict:
+        """Monta o POST de alteração de documento PRESERVANDO os metadados.
+
+        O wssei (`MdWsSeiDocumentoRN::encapsulaDocumento`) grava TODOS os campos
+        a partir do POST: o que não vier é apagado — descrição, nível de
+        acesso, hipótese, grau de sigilo, observação, assuntos, interessados,
+        destinatários, tipo de conferência e, no externo, número, série, data
+        de elaboração e remetente. Por isso a alteração parte da consulta atual
+        e só troca o que foi pedido.
+        """
+        def atual_str(chave):
+            valor = atual.get(chave)
+            return "" if valor is None else str(valor)
+
+        nivel = str(nivel_acesso or atual_str("nivelAcesso"))
+        hipotese = str(id_hipotese_legal or atual_str("idHipoteseLegal"))
+        grau = atual_str("grauSigilo")
+        if nivel == "0":
+            hipotese, grau = "", ""
+        elif nivel == "1":
+            grau = ""
+
+        payload = {
+            "descricao": descricao or atual_str("descricao"),
+            "nivelAcesso": nivel,
+            "idHipoteseLegal": hipotese,
+            "grauSigilo": grau,
+            "observacao": atual_str("observacao"),
+            "assuntos": cls._ids_csv(atual.get("assuntos")),
+            "interessados": cls._ids_csv(atual.get("interessados")),
+            "destinatarios": cls._ids_csv(atual.get("destinatarios")),
+            "idTipoConferencia": atual_str("idTipoConferencia"),
+        }
+        if externo:
+            payload.update({
+                "numero": atual_str("numero"),
+                "idSerie": atual_str("idSerie"),
+                "dataElaboracao": atual_str("dataElaboracao"),
+                "remetente": cls._ids_csv(atual.get("remetente")).split(",")[0],
+            })
+        return payload
+
     async def alterar_documento_interno(
         self,
         id_documento: str,
@@ -609,13 +681,10 @@ class SEIClient:
         """Altera metadados de um documento interno (não o conteúdo).
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
-        payload: dict = {}
-        if descricao:
-            payload["descricao"] = descricao
-        if nivel_acesso:
-            payload["nivelAcesso"] = nivel_acesso
-        if id_hipotese_legal:
-            payload["idHipoteseLegal"] = id_hipotese_legal
+        atual = await self.consultar_documento_interno(id_documento)
+        payload = self._payload_alteracao(
+            atual, descricao, nivel_acesso, id_hipotese_legal, externo=False
+        )
         resp = await self._request(
             "POST", f"/documento/interno/{id_documento}/alterar", data=payload
         )
@@ -640,13 +709,10 @@ class SEIClient:
         conteúdo em memória (`arquivo_bytes` + `nome_arquivo`).
         Disponível desde mod-wssei 2.0.0 (SEI 4.0.x).
         """
-        payload: dict = {}
-        if descricao:
-            payload["descricao"] = descricao
-        if nivel_acesso:
-            payload["nivelAcesso"] = nivel_acesso
-        if id_hipotese_legal:
-            payload["idHipoteseLegal"] = id_hipotese_legal
+        atual = await self.consultar_documento_externo(id_documento)
+        payload = self._payload_alteracao(
+            atual, descricao, nivel_acesso, id_hipotese_legal, externo=True
+        )
 
         if arquivo_path or arquivo_bytes:
             nome, conteudo = self._ler_arquivo(
@@ -1689,7 +1755,7 @@ class SEIClient:
         """
         resp = await self._request(
             "POST", "/bloco/interno/anotacao/cadastrar",
-            data={"bloco": id_bloco, "protocolo": protocolo, "descricao": descricao},
+            data={"bloco": id_bloco, "protocolo": protocolo, "anotacao": descricao},
         )
         data = resp.json()
         if not data.get("sucesso"):
@@ -1704,18 +1770,27 @@ class SEIClient:
         """
         resp = await self._request(
             "POST", "/bloco/interno/anotacao/alterar",
-            data={"bloco": id_bloco, "protocolo": protocolo, "descricao": descricao},
+            data={"bloco": id_bloco, "protocolo": protocolo, "anotacao": descricao},
         )
         data = resp.json()
         if not data.get("sucesso"):
             raise Exception(f"Erro ao alterar anotação do bloco interno: {data.get('mensagem')}")
         return data.get("data", {"mensagem": data.get("mensagem")})
 
-    async def pesquisar_blocos_internos(self, filtro: str = "", limit: int = 50, start: int = 0) -> dict:
-        """Pesquisa blocos internos."""
+    async def pesquisar_blocos_internos(
+        self, filtro: str = "", limit: int = 50, start: int = 0, estado: str = ""
+    ) -> dict:
+        """Pesquisa blocos internos da unidade atual.
+
+        `filtro` vai como `filter` (palavras da descrição, BlocoRN::pesquisar);
+        `estado` é a lista de códigos separada por vírgula (ex.: "A,C").
+        O wssei ordena por id decrescente (mais recentes primeiro).
+        """
         params: dict = {"limit": limit, "start": start}
         if filtro:
             params["filter"] = filtro
+        if estado:
+            params["estado"] = estado
         resp = await self._request("GET", "/bloco/interno/pesquisar", params=params)
         data = resp.json()
         if not data.get("sucesso"):
@@ -1870,7 +1945,7 @@ class SEIClient:
         """
         resp = await self._request(
             "POST", "/bloco/assinatura/anotacao/cadastrar",
-            data={"bloco": id_bloco, "documento": documento, "descricao": descricao},
+            data={"bloco": id_bloco, "documento": documento, "anotacao": descricao},
         )
         data = resp.json()
         if not data.get("sucesso"):
@@ -1885,7 +1960,7 @@ class SEIClient:
         """
         resp = await self._request(
             "POST", "/bloco/assinatura/anotacao/alterar",
-            data={"bloco": id_bloco, "documento": documento, "descricao": descricao},
+            data={"bloco": id_bloco, "documento": documento, "anotacao": descricao},
         )
         data = resp.json()
         if not data.get("sucesso"):
@@ -1938,7 +2013,7 @@ class SEIClient:
         async def _enviar() -> httpx.Response:
             headers = await self._get_headers()
             return await self._client.post(
-                url, headers=headers, data=data,
+                url, headers=headers, data=self._campos_multipart(data),
                 files={"anexo": (nome, io.BytesIO(conteudo))},
             )
 
@@ -2411,6 +2486,60 @@ class SEIClient:
     # ------------------------------------------------------------------
     # Bloco de assinatura — assinar
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Codificação de formulário (ISO-8859-1)
+    # ------------------------------------------------------------------
+
+    # Tipografia comum fora do ISO-8859-1 → equivalente legível. Em campos de
+    # texto puro (descrição, especificação, anotação) uma entidade HTML
+    # apareceria literalmente; por isso translitera em vez de escapar.
+    _TRANSLITERAR = {
+        "\u2013": "-", "\u2014": "-", "\u2212": "-",
+        "\u2018": "'", "\u2019": "'", "\u201a": "'",
+        "\u201c": '"', "\u201d": '"', "\u201e": '"',
+        "\u2026": "...", "\u2022": "-", "\u00a0": " ",
+        "\u2122": "(TM)", "\u20ac": "EUR",
+    }
+
+    @classmethod
+    def _para_latin1(cls, valor) -> bytes:
+        texto = str(valor)
+        for de, para in cls._TRANSLITERAR.items():
+            if de in texto:
+                texto = texto.replace(de, para)
+        return texto.encode("iso-8859-1", errors="replace")
+
+    def _usar_latin1(self) -> bool:
+        return self._form_charset in ("iso-8859-1", "latin-1", "latin1")
+
+    def _codificar_formulario(self, kwargs: dict) -> None:
+        """Troca `data=dict` por corpo urlencoded em ISO-8859-1 (in-place)."""
+        dados = kwargs.get("data")
+        if not self._usar_latin1() or not isinstance(dados, dict) or "files" in kwargs:
+            return
+        from urllib.parse import urlencode
+
+        pares = []
+        for chave, valor in dados.items():
+            if valor is None:
+                continue
+            valores = valor if isinstance(valor, (list, tuple)) else [valor]
+            for v in valores:
+                pares.append((str(chave), self._para_latin1(v)))
+        kwargs.pop("data")
+        kwargs["content"] = urlencode(pares).encode("ascii")
+        kwargs.setdefault("headers", {})["Content-Type"] = (
+            "application/x-www-form-urlencoded; charset=ISO-8859-1"
+        )
+
+    def _campos_multipart(self, dados: dict) -> dict:
+        if not self._usar_latin1():
+            return dados
+        return {
+            k: (self._para_latin1(v) if isinstance(v, str) else v)
+            for k, v in dados.items()
+        }
 
     async def assinar_bloco(
         self, id_bloco: str, login: str, senha: str,
