@@ -124,7 +124,7 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 - *"Quais processos da unidade GPF estão sem movimentação há mais de 30 dias?"*
 - *"Compare o conteúdo dos documentos 2843449 e 2843450"*
 
-## Tools disponíveis (116)
+## Tools disponíveis (117)
 
 ### Sistema e metadados (3)
 
@@ -291,10 +291,11 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 | `sei_criar_grupo_acompanhamento` | Cria grupo de acompanhamento |
 | `sei_excluir_grupo_acompanhamento` | Exclui grupo de acompanhamento |
 
-### Bloco interno (10)
+### Bloco interno (11)
 
 | Tool | Descrição |
 |------|-----------|
+| `sei_pesquisar_blocos_internos` | Pesquisa blocos pelo nome (ignora acento, maiúsculas e ordem das palavras) |
 | `sei_criar_bloco_interno` | Cria bloco interno |
 | `sei_alterar_bloco_interno` | Altera descrição do bloco |
 | `sei_excluir_bloco_interno` | Exclui bloco(s) |
