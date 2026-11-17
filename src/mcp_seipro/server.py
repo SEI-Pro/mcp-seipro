@@ -40,8 +40,18 @@ _http_port = int(os.environ.get("PORT", 8000))
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     if _http_mode:
-        # Modo HTTP: clients criados por request com credenciais do token OAuth
-        yield {"sei": None, "sei_web": None}
+        # Modo HTTP (stateless): este lifespan roda UMA VEZ POR REQUEST. O
+        # SEIClient vem do cache por sessão OAuth (sessao_cache.py); aqui só se
+        # devolve o empréstimo ao fim do request, para o cache poder fechar um
+        # cliente despejado sem derrubar uma chamada em curso.
+        ctx_req = {"sei": None, "sei_web": None, "_emprestimos": []}
+        try:
+            yield ctx_req
+        finally:
+            from mcp_seipro.sessao_cache import CACHE
+
+            for entrada in ctx_req["_emprestimos"]:
+                CACHE.devolver(entrada)
     else:
         # Modo stdio: clients com credenciais das env vars
         client = SEIClient()
@@ -72,22 +82,33 @@ def _get_client(ctx: Context) -> SEIClient:
     if client is not None:
         return client
 
-    # Modo HTTP: extrai credenciais do token OAuth
+    # Modo HTTP: extrai credenciais do token OAuth e reaproveita o cliente
+    # (já autenticado) da mesma sessão OAuth — ver sessao_cache.py.
     if _http_mode:
         from mcp.server.auth.middleware.auth_context import get_access_token
-        from mcp_seipro.auth import get_sei_credentials_from_token
+        from mcp_seipro.auth import get_sessao_from_token
+        from mcp_seipro.sessao_cache import CACHE
 
         access_token = get_access_token()
         if not access_token:
             raise ValueError("Autenticacao necessaria. Reconecte o MCP.")
 
-        creds = get_sei_credentials_from_token(access_token.token)
-        if not creds:
+        sessao = get_sessao_from_token(access_token.token)
+        if not sessao:
             raise ValueError("Token invalido ou expirado. Reconecte o MCP.")
+        chave, creds = sessao
         _exigir_url_permitida(creds)
 
-        client = SEIClient(**creds, permitir_arquivo_local=False)
-        ctx.request_context.lifespan_context["sei"] = client
+        entrada = CACHE.emprestar(chave, creds)  # síncrono: sem corrida na criação
+        lifespan_ctx = ctx.request_context.lifespan_context
+        emprestimos = lifespan_ctx.get("_emprestimos")
+        if emprestimos is not None:
+            emprestimos.append(entrada)
+        else:  # sem lifespan HTTP (ex.: testes): não segura o empréstimo
+            CACHE.devolver(entrada)
+        client = entrada.cliente
+        client.nova_chamada()  # unidade atual não atravessa chamadas (ver docstring)
+        lifespan_ctx["sei"] = client
         return client
 
     raise ValueError("SEIClient nao configurado. Verifique as variaveis de ambiente.")

@@ -161,6 +161,16 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - `seguranca.py`: URL do SEI no login exige https, host em `SEI_ALLOWED_HOSTS` (se definido) e IPs só públicos (anti-SSRF). `SEI_EXTRA_HEADERS`/`SEI_CF_CLEARANCE` só vão ao host de `SEI_URL` (ou `SEI_SECRET_HOSTS`)
 - `arquivo_path` desabilitado em modo HTTP (era leitura arbitrária de arquivos do servidor, ex. `/proc/self/environ`). Testes: `tests/test_seguranca_http.py`
 
+### Logins no SEI (modo HTTP): conferência no /login, cache por sessão, re-login
+- **Restrição que governa:** senha errada repetida BLOQUEIA a conta no SEI. Nenhum caminho pode ter laço de tentativa de login; testes só contra SEI simulado (`tests/sei_simulado.py`)
+- **Token do wssei leva a senha** criptografada e o wssei **refaz o login no SIP a cada requisição** (`MdWsSeiUsuarioRN::autenticarToken`). A chave dele é `sha1(TokenSecret + Ymd)` → o token morre quando a data do servidor do SEI vira. Senha trocada no SIP = toda requisição com o token velho vira um login recusado
+- `POST /login` confere a senha com UMA chamada a `SEIClient.autenticar()`: recusa → 400 com o formulário; limite estourado → 429 sem tocar no SEI; borda/rede/SEI fora → 503 e **nenhum código emitido** (`auth._conferir_senha`). O cliente da conferência é fechado
+- `limite_login.py`: 3 recusas por (host, órgão, usuário) em 15 min → recusa sem requisição ao SEI. Vale para o /login **e** para as tools. Login em andamento ocupa vaga; sucesso não zera
+- `sessao_cache.py`: `SEIClient` autenticado por `sid` OAuth (estável no refresh), TTL 30 min, LRU 32 entradas / 3 com Chromium (contêiner de 1280 MB). Despejo fecha httpx/browser só quando o último request devolve o empréstimo (lifespan HTTP roda por request). Revogação invalida. **Senha recusada marca a sessão**: as chamadas seguintes recebem a mesma "Falha na autenticação SEI" sem requisição — só um /login novo sai disso
+- `nova_chamada()`: `_unidade_ativa` e cache de marcadores **não** atravessam chamadas — a unidade atual é gravada por USUÁRIO no SEI (`InfraDadoUsuario`) e pode mudar em outra sessão/navegador
+- Re-login em 401/403 (`_renovar_token_ou_negar`): token com menos de `SEI_RELOGIN_IDADE_MIN_S` (60 s) → acesso negado direto; mais velho → re-login uma vez, sob trava (chamadas concorrentes reaproveitam o token novo)
+- Cache e limite são **por processo**. Com N workers: até N logins por sessão e N × 3 recusas por janela. Hoje é um processo só (uvicorn sem `--workers`), e o estado OAuth em memória já supõe isso
+
 ### Limitações conhecidas
 - **Cancelar/excluir DOCUMENTO não existe na API**: o mod-wssei (conferido no master, 3.x) não tem rota nem RN para isso — as únicas rotas "cancelar" são `/bloco/assinatura/{id}/disponibilizacao/cancelar` e `/processo/{protocolo}/cancelar/sobrestamento`. Uma minuta indesejada só sai pela interface web (ou pelo scraper, hoje inoperante por SSO). Não há como fechar esse ciclo de erro do agente sem mudança no módulo
 - Cancelar assinatura: a função `DocumentoRN::cancelarAssinaturaInternoControlado` existe no core SEI (linha 4026) mas NÃO está exposta na API REST

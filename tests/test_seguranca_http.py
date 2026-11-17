@@ -256,7 +256,11 @@ def test_login_recusa_url_sei_interna_ou_sem_https(url):
 def test_login_ok_escapa_usuario_no_sucesso(monkeypatch):
     async def ok(url):
         return None
+
+    async def senha_aceita(creds):
+        return None
     monkeypatch.setattr(auth, "validar_url_sei", ok)
+    monkeypatch.setattr(auth, "_conferir_senha", senha_aceita)
     sid = _pendente(nome="Claude")
     r = _app().post("/login", data={**CREDS, "sei_usuario": '"><script>x()</script>',
                                      "session": sid})

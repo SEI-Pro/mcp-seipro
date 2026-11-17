@@ -1,5 +1,6 @@
 """Cliente REST genérico para o mod-wssei v2 do SEI."""
 
+import asyncio
 import base64
 import json
 import logging
@@ -38,6 +39,59 @@ class SEIAcessoNegado(Exception):
         self.origem = "sei"
 
 
+class SEICredencialRecusada(Exception):
+    """O SEI recusou o login (POST /autenticar): `sucesso=false` ou 401/403 do wssei.
+
+    O texto começa SEMPRE com "Falha na autenticação SEI: " — consumidores
+    classificam o erro por esse prefixo. Subclasse de Exception, então quem já
+    capturava `Exception` continua vendo a mesma mensagem.
+
+    `repetida=True` é a recusa reapresentada sem tocar no SEI (ver
+    SEIClient._credencial_recusada): repetir senha errada bloqueia a conta.
+    """
+
+    def __init__(self, mensagem_sei: Any, *, repetida: bool = False):
+        self.mensagem_sei = str(mensagem_sei or "").strip() or "(sem mensagem)"
+        texto = f"Falha na autenticação SEI: {self.mensagem_sei}"
+        if repetida:
+            texto += (
+                " — o SEI já recusou o login desta sessão; para não somar "
+                "tentativas que podem bloquear a conta, o MCP não tenta de novo. "
+                "Reconecte o MCP para informar a senha outra vez."
+            )
+        super().__init__(texto)
+        self.repetida = repetida
+
+
+class SEILoginSuspenso(SEICredencialRecusada):
+    """Login NÃO tentado: o usuário atingiu o limite de recusas recentes.
+
+    Levantado antes de qualquer requisição ao SEI (ver limite_login.py).
+    """
+
+    def __init__(self, segundos_restantes: float, max_falhas: int, janela_s: float):
+        self.segundos_restantes = max(0.0, float(segundos_restantes))
+        minutos = max(1, int(-(-self.segundos_restantes // 60)))
+        Exception.__init__(
+            self,
+            "Falha na autenticação SEI: login suspenso pelo MCP — o SEI recusou "
+            f"{max_falhas} logins deste usuário nos últimos {int(janela_s // 60)} "
+            "min. Para não bloquear a conta, nenhuma tentativa será enviada ao "
+            f"SEI pelos próximos ~{minutos} min.",
+        )
+        self.mensagem_sei = ""
+        self.repetida = False
+
+
+# Abaixo desta idade, um 401/403 com o token NÃO é tratado como expiração: o
+# token acabou de ser emitido, re-logar seria um login a mais (e, se a senha
+# mudou, uma falha de senha a mais) para chegar ao mesmo "acesso negado".
+_RELOGIN_IDADE_MIN_S = float(os.environ.get("SEI_RELOGIN_IDADE_MIN_S", "60"))
+
+# Chaves do cache de metadados que dependem da unidade atual.
+_CACHE_POR_UNIDADE = ("marcadores:",)
+
+
 class SEIClient:
     """Cliente REST assíncrono para qualquer instância do SEI com mod-wssei v2."""
 
@@ -48,6 +102,24 @@ class SEIClient:
         self._orgao = kwargs.get("sei_orgao", os.environ.get("SEI_ORGAO", "0"))
         self._contexto = kwargs.get("sei_contexto", os.environ.get("SEI_CONTEXTO", ""))
         self._token: Optional[str] = None
+        # Instante (monotonic) em que o token atual foi emitido — decide se um
+        # 401/403 pode ser expiração (re-login) ou não (acesso negado direto).
+        self._token_emitido_em: Optional[float] = None
+        self._relogin_idade_min = float(
+            kwargs.get("relogin_idade_min_s", _RELOGIN_IDADE_MIN_S)
+        )
+        # Um login por vez: chamadas concorrentes no mesmo cliente esperam o
+        # login em andamento em vez de fazer o seu.
+        self._auth_lock = asyncio.Lock()
+        # Mensagem da recusa do SEI. Uma vez preenchida, autenticar() não toca
+        # mais no SEI: as credenciais deste cliente não mudam, e cada nova
+        # tentativa com senha errada conta para o bloqueio da conta.
+        self._credencial_recusada: Optional[str] = None
+        # Última falha de autenticar(): None | "credencial" | "suspenso" | "outra".
+        # Lida pelo cache de sessões (sessao_cache.py) para invalidar a entrada.
+        self.falha_autenticacao: Optional[str] = None
+        # Limite de recusas por usuário (limite_login.GuardaLogin), opcional.
+        self._guarda_login = kwargs.get("guarda_login")
         self._unidade_ativa: Optional[str] = None
         self._id_usuario: Optional[str] = None
         self._id_orgao_usuario: Optional[str] = None
@@ -278,6 +350,15 @@ class SEIClient:
         )
 
     @staticmethod
+    def _veio_da_borda(resp: httpx.Response) -> bool:
+        """`server: cloudflare` e corpo que não é JSON do wssei → fabricado na borda."""
+        corpo = (resp.text or "").strip()
+        return (
+            "cloudflare" in resp.headers.get("server", "").lower()
+            and not corpo.startswith("{")
+        )
+
+    @staticmethod
     def _raise_acesso_negado(resp: httpx.Response) -> None:
         """401/403 que sobreviveu à re-autenticação: separa borda de SEI.
 
@@ -287,10 +368,9 @@ class SEIClient:
         """
         corpo = (resp.text or "").strip()
         corpo_curto = corpo[:600] + ("…" if len(corpo) > 600 else "")
-        servidor_borda = "cloudflare" in resp.headers.get("server", "").lower()
         ray = resp.headers.get("cf-ray", "")
 
-        if servidor_borda and not corpo.lstrip().startswith("{"):
+        if SEIClient._veio_da_borda(resp):
             # Sem JSON do wssei no corpo → a resposta foi fabricada na borda.
             raise SEICloudflareBlocked(
                 f"{resp.status_code} devolvido pela BORDA (Cloudflare) — a "
@@ -344,8 +424,38 @@ class SEIClient:
 
     async def _get_headers(self) -> dict:
         if not self._token:
-            await self.autenticar()
+            async with self._auth_lock:
+                if not self._token:  # outra chamada pode ter logado enquanto esta esperava
+                    await self._autenticar_sem_trava()
         return {"token": self._token}
+
+    def _idade_token(self) -> Optional[float]:
+        if self._token_emitido_em is None:
+            return None
+        return time.monotonic() - self._token_emitido_em
+
+    async def _renovar_token_ou_negar(self, resp: httpx.Response, token_usado: Optional[str]) -> None:
+        """401/403 com token: decide entre re-login (uma vez) e acesso negado direto.
+
+        - Outra chamada já trocou o token enquanto esta voava → só refazer, sem login.
+        - Token emitido há menos de `_relogin_idade_min` s → não pode ser
+          expiração: levanta o acesso negado sem re-logar.
+        - Token mais velho → pode ter expirado (o wssei troca a chave do token a
+          cada dia) → re-login, uma vez.
+        Retornando sem exceção, o chamador refaz a requisição com self._token.
+        """
+        async with self._auth_lock:
+            if self._token and self._token != token_usado:
+                return
+            idade = self._idade_token()
+            if idade is not None and idade < self._relogin_idade_min:
+                logger.info(
+                    "%s com token emitido há %.0fs: acesso negado, sem re-login.",
+                    resp.status_code, idade,
+                )
+                self._raise_acesso_negado(resp)
+            logger.info("Token recusado (%s), re-autenticando uma vez...", resp.status_code)
+            await self._autenticar_sem_trava()
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         """Faz request com re-autenticação automática em caso de 401/403."""
@@ -361,8 +471,7 @@ class SEIClient:
         # sem re-autenticar à toa (o retry daria 403 de novo).
         self._raise_if_waf_block(resp)
         if resp.status_code in (401, 403):
-            logger.info("Token expirado, re-autenticando...")
-            await self.autenticar()
+            await self._renovar_token_ou_negar(resp, kwargs["headers"].get("token"))
             kwargs["headers"].update({"token": self._token})
             resp = await self._client.request(method, f"{self.base_url}{path}", **kwargs)
             await self._handle_cloudflare(resp)
@@ -375,7 +484,44 @@ class SEIClient:
         return resp
 
     async def autenticar(self) -> str:
-        """Autentica no SEI e obtém token."""
+        """Autentica no SEI e obtém token. UMA requisição ao /autenticar, sem retry.
+
+        Levanta SEICredencialRecusada se o SEI recusar; daí em diante este
+        cliente não envia mais a senha (ver _credencial_recusada).
+        """
+        async with self._auth_lock:
+            return await self._autenticar_sem_trava()
+
+    async def _autenticar_sem_trava(self) -> str:
+        """Corpo de autenticar(); o chamador segura self._auth_lock."""
+        if self._credencial_recusada is not None:
+            self.falha_autenticacao = "credencial"
+            raise SEICredencialRecusada(self._credencial_recusada, repetida=True)
+        guarda = self._guarda_login
+        if guarda is not None:
+            try:
+                guarda.reservar()  # SEILoginSuspenso → nada vai ao SEI
+            except SEILoginSuspenso:
+                self.falha_autenticacao = "suspenso"
+                raise
+        recusada = False
+        try:
+            token = await self._login_wssei()
+        except SEICredencialRecusada as e:
+            recusada = True
+            self._credencial_recusada = e.mensagem_sei
+            self.falha_autenticacao = "credencial"
+            raise
+        except BaseException:
+            self.falha_autenticacao = "outra"
+            raise
+        finally:
+            if guarda is not None:
+                guarda.liberar(recusada=recusada)
+        self.falha_autenticacao = None
+        return token
+
+    async def _login_wssei(self) -> str:
         data_login = {
             "usuario": self._usuario,
             "senha": self._senha,
@@ -384,15 +530,28 @@ class SEIClient:
         }
         resp = await self._client.post(f"{self.base_url}/autenticar", data=data_login)
         if await self._handle_cloudflare(resp):
-            # escalou p/ browser: refaz o login pelo novo transporte
+            # escalou p/ browser: refaz o login pelo novo transporte (o 1º POST
+            # parou no desafio da borda, não chegou ao SEI)
             resp = await self._client.post(f"{self.base_url}/autenticar", data=data_login)
             await self._handle_cloudflare(resp)
+        if resp.status_code in (401, 403):
+            self._raise_if_waf_block(resp)
+            if self._veio_da_borda(resp):
+                self._raise_acesso_negado(resp)  # → SEICloudflareBlocked
+            try:
+                mensagem = (resp.json() or {}).get("mensagem")
+            except ValueError:
+                mensagem = None
+            raise SEICredencialRecusada(
+                mensagem or f"HTTP {resp.status_code} em /autenticar"
+            )
         resp.raise_for_status()
         data = resp.json()
         if not data.get("sucesso"):
-            raise Exception(f"Falha na autenticação SEI: {data.get('mensagem')}")
+            raise SEICredencialRecusada(data.get("mensagem"))
         payload = data["data"]
         self._token = payload["token"]
+        self._token_emitido_em = time.monotonic()
         login_data = payload.get("loginData") or {}
         id_usuario = login_data.get("IdUsuario") or login_data.get("idUsuario")
         if id_usuario is not None:
@@ -877,7 +1036,27 @@ class SEIClient:
         if not data.get("sucesso"):
             raise Exception(f"Erro ao trocar unidade: {data.get('mensagem')}")
         self._unidade_ativa = id_unidade
+        self._limpar_cache_da_unidade()
         return {"mensagem": data.get("mensagem")}
+
+    def _limpar_cache_da_unidade(self) -> None:
+        """Descarta metadados cacheados que dependem da unidade (ex.: marcadores)."""
+        for chave in [k for k in self._cache if k.startswith(_CACHE_POR_UNIDADE)]:
+            self._cache.pop(chave, None)
+
+    def nova_chamada(self) -> None:
+        """Zera o estado que, antes do cache de sessões, morria a cada chamada.
+
+        No modo HTTP o cliente agora sobrevive entre chamadas de tool (mesma
+        sessão OAuth). A unidade atual, porém, é gravada no SEI por USUÁRIO
+        (InfraDadoUsuario) e pode ser trocada por outra sessão ou pelo
+        navegador entre duas chamadas — então a crença local sobre ela não é
+        reaproveitada: cada chamada começa como antes, sem `_unidade_ativa` e
+        sem os metadados que dependem da unidade. Token e metadados por usuário
+        continuam.
+        """
+        self._unidade_ativa = None
+        self._limpar_cache_da_unidade()
 
     async def pesquisar_unidades(
         self, filtro: str = "", limit: int = 50, start: int = 0
@@ -1935,21 +2114,21 @@ class SEIClient:
         nome, conteudo = arquivo
         url = f"{self.base_url}{path}"
 
-        async def _enviar() -> httpx.Response:
+        async def _enviar() -> tuple[Optional[str], httpx.Response]:
             headers = await self._get_headers()
-            return await self._client.post(
+            return headers.get("token"), await self._client.post(
                 url, headers=headers, data=data,
                 files={"anexo": (nome, io.BytesIO(conteudo))},
             )
 
-        resp = await _enviar()
+        token_usado, resp = await _enviar()
         if await self._handle_cloudflare(resp):
-            resp = await _enviar()
+            token_usado, resp = await _enviar()
             await self._handle_cloudflare(resp)
         self._raise_if_waf_block(resp)
         if resp.status_code in (401, 403):
-            self._token = None  # força re-autenticação em _get_headers
-            resp = await _enviar()
+            await self._renovar_token_ou_negar(resp, token_usado)
+            _, resp = await _enviar()
             await self._handle_cloudflare(resp)
             self._raise_if_waf_block(resp)
             if resp.status_code in (401, 403):

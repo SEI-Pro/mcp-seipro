@@ -22,6 +22,11 @@ O estado de revogação/rotação fica EM MEMÓRIA: um restart o esquece. Isso n
 reabre tokens expirados, mas um refresh já usado volta a valer uma vez após o
 restart. Para derrubar todas as sessões de uma vez, troque JWT_SECRET.
 
+O POST /login confere a senha com UMA chamada ao /autenticar do SEI (sem retry)
+antes de emitir o código: recusa → formulário de novo (400); limite de recusas
+por usuário estourado → 429 sem tocar no SEI (limite_login.py); borda/rede/SEI
+fora → 503, sem código. Senha errada repetida bloqueia a conta no SEI.
+
 Os clientes OAuth (registro dinâmico) também são selados: o client_id carrega
 os metadados do cliente criptografados, então o registro sobrevive a restart
 sem banco — sem isso, o refresh falharia após cada deploy.
@@ -37,9 +42,12 @@ Variáveis de ambiente:
   OAUTH_ACCESS_TTL / OAUTH_REFRESH_TTL / OAUTH_SESSION_MAX — em segundos.
 """
 
+import asyncio
 import base64
+import hashlib
 import html
 import json
+import logging
 import os
 import re
 import secrets
@@ -65,6 +73,8 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from .seguranca import validar_url_sei
+
+logger = logging.getLogger(__name__)
 
 _BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000")
 
@@ -162,6 +172,9 @@ def _podar() -> None:
 def _revogar_sessao(sid: str) -> None:
     if sid:
         _sessoes_revogadas[sid] = time.time() + SESSION_MAX
+        from .sessao_cache import CACHE
+
+        CACHE.invalidar(sid)  # fecha o SEIClient da sessão (httpx/browser)
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +528,77 @@ def _render_login(session: str, pending: dict, erro: str = "", valores: dict | N
     }), status)
 
 
+_CONFERENCIA_TIMEOUT_S = float(os.environ.get("SEI_LOGIN_CONFERENCIA_TIMEOUT_S", "90"))
+
+
+def _motivo_indisponivel(e: BaseException) -> str:
+    import httpx
+
+    from .sei_client import SEICloudflareBlocked
+
+    if isinstance(e, SEICloudflareBlocked):
+        return "a borda (Cloudflare) do órgão barrou a conexão antes de chegar ao SEI"
+    if isinstance(e, (asyncio.TimeoutError, httpx.TimeoutException)):
+        return f"o SEI não respondeu em {int(_CONFERENCIA_TIMEOUT_S)} s"
+    if isinstance(e, httpx.HTTPStatusError):
+        return f"o SEI respondeu HTTP {e.response.status_code} ao login"
+    if isinstance(e, httpx.TransportError):
+        return "não foi possível conectar ao endereço do SEI informado"
+    return f"erro inesperado ({type(e).__name__})"
+
+
+async def _conferir_senha(sei_creds: dict) -> tuple[int, str] | None:
+    """Uma requisição ao /autenticar do SEI, sem retry. None = o SEI aceitou.
+
+    Senão, (status HTTP da página, mensagem para o formulário):
+      400 — o SEI recusou o login;
+      429 — o limite de recusas do usuário está estourado (nada foi ao SEI);
+      503 — não deu para conferir agora (borda, rede, SEI fora do ar).
+    Nenhum código de acesso é emitido em caso algum de falha.
+    """
+    from .limite_login import LIMITE, guarda_para
+    from .sei_client import SEIClient, SEICredencialRecusada, SEILoginSuspenso
+
+    guarda = guarda_para(sei_creds)
+    cliente = None
+    try:
+        cliente = SEIClient(**sei_creds, permitir_arquivo_local=False, guarda_login=guarda)
+        await asyncio.wait_for(cliente.autenticar(), timeout=_CONFERENCIA_TIMEOUT_S)
+        return None
+    except SEILoginSuspenso as e:
+        minutos = max(1, int(-(-e.segundos_restantes // 60)))
+        return 429, (
+            f"Login suspenso pelo SEI Pro: o SEI recusou {LIMITE.max_falhas} logins "
+            f"deste usuário nos últimos {int(LIMITE.janela_s // 60)} min. Para não "
+            "bloquear a conta, nenhuma tentativa será enviada ao SEI pelos próximos "
+            f"~{minutos} min."
+        )
+    except SEICredencialRecusada as e:
+        restam = max(0, LIMITE.max_falhas - len(LIMITE._podar(guarda.chave)))
+        aviso = (
+            f" Mais {restam} recusa(s) e o SEI Pro suspende novas tentativas por "
+            f"{int(LIMITE.janela_s // 60)} min." if restam else
+            f" Novas tentativas ficam suspensas por {int(LIMITE.janela_s // 60)} min."
+        )
+        return 400, (
+            f"O SEI recusou o login: {e.mensagem_sei}. Senha errada repetida "
+            "bloqueia a conta no SEI." + aviso
+        )
+    except Exception as e:  # noqa: BLE001
+        # Nunca loga credenciais: só o tipo e o motivo (URL do SEI, status).
+        logger.warning("Conferência de senha no /login falhou: %s: %s", type(e).__name__, e)
+        return 503, (
+            f"Não foi possível conferir a senha agora: {_motivo_indisponivel(e)}. "
+            "Nenhum acesso foi liberado. Tente de novo em alguns minutos."
+        )
+    finally:
+        if cliente is not None:
+            try:
+                await cliente.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _pending_valido(session_id: str) -> dict | None:
     pending = _auth_codes.get(f"pending:{session_id}")
     if not pending or pending.get("expires_at", 0) < time.time():
@@ -558,6 +642,22 @@ async def login_submit(request: Request):
     if erro:
         # Mantém a sessão pendente: o usuário corrige a URL e reenvia.
         return _render_login(session_id, pending, erro, sei_creds, status=400)
+
+    # Um POST por vez por sessão pendente: duplo clique não vira dois logins.
+    if pending.get("conferindo"):
+        return _render_login(session_id, pending,
+                             "A senha ainda está sendo conferida com o SEI. Aguarde.",
+                             sei_creds, status=409)
+    pending["conferindo"] = True
+    try:
+        falha = await _conferir_senha(sei_creds)
+    finally:
+        pending.pop("conferindo", None)
+    if falha:
+        status, msg = falha
+        # Mantém o pending (pode corrigir e reenviar). A senha nunca volta ao
+        # formulário: _render_login não tem campo para ela.
+        return _render_login(session_id, pending, msg, sei_creds, status=status)
 
     _auth_codes.pop(f"pending:{session_id}", None)
     code = secrets.token_urlsafe(32)
@@ -616,10 +716,10 @@ _SUCCESS_HTML = """<!DOCTYPE html>
 <div class="card">
   <div class="check">&#10003;</div>
   <h1>SEI Pro configurado!</h1>
-  <p>Credenciais de <span class="user">{usuario}</span> prontas.</p>
+  <p>Login de <span class="user">{usuario}</span> conferido com o SEI.</p>
   <ul class="steps">
     <li data-n="1">Clique em <strong>Continuar</strong> para voltar a <strong>{destino}</strong></li>
-    <li data-n="2">A conex&#227;o com o SEI acontece na sua primeira pergunta</li>
+    <li data-n="2">A sess&#227;o com o SEI &#233; aberta na sua primeira pergunta e reaproveitada nas seguintes</li>
     <li data-n="3">Comece com: <em>&#8220;Liste as unidades do SEI&#8221;</em></li>
   </ul>
   <a class="btn" href="{redirect_uri}">Continuar</a>
@@ -631,7 +731,20 @@ _SUCCESS_HTML = """<!DOCTYPE html>
 
 def get_sei_credentials_from_token(token: str) -> dict | None:
     """Extrai credenciais SEI de um access token. Usado pelo server.py."""
+    sessao = get_sessao_from_token(token)
+    return sessao[1] if sessao else None
+
+
+def get_sessao_from_token(token: str) -> tuple[str, dict] | None:
+    """(chave da sessão OAuth, credenciais SEI) de um access token válido.
+
+    A chave é o `sid` — o mesmo em todos os tokens da sessão (o refresh o
+    preserva) e distinto entre sessões do mesmo usuário. Token sem `sid` (não
+    emitido por esta versão) cai no hash do próprio token: nunca no usuário.
+    """
     payload = _abrir_token(token)
-    if not payload or payload.get("typ") != "access":
+    if not payload or payload.get("typ") != "access" or not payload.get("sei"):
         return None
-    return payload.get("sei")
+    sid = payload.get("sid")
+    chave = sid if sid else "tok:" + hashlib.sha256(token.encode()).hexdigest()
+    return chave, payload["sei"]
