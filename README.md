@@ -265,7 +265,7 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 | `sei_pesquisar_contatos` | Pesquisa contatos cadastrados |
 | `sei_criar_contato` | Cria novo contato |
 
-### Marcador (8)
+### Marcador (9)
 
 | Tool | Descrição |
 |------|-----------|
@@ -274,6 +274,7 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 | `sei_desativar_marcador` | Desativa marcador(es) sem excluir |
 | `sei_reativar_marcador` | Reativa marcador(es) desativados |
 | `sei_marcar_processo` | Adiciona marcador a um processo |
+| `sei_remover_marcador_processo` | Remove marcador de um processo (requer patch no mod-wssei) |
 | `sei_pesquisar_marcadores` | Lista marcadores disponíveis |
 | `sei_consultar_marcador_processo` | Consulta marcadores ativos de um processo |
 | `sei_historico_marcador_processo` | Histórico de marcadores do processo |
@@ -329,11 +330,12 @@ Com o MCP SEI Pro configurado, basta conversar com o Claude em linguagem natural
 
 ## Compatibilidade com versões do SEI
 
-Todos os **116 endpoints funcionam desde o mod-wssei 2.0.0** (SEI 4.0.x), exceto um:
+Todos os **116 endpoints funcionam desde o mod-wssei 2.0.0** (SEI 4.0.x), exceto estes:
 
 | Tool | Versão mínima |
 |------|---------------|
 | `sei_listar_relacionamentos` | mod-wssei **3.0.2+** (SEI 5.0.x) |
+| `sei_remover_marcador_processo` | rota que o mod-wssei oficial não tem: o órgão aplica [`patches/mod-wssei-remover-marcador.patch`](patches/mod-wssei-remover-marcador.patch) |
 
 Tabela de compatibilidade SEI ↔ mod-wssei:
 

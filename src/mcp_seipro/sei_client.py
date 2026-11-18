@@ -1673,6 +1673,40 @@ class SEIClient:
             raise Exception(f"Erro ao marcar processo: {data.get('mensagem')}")
         return data.get("data", {"mensagem": data.get("mensagem")})
 
+    async def remover_marcador_processo(self, id_procedimento: str, id_marcador: str) -> dict:
+        """Remove um marcador de um processo (na unidade atual).
+
+        A rota NÃO existe no mod-wssei oficial (conferido até a 3.0.6) — vem do
+        patch `patches/mod-wssei-remover-marcador.patch`, que chama
+        `AndamentoMarcadorRN::remover` do core. O wssei responde JSON com
+        `sucesso` em toda rota que conhece; rota ausente cai no Slim sem error
+        middleware (404/405/500 sem esse JSON), e é isso que se distingue aqui.
+        """
+        caminho = f"/marcador/processo/{id_procedimento}/remover"
+        try:
+            resp = await self._request("POST", caminho, data={"marcador": id_marcador})
+            data = resp.json()
+        except (httpx.HTTPStatusError, ValueError) as e:
+            r = getattr(e, "response", None)
+            try:
+                data = r.json() if r is not None else None
+            except ValueError:
+                data = None
+            if not (isinstance(data, dict) and "sucesso" in data):
+                status = r.status_code if r is not None else "200 sem JSON"
+                raise Exception(
+                    f"POST {caminho} não respondeu como rota do wssei (HTTP {status}, "
+                    "sem o JSON 'sucesso' que o módulo devolve nas rotas que conhece). "
+                    "O mod-wssei oficial não tem remoção de marcador (conferido até a "
+                    "3.0.6): a rota vem de um patch que o órgão precisa aplicar. Daqui "
+                    "não dá para afirmar se a rota falta nesta instalação ou se outra "
+                    "coisa respondeu no lugar; sei_versao mostra a versão instalada. "
+                    "Sem a rota, o marcador só sai pela interface web do SEI."
+                ) from e
+        if not data.get("sucesso"):
+            raise Exception(f"Erro ao remover marcador do processo: {data.get('mensagem')}")
+        return data.get("data") or {"mensagem": data.get("mensagem")}
+
     async def consultar_marcador_processo(self, id_procedimento: str) -> list[dict]:
         """Consulta marcadores de um processo."""
         resp = await self._request("GET", f"/marcador/processo/{id_procedimento}/consultar")

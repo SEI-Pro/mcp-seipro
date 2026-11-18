@@ -3124,12 +3124,47 @@ async def sei_marcar_processo(
     - marcador: ID do marcador (use sei_pesquisar_marcadores para listar)
     - texto: texto/comentário associado ao marcador (opcional)
 
-    Para remover, use marcador vazio ou marque com outro marcador.
+    Marcar de novo com o mesmo marcador troca só o texto. Marcador vazio não
+    remove (o SEI recusa com "Marcador não informado."); para tirar o marcador
+    do processo existe sei_remover_marcador_processo.
     """
     try:
         client = _get_client(ctx)
         id_proc = await _resolver_processo(client, processo)
         result = await client.marcar_processo(id_proc, marcador, texto)
+        return _json(result)
+    except Exception as e:
+        return _error(str(e))
+
+
+@mcp.tool()
+async def sei_remover_marcador_processo(
+    processo: str,
+    marcador: str,
+    ctx: Context = None,
+) -> str:
+    """Remove um marcador de um processo, na unidade atual.
+
+    Parâmetros:
+    - processo: protocolo formatado ou IdProcedimento
+    - marcador: ID do marcador a remover (sei_consultar_marcador_processo ou
+      sei_pesquisar_marcadores mostram os ids)
+
+    Tira o marcador só deste processo. O marcador continua existindo na unidade
+    (excluí-lo é sei_excluir_marcador) e a remoção fica no histórico
+    (sei_historico_marcador_processo).
+
+    Requer a rota POST /marcador/processo/{id}/remover, que o mod-wssei oficial
+    não tem (conferido até a 3.0.6) e que vem de um patch aplicado pelo órgão.
+    Sem ela, a tool responde que a rota não está disponível e o marcador só sai
+    pela interface web do SEI.
+    """
+    try:
+        if not str(marcador).strip():
+            return _error("Informe o id do marcador a remover.")
+        client = _get_client(ctx)
+        id_proc = await _resolver_processo(client, processo)
+        result = await client.remover_marcador_processo(id_proc, str(marcador).strip())
         return _json(result)
     except Exception as e:
         return _error(str(e))
@@ -4683,6 +4718,7 @@ _TITULOS_TOOLS = {
     "sei_criar_marcador": "Criar marcador",
     "sei_excluir_marcador": "Excluir marcador",
     "sei_marcar_processo": "Marcar processo",
+    "sei_remover_marcador_processo": "Remover marcador do processo",
     "sei_pesquisar_marcadores": "Pesquisar marcadores",
     "sei_consultar_marcador_processo": "Marcadores do processo",
     "sei_acompanhar_processo": "Acompanhar processo",

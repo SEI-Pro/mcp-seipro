@@ -1,0 +1,251 @@
+From fdbda935cf074a63c203dba4c87a8995346caf09 Mon Sep 17 00:00:00 2001
+From: Pedro Soares <pedrohsoares.adv@gmail.com>
+Date: Wed, 18 Nov 2026 12:56:14 -0300
+Subject: [PATCH] feat(marcador): rota para remover marcador de processo
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+POST /marcador/processo/{protocolo}/remover (form: marcador) chama
+AndamentoMarcadorRN::remover do core, o mesmo caminho da tela
+andamento_marcador_remocao.php. Até aqui a API só adicionava marcador:
+o SEI 4+ recusa marcar com marcador vazio ("Marcador não informado."),
+então não havia como tirar um marcador de um processo pela API.
+
+Antes de remover, confere que o marcador está vigente no processo e é da
+unidade atual: remover() grava o andamento de remoção mesmo sem o
+marcador estar no processo e não filtra por unidade.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/rn/MdWsSeiMarcadorRN.php        | 49 ++++++++++++++++++++
+ src/versao/v2/MdWsSeiServicosV2.php | 11 +++++
+ swagger/wssei.json                  | 70 +++++++++++++++++++++++++++++
+ swagger/wssei.yaml                  | 49 ++++++++++++++++++++
+ 4 files changed, 179 insertions(+)
+
+diff --git a/src/rn/MdWsSeiMarcadorRN.php b/src/rn/MdWsSeiMarcadorRN.php
+index 087257d..d9a5bdd 100644
+--- a/src/rn/MdWsSeiMarcadorRN.php
++++ b/src/rn/MdWsSeiMarcadorRN.php
+@@ -424,4 +424,53 @@ class MdWsSeiMarcadorRN extends MarcadorRN {
+     }
+   }
+ 
++    /**
++   * M�todo que remove o marcador de um processo na unidade atual
++   * @return array
++   */
++  protected function removerMarcadorProcessoControlado(AndamentoMarcadorDTO $andamentoMarcadorDTOParam)
++    {
++    try{
++        $objInfraException = new InfraException();
++
++      if(InfraString::isBolVazia($andamentoMarcadorDTOParam->getDblIdProcedimento())){
++          $objInfraException->lancarValidacao('Processo n�o informado.');
++      }
++      if(InfraString::isBolVazia($andamentoMarcadorDTOParam->getNumIdMarcador())){
++          $objInfraException->lancarValidacao('Marcador n�o informado.');
++      }
++
++        $andamentoMarcadorRN = new AndamentoMarcadorRN();
++
++        /**
++         * AndamentoMarcadorRN::remover grava o andamento de remo��o mesmo que o
++         * marcador n�o esteja no processo, e n�o filtra por unidade. A interface
++         * web s� oferece remover marcador vigente da unidade atual; aqui vale a
++         * mesma regra.
++         */
++        $andamentoMarcadorDTO = new AndamentoMarcadorDTO();
++        $andamentoMarcadorDTO->retNumIdAndamentoMarcador();
++        $andamentoMarcadorDTO->setDblIdProcedimento($andamentoMarcadorDTOParam->getDblIdProcedimento());
++        $andamentoMarcadorDTO->setNumIdMarcador($andamentoMarcadorDTOParam->getNumIdMarcador());
++        $andamentoMarcadorDTO->setNumIdUnidade(SessaoSEI::getInstance()->getNumIdUnidadeAtual());
++        $andamentoMarcadorDTO->setStrSinUltimo('S');
++        $andamentoMarcadorDTO->setNumMaxRegistrosRetorno(1);
++
++      if($andamentoMarcadorRN->consultar($andamentoMarcadorDTO) == null){
++          $objInfraException->lancarValidacao('Marcador n�o encontrado no processo para a unidade atual.');
++      }
++
++        $dto = new AndamentoMarcadorDTO();
++        $dto->setDblIdProcedimento($andamentoMarcadorDTOParam->getDblIdProcedimento());
++        $dto->setNumIdMarcador($andamentoMarcadorDTOParam->getNumIdMarcador());
++        /** Chamando componente SEI para remover o marcador do processo */
++        $andamentoMarcadorRN->remover([$dto]);
++
++        return MdWsSeiRest::formataRetornoSucessoREST('Marcador removido do processo com sucesso.', null);
++    }catch (Exception $e){
++        LogSEI::getInstance()->gravar(InfraException::inspecionar($e));
++        return MdWsSeiRest::formataRetornoErroREST($e);
++    }
++  }
++
+ }
+\ No newline at end of file
+diff --git a/src/versao/v2/MdWsSeiServicosV2.php b/src/versao/v2/MdWsSeiServicosV2.php
+index 81752c0..fd89ed8 100644
+--- a/src/versao/v2/MdWsSeiServicosV2.php
++++ b/src/versao/v2/MdWsSeiServicosV2.php
+@@ -1809,6 +1809,17 @@ class MdWsSeiServicosV2 extends MdWsSeiVersaoServicos
+                   $dto->setStrTexto($this->getParam($request, 'texto'));
+                   return JsonResponse::create($response, $rn->marcarProcesso($dto));
+               });
++              $app->post('/processo/{protocolo:[0-9]+}/remover', function ($request, $response, $args) {
++                  /** @var Slim\Psr7\Request $request */
++                  $routeContext = RouteContext::fromRequest($request);
++                  $route = $routeContext->getRoute();
++                  $protocolo = $route->getArgument('protocolo');
++                  $rn = new MdWsSeiMarcadorRN();
++                  $dto = new AndamentoMarcadorDTO();
++                  $dto->setDblIdProcedimento($protocolo);
++                  $dto->setNumIdMarcador($this->getParam($request, 'marcador'));
++                  return JsonResponse::create($response, $rn->removerMarcadorProcesso($dto));
++              });
+               $app->get('/processo/{protocolo:[0-9]+}/consultar', function ($request, $response, $args) {
+                   /** @var Slim\Psr7\Request $request */
+                   $routeContext = RouteContext::fromRequest($request);
+diff --git a/swagger/wssei.json b/swagger/wssei.json
+index 3cd7f4a..6da4780 100644
+--- a/swagger/wssei.json
++++ b/swagger/wssei.json
+@@ -11704,6 +11704,76 @@
+         }
+       }
+     },
++    "/marcador/processo/{protocolo}/remover": {
++      "post": {
++        "tags": [
++          "Marcador"
++        ],
++        "summary": "Remover Marcador do Processo",
++        "description": "Remove o Marcador do Processo na unidade atual. O marcador precisa estar vigente no processo e pertencer à unidade atual",
++        "operationId": "removerMarcadorProcesso",
++        "parameters": [
++          {
++            "name": "protocolo",
++            "in": "path",
++            "description": "[obrigatório][int] Recebe o id do processo",
++            "required": true,
++            "schema": {
++              "type": "integer"
++            }
++          },
++          {
++            "name": "token",
++            "in": "header",
++            "description": "[obrigatório][string] Recebe o token de autenticação",
++            "required": true,
++            "schema": {
++              "type": "string"
++            }
++          },
++          {
++            "name": "unidade",
++            "in": "header",
++            "description": "[opcional][int] Recebe o id da unidade para manter ou alterar a unidade da sessão",
++            "required": false,
++            "schema": {
++              "type": "integer"
++            }
++          }
++        ],
++        "requestBody": {
++          "content": {
++            "application/x-www-form-urlencoded": {
++              "schema": {
++                "type": "object",
++                "properties": {
++                  "marcador": {
++                    "type": "integer",
++                    "description": "[obrigatório][int] Recebe o id do marcador",
++                    "example": 1
++                  }
++                },
++                "required": [
++                  "marcador"
++                ]
++              }
++            }
++          }
++        },
++        "responses": {
++          "200": {
++            "description": "Successful response",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/SuccessResponse"
++                }
++              }
++            }
++          }
++        }
++      }
++    },
+     "/marcador/processo/{protocolo}/consultar": {
+       "get": {
+         "tags": [
+diff --git a/swagger/wssei.yaml b/swagger/wssei.yaml
+index 341a365..ac3e7e7 100644
+--- a/swagger/wssei.yaml
++++ b/swagger/wssei.yaml
+@@ -8246,6 +8246,55 @@ paths:
+             application/json:
+               schema:
+                 $ref: '#/components/schemas/SuccessResponse'
++  /marcador/processo/{protocolo}/remover:
++    post:
++      tags:
++        - Marcador
++      summary: Remover Marcador do Processo
++      description: >-
++        Remove o Marcador do Processo na unidade atual. O marcador precisa
++        estar vigente no processo e pertencer à unidade atual
++      operationId: removerMarcadorProcesso
++      parameters:
++        - name: protocolo
++          in: path
++          description: '[obrigatório][int] Recebe o id do processo'
++          required: true
++          schema:
++            type: integer
++        - name: token
++          in: header
++          description: '[obrigatório][string] Recebe o token de autenticação'
++          required: true
++          schema:
++            type: string
++        - name: unidade
++          in: header
++          description: >-
++            [opcional][int] Recebe o id da unidade para manter ou alterar a
++            unidade da sessão
++          required: false
++          schema:
++            type: integer
++      requestBody:
++        content:
++          application/x-www-form-urlencoded:
++            schema:
++              type: object
++              properties:
++                marcador:
++                  type: integer
++                  description: '[obrigatório][int] Recebe o id do marcador'
++                  example: 1
++              required:
++                - marcador
++      responses:
++        '200':
++          description: Successful response
++          content:
++            application/json:
++              schema:
++                $ref: '#/components/schemas/SuccessResponse'
+   /marcador/processo/{protocolo}/consultar:
+     get:
+       tags:
+-- 
+2.54.0 (Apple Git-157)
+

@@ -50,7 +50,8 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 
 ### Compatibilidade de versão do mod-wssei
 - **Todos os ~116 endpoints existem desde o mod-wssei 2.0.0** (SEI 4.0.x)
-- Única exceção: `sei_listar_relacionamentos` (`GET /processo/{id}/relacionamentos`) requer **mod-wssei 3.0.2+** (SEI 5.0.x)
+- Exceções: `sei_listar_relacionamentos` (`GET /processo/{id}/relacionamentos`) requer **mod-wssei 3.0.2+** (SEI 5.0.x); `sei_remover_marcador_processo` (`POST /marcador/processo/{id}/remover`) usa rota que **o mod-wssei oficial não tem** (conferido até a 3.0.6) — vem de `patches/mod-wssei-remover-marcador.patch`, que o órgão aplica. Sem a rota, a tool diz que ela não respondeu como rota do wssei (404/405/500 sem JSON `sucesso`)
+- **Marcador vazio NÃO remove** no SEI 4+: `AndamentoMarcadorRN::cadastrar/alterar` recusam com "Marcador não informado." (o `gerenciar` do SEI 3.1, que tratava id nulo como remoção, sumiu quando o processo passou a ter vários marcadores). Remoção é `AndamentoMarcadorRN::remover`, que grava o andamento de remoção mesmo sem o marcador estar no processo e não filtra por unidade — o patch confere antes
 - Tabela de compatibilidade SEI ↔ mod-wssei:
   - SEI 4.0.x → mod-wssei 2.0.x (131 endpoints)
   - SEI 4.1.1 → mod-wssei 2.2.0 (131 endpoints, correções de bugs)
