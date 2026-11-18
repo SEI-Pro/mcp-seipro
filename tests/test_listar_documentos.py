@@ -66,10 +66,10 @@ def _run(cli, **kwargs):
 
     srv._resolver_processo = fake_resolver
     try:
-        return json.loads(asyncio.run(
+        return asyncio.run(
             srv.sei_listar_documentos(protocolo_formatado="50300.1/2018-67",
                                       ctx=_Ctx(cli), **kwargs)
-        ))
+        )
     finally:
         srv._resolver_processo = orig
 
@@ -114,7 +114,9 @@ def test_resumido_enxuga_o_payload():
         "assinado", "cancelado", "acesso",
     }
     assert len(json.dumps(resumido)) < len(json.dumps(completo))
-    assert "status" in completo["documentos"][0]["atributos"], "bruto preservado"
+    # resumido=False mantém a list view e acrescenta o item completo em `bruto`
+    assert completo["documentos"][0]["protocoloFormatado"] == "2900000"
+    assert "status" in completo["documentos"][0]["bruto"]["atributos"], "bruto preservado"
 
 
 def test_shape_deriva_flags_e_acesso():

@@ -8,15 +8,20 @@ import logging
 import os
 import re
 from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Literal, NoReturn
 
 from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, Field
 
 from mcp_seipro.sei_client import SEIClient, SEIAcessoNegado, SEICloudflareBlocked
 from mcp_seipro.sei_web_client import SEIWebClient
 from mcp_seipro.shaping import shape_processo_resumido
+from mcp_seipro.saidas import (
+    ConsultaProcesso, LeituraDocumento, ListaDocumentos, ListaProcessos,
+)
 from mcp_seipro.html_utils import (
     html_to_text, html_to_markdown,
     pdf_to_text, pdf_to_markdown,
@@ -452,6 +457,18 @@ def _error(msg: str) -> str:
     return json.dumps({"error": msg, **_classificar_erro(msg)}, ensure_ascii=False)
 
 
+def _falhar(msg: str, **extra) -> NoReturn:
+    """Falha de tool com saída tipada: vira `isError` em vez de um dict de erro.
+
+    Tool com `outputSchema` não pode devolver `{"error": ...}` como sucesso — o
+    SDK rejeita por não casar com o schema. O texto do erro mantém o mesmo JSON
+    de `_error` (com erro_origem/erro_acao), então o agente lê o mesmo conteúdo.
+    """
+    raise ToolError(json.dumps(
+        {"error": msg, **_classificar_erro(msg), **extra}, ensure_ascii=False,
+    ))
+
+
 # ---------------------------------------------------------------------------
 # Tools de unidade e usuário
 # ---------------------------------------------------------------------------
@@ -536,7 +553,7 @@ async def sei_listar_usuarios(
 
 
 @mcp.tool()
-async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
+async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> ConsultaProcesso:
     """Consulta um processo SEI pelo número de protocolo formatado.
 
     Exemplo de protocolo: 50300.000123/2025-00
@@ -597,7 +614,7 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
             merged.update(await client.consultar_processo_completo(protocolo_formatado))
 
         if not merged:
-            return _error("Consulta do processo falhou: " + " | ".join(warnings))
+            _falhar("Consulta do processo falhou: " + " | ".join(warnings))
 
         if warnings:
             merged["_warnings"] = warnings
@@ -609,9 +626,14 @@ async def sei_consultar_processo(protocolo_formatado: str, ctx: Context) -> str:
                 alvo={"tipo": "processo", "protocolo": protocolo_formatado},
             )
 
-        return _json(merged)
+        if "IdProcedimento" not in merged:
+            # Só o scraper web respondeu (REST falhou): ele usa snake_case.
+            merged["IdProcedimento"] = str(merged.get("id_procedimento") or "")
+        return merged
+    except ToolError:
+        raise
     except Exception as e:
-        return _error(str(e))
+        _falhar(str(e))
 
 
 @mcp.tool()
@@ -680,7 +702,7 @@ async def sei_listar_documentos(
     offset: int = 0,
     resumido: bool = True,
     ctx: Context = None,
-) -> str:
+) -> ListaDocumentos:
     """Lista os documentos de um processo SEI, com ordenação e paginação.
 
     Aceita o protocolo formatado (ex: 50300.000123/2025-00) ou o IdProcedimento.
@@ -690,24 +712,18 @@ async def sei_listar_documentos(
       que você acabou de criar sem varrer a lista inteira.
     - limite/offset: recorte da lista já ordenada (offset é em ITENS, não página).
     - resumido: True (padrão) devolve id, protocoloFormatado, tipo, unidade,
-      nome, flags de assinado/cancelado e nível de acesso. False devolve o
-      payload bruto da wssei — completo, porém grande o bastante para estourar a
-      janela de contexto em processos com muitos documentos.
+      nome, flags de assinado/cancelado e nível de acesso. False acrescenta a
+      cada item o campo `bruto` com o payload completo da wssei — grande o
+      bastante para estourar a janela de contexto em processos volumosos.
 
     A resposta traz `total` (do servidor), `retornados` e `truncado`. Para ler o
     conteúdo de um documento, use sei_ler_documento com o `id`. A listagem não
     inclui data — ela vem de sei_consultar_documento_interno (`dataElaboracao`).
 
-    Nota: com SEI_WEB_SCRAPER=1 a listagem vem do scraper web e estes parâmetros
-    de ordem/paginação não se aplicam (o scraper devolve a árvore inteira).
+    Sempre via REST, mesmo com SEI_WEB_SCRAPER=1 (a árvore pelo scraper web
+    continua em sei_arvore_processo).
     """
     try:
-        if _web_scraper_enabled():
-            web = _get_web_client(ctx)
-            if web._inbox_url is None:
-                await web.login()
-            return _json(await web.listar_documentos(protocolo_formatado))
-
         client = _get_client(ctx)
         id_proc = await _resolver_processo(client, protocolo_formatado)
 
@@ -725,18 +741,24 @@ async def sei_listar_documentos(
             docs = list(reversed(docs))
         recorte = docs[offset:offset + limite] if limite > 0 else docs[offset:]
 
-        return _json({
+        documentos = []
+        for d in recorte:
+            item = _shape_documento_resumido(d)
+            if not resumido:
+                item["bruto"] = d
+            documentos.append(item)
+
+        return {
             "id_procedimento": id_proc,
             "total": total,
             "retornados": len(recorte),
             "offset": offset,
             "ordem": ordem,
             "truncado": truncado,
-            "documentos": [_shape_documento_resumido(d) for d in recorte]
-            if resumido else recorte,
-        })
+            "documentos": documentos,
+        }
     except Exception as e:
-        return _error(str(e))
+        _falhar(str(e))
 
 
 @mcp.tool()
@@ -1181,7 +1203,7 @@ async def sei_ler_documento(
     formato: Literal["markdown", "texto", "html"] = "markdown",
     confirmar_acesso_restrito: bool = False,
     ctx: Context = None,
-) -> str:
+) -> LeituraDocumento:
     """Lê o conteúdo de um documento do SEI e retorna texto legível.
 
     Aceita tanto o id interno quanto o número SEI (protocoloFormatado)
@@ -1203,7 +1225,12 @@ async def sei_ler_documento(
       Se o gate bloquear, encaminhe os riscos ao usuário e aguarde decisão
       explícita — não tente caminhos alternativos para obter o conteúdo.
 
-    PDFs escaneados são processados via OCR automaticamente.
+    PDFs escaneados são processados via OCR automaticamente (externo sai em
+    markdown ou texto; formato='html' num externo devolve texto).
+
+    Resposta: `conteudo` com o texto e `liberado`. Se o gate de acesso
+    restrito reter o conteúdo, vem `liberado=false`, `conteudo=null` e o
+    motivo em `bloqueio`.
     """
     try:
         client = _get_client(ctx)
@@ -1215,31 +1242,32 @@ async def sei_ler_documento(
                 id_documento = doc_id
                 tipo_documento = detected_tipo
             except Exception as e:
-                return _json({
-                    "error": str(e),
-                    "dica": "Use sei_arvore_processo para ver os documentos "
-                            "do processo e seus IDs.",
-                })
+                _falhar(str(e), dica="Use sei_arvore_processo para ver os "
+                                     "documentos do processo e seus IDs.")
 
+        id_documento = str(id_documento)
         acao, payload, erro = await _aplicar_gate_documento(
-            ctx, client, str(id_documento), tipo_documento,
+            ctx, client, id_documento, tipo_documento,
             confirmou=confirmar_acesso_restrito,
         )
         if acao == "erro":
-            return _error(erro)
+            _falhar(erro)
         if acao in ("bloquear", "recusou"):
-            return _json(payload)
+            return _resultado_leitura(
+                id_documento=id_documento, tipo_documento=tipo_documento,
+                formato=formato, liberado=False, bloqueio=payload,
+            )
         disclaimer = payload  # liberar (None se público, dict se restrito autorizado)
 
         if tipo_documento == "X":
             content = await client.baixar_anexo(id_documento)
             if len(content) > MAX_BINARY_SIZE:
-                return _error(
+                _falhar(
                     f"Documento muito grande ({len(content)} bytes). "
                     "Use sei_baixar_anexo para obter o base64."
                 )
             if content[:4] != b"%PDF":
-                return _error(
+                _falhar(
                     "Documento externo não é PDF. Use sei_baixar_anexo "
                     "para obter o arquivo em base64."
                 )
@@ -1247,36 +1275,53 @@ async def sei_ler_documento(
                 resultado = pdf_to_markdown(content)
                 if disclaimer:
                     resultado = access_control.prefixar_markdown(disclaimer, resultado)
-                return resultado
-            resultado = pdf_to_text(content)
-            if disclaimer:
-                resultado = access_control.prefixar_texto(disclaimer, resultado)
-            return resultado
+            else:
+                formato = "texto"  # PDF não tem HTML para devolver
+                resultado = pdf_to_text(content)
+                if disclaimer:
+                    resultado = access_control.prefixar_texto(disclaimer, resultado)
+        else:
+            # Documento interno (I)
+            raw = await client.visualizar_documento_interno(id_documento)
+            if formato == "markdown":
+                resultado = html_to_markdown(raw)
+                if disclaimer:
+                    resultado = access_control.prefixar_markdown(disclaimer, resultado)
+            elif formato == "texto":
+                resultado = html_to_text(raw)
+                if disclaimer:
+                    resultado = access_control.prefixar_texto(disclaimer, resultado)
+            else:
+                resultado = access_control.envelopar_html(disclaimer, raw) if disclaimer else raw
 
-        # Documento interno (I)
-        raw = await client.visualizar_documento_interno(id_documento)
-        if formato == "markdown":
-            resultado = html_to_markdown(raw)
-            if disclaimer:
-                resultado = access_control.prefixar_markdown(disclaimer, resultado)
-            return resultado
-        if formato == "texto":
-            resultado = html_to_text(raw)
-            if disclaimer:
-                resultado = access_control.prefixar_texto(disclaimer, resultado)
-            return resultado
-        if disclaimer:
-            return access_control.envelopar_html(disclaimer, raw)
-        return raw
+        return _resultado_leitura(
+            id_documento=id_documento, tipo_documento=tipo_documento,
+            formato=formato, liberado=True, conteudo=resultado,
+            aviso_acesso=disclaimer,
+        )
+    except ToolError:
+        raise
     except Exception as e:
         msg = str(e)
         if "não autorizado" in msg.lower() or "nao autorizado" in msg.lower():
-            return _json({
-                "error": msg,
-                "dica": "Acesso negado. Troque para a unidade geradora "
-                        "com sei_trocar_unidade.",
-            })
-        return _error(msg)
+            _falhar(msg, dica="Acesso negado. Troque para a unidade geradora "
+                              "com sei_trocar_unidade.")
+        _falhar(msg)
+
+
+def _resultado_leitura(**campos) -> CallToolResult:
+    """Resultado de sei_ler_documento: tipado no structuredContent, legível no texto.
+
+    O `content` leva o documento como texto puro (markdown/texto/HTML), não o
+    JSON serializado — cliente que lê `content` recebe o documento sem escapes.
+    O SDK ainda valida `structuredContent` contra LeituraDocumento.
+    """
+    saida = LeituraDocumento(**campos)
+    texto = saida.conteudo if saida.liberado else _json(saida.bloqueio)
+    return CallToolResult(
+        content=[TextContent(type="text", text=texto or "")],
+        structuredContent=saida.model_dump(mode="json", by_alias=True),
+    )
 
 
 @mcp.tool()
@@ -1760,7 +1805,7 @@ async def sei_listar_processos(
     incluir_detalhe: bool = False,
     apenas_contar: bool = False,
     ctx: Context = None,
-) -> str:
+) -> ListaProcessos:
     """Lista processos da caixa da unidade atual (Controle de Processos), em
     formato ENXUTO e tipado, próprio para consumo por agente.
 
@@ -1773,8 +1818,8 @@ async def sei_listar_processos(
     - apenas_meus: "S" para só processos atribuídos ao usuário (server-side).
     - filtro: busca textual server-side (protocolo, tipo, especificação, etc.).
     - tipo: substring (case-insensitive) no nome do tipo processual (client-side).
-    - apenas_contar: se True, retorna só {total_itens, paginas} — barato, sem
-      baixar a página pesada.
+    - apenas_contar: se True, retorna só total_itens, itens_por_pagina e
+      paginas (processos vazio) — barato, sem baixar a página pesada.
     - incluir_detalhe: se True, reanexa `ciencias` e `anotacoes` completas a cada
       item (fora da list view por padrão, para manter o payload pequeno).
 
@@ -1789,21 +1834,10 @@ async def sei_listar_processos(
     - aberto_em_unidades: lista de siglas das unidades onde o processo está aberto
 
     NOTA: processos sobrestados e concluídos não aparecem. Para agrupamento
-    estatístico use sei_resumo_processos.
+    estatístico use sei_resumo_processos. Sempre via REST, mesmo com
+    SEI_WEB_SCRAPER=1.
     """
     try:
-        if _web_scraper_enabled():
-            web = _get_web_client(ctx)
-            if web._inbox_url is None:
-                await web.login()
-            return _json(await web.listar_processos(
-                detalhada=True,
-                pagina=pagina,
-                apenas_meus=(apenas_meus.upper() == "S"),
-                tipo=tipo,
-                filtro=filtro,
-            ))
-
         client = _get_client(ctx)
 
         # Modo contagem barato (D-6): pega só o total, sem baixar a página cheia.
@@ -1814,7 +1848,7 @@ async def sei_listar_processos(
             total = int(head.get("total_itens", 0))
             page_size = max(1, limit)
             paginas = (total + page_size - 1) // page_size
-            return _json({"total_itens": total, "itens_por_pagina": page_size, "paginas": paginas})
+            return {"total_itens": total, "itens_por_pagina": page_size, "paginas": paginas}
 
         result = await client.listar_processos(
             limit=limit, start=pagina, apenas_meus=apenas_meus, filtro=filtro,
@@ -1840,9 +1874,9 @@ async def sei_listar_processos(
             out["_nota"] = ("atribuido_unidade_atual veio null: chame "
                             "sei_trocar_unidade antes para resolver a atribuição "
                             "na unidade consultada.")
-        return _json(out)
+        return out
     except Exception as e:
-        return _error(str(e))
+        _falhar(str(e))
 
 
 _CAMPOS_AGRUPAMENTO = {
