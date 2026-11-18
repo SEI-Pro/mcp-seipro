@@ -4835,8 +4835,10 @@ def main():
         app.routes.insert(3, Route("/login", login_page, methods=["GET"]))
         app.routes.insert(4, Route("/login", login_submit, methods=["POST"]))
 
+        from mcp_seipro.auth import LogRecusaRegistro
+
         config = uvicorn.Config(
-            app,
+            LogRecusaRegistro(app),
             host="0.0.0.0",
             port=_http_port,
             log_level="info",

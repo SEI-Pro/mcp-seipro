@@ -169,6 +169,12 @@ def test_registro_recusa_redirect_nao_permitido(uri):
     "https://claude.ai/api/mcp/auth_callback",
     "http://localhost:33418/callback",
     "http://127.0.0.1:9000/cb",
+    # Gemini web (callback por usuário) e Gemini Enterprise (fixo)
+    "https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-123456789-mcp_seipro_io",
+    "https://vertexaisearch.cloud.google.com/oauth-redirect",
+    # ChatGPT (callback por conexão e o estável)
+    "https://chatgpt.com/connector/oauth/abc123",
+    "https://chatgpt.com/connector_platform_oauth_redirect",
 ])
 def test_registro_aceita_redirect_permitido(uri):
     _registrar(auth.SEIProOAuthProvider(), redirect=uri)
@@ -324,3 +330,61 @@ def test_tools_recusam_arquivo_path_em_modo_http(monkeypatch):
     ):
         out = json.loads(_run(coro))
         assert "desabilitado" in json.dumps(out, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------- log de recusa do /register
+
+def _app_registro():
+    from mcp.server.auth.routes import create_auth_routes
+    from mcp.server.auth.settings import ClientRegistrationOptions
+    from pydantic import AnyHttpUrl
+
+    rotas = create_auth_routes(
+        auth.SEIProOAuthProvider(), AnyHttpUrl("https://mcp.exemplo.io"),
+        client_registration_options=ClientRegistrationOptions(enabled=True),
+    )
+    return TestClient(auth.LogRecusaRegistro(Starlette(routes=rotas)))
+
+
+def _meta_gemini(**extra):
+    meta = {
+        "client_name": "Gemini",
+        "redirect_uris": [
+            "https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-987654321-mcp_seipro_io"
+        ],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "client_secret_post",
+    }
+    meta.update(extra)
+    return meta
+
+
+def test_registro_do_gemini_passa_pelo_app_http(caplog):
+    r = _app_registro().post("/register", json=_meta_gemini())
+    assert r.status_code == 201, r.text
+    assert r.json()["client_id"].startswith("c2.")
+    assert "recusado" not in caplog.text
+
+
+def test_recusa_do_register_loga_o_motivo_sem_o_id_do_usuario(caplog):
+    caplog.set_level("WARNING", logger="mcp_seipro.auth")
+    r = _app_registro().post(
+        "/register", json=_meta_gemini(grant_types=["authorization_code"]),
+        headers={"User-Agent": "Google-Gemini-Teste"},
+    )
+    assert r.status_code == 400
+    assert "OAuth /register recusado (400)" in caplog.text
+    assert "grant_types" in caplog.text and "Google-Gemini-Teste" in caplog.text
+    assert "https://oauth-redirect.googleusercontent.com" in caplog.text
+    assert "987654321" not in caplog.text  # caminho com id do usuário Google fica fora
+
+
+def test_middleware_nao_toca_outras_rotas():
+    chamado = []
+
+    async def app(scope, receive, send):
+        chamado.append(scope["path"])
+
+    _run(auth.LogRecusaRegistro(app)({"type": "http", "method": "GET", "path": "/mcp"}, None, None))
+    assert chamado == ["/mcp"]

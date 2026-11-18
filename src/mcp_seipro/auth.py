@@ -37,7 +37,8 @@ Variáveis de ambiente:
   BASE_URL    — URL pública do servidor (ex: https://seipro.ai)
   OAUTH_ALLOWED_REDIRECT_HOSTS — hosts https aceitos como redirect_uri no
                 registro de clientes (vírgula; `*.dominio` para sufixo; `*`
-                libera qualquer https). Padrão: claude.ai,claude.com.
+                libera qualquer https). Padrão: claude.ai, claude.com e os
+                callbacks do Google (Gemini web e Enterprise) e do ChatGPT.
                 Loopback http (localhost/127.0.0.1/[::1]) é sempre aceito.
   OAUTH_ACCESS_TTL / OAUTH_REFRESH_TTL / OAUTH_SESSION_MAX — em segundos.
 """
@@ -184,8 +185,22 @@ def _revogar_sessao(sid: str) -> None:
 _LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 
 
+# Gemini web registra https://oauth-redirect.googleusercontent.com/r/user_bound_
+# custom-mcp-<id>-<host do MCP>; Gemini Enterprise usa o fixo
+# https://vertexaisearch.cloud.google.com/oauth-redirect. Ambos são hosts de
+# callback do próprio Google, como claude.ai é o da Anthropic. ChatGPT usa
+# https://chatgpt.com/connector/oauth/{callback_id} (servidor sem `iss` na
+# resposta de autorização, que é o nosso caso) ou o estável
+# https://chatgpt.com/connector_platform_oauth_redirect.
+_HOSTS_REDIRECT_PADRAO = (
+    "claude.ai,claude.com,"
+    "oauth-redirect.googleusercontent.com,vertexaisearch.cloud.google.com,"
+    "chatgpt.com"
+)
+
+
 def _hosts_redirect() -> list[str]:
-    bruto = os.environ.get("OAUTH_ALLOWED_REDIRECT_HOSTS", "claude.ai,claude.com")
+    bruto = os.environ.get("OAUTH_ALLOWED_REDIRECT_HOSTS", _HOSTS_REDIRECT_PADRAO)
     return [h.strip().lower() for h in bruto.split(",") if h.strip()]
 
 
@@ -210,6 +225,82 @@ def redirect_permitido(uri: str) -> bool:
         elif host == p:
             return True
     return False
+
+
+def _forma_registro(corpo: bytes) -> dict:
+    """Metadados do pedido de registro que explicam uma recusa, sem dado pessoal.
+
+    Das redirect_uris só vai esquema + host: o caminho do Gemini leva o id do
+    usuário Google.
+    """
+    try:
+        meta = json.loads(corpo or b"{}")
+    except ValueError:
+        return {"corpo": "não é JSON", "bytes": len(corpo)}
+    if not isinstance(meta, dict):
+        return {"corpo": type(meta).__name__}
+    destinos = []
+    for uri in meta.get("redirect_uris") or []:
+        try:
+            u = urlparse(str(uri))
+            destinos.append(f"{u.scheme}://{u.hostname}")
+        except ValueError:
+            destinos.append("?")
+    return {
+        "client_name": str(meta.get("client_name", ""))[:80],
+        "redirect_hosts": destinos,
+        "grant_types": meta.get("grant_types"),
+        "response_types": meta.get("response_types"),
+        "token_endpoint_auth_method": meta.get("token_endpoint_auth_method"),
+        "scope": meta.get("scope"),
+    }
+
+
+class LogRecusaRegistro:
+    """ASGI: loga POR QUE um POST /register foi recusado.
+
+    A validação do SDK (grant_types, auth method, scope) roda antes do provider,
+    e o log de acesso só mostra "400". Sem isto, um cliente novo que falha no
+    registro (ex.: Gemini) não deixa rastro do campo que causou a recusa.
+    """
+
+    _TETO = 16384
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if (scope.get("type") != "http" or scope.get("method") != "POST"
+                or scope.get("path") != "/register"):
+            await self.app(scope, receive, send)
+            return
+        corpo = bytearray()
+        resposta = bytearray()
+        status = 0
+
+        async def _receive():
+            msg = await receive()
+            if msg.get("type") == "http.request" and len(corpo) < self._TETO:
+                corpo.extend(msg.get("body", b"")[: self._TETO - len(corpo)])
+            return msg
+
+        async def _send(msg):
+            nonlocal status
+            if msg.get("type") == "http.response.start":
+                status = msg.get("status", 0)
+            elif msg.get("type") == "http.response.body" and status >= 400 \
+                    and len(resposta) < 1024:
+                resposta.extend(msg.get("body", b"")[: 1024 - len(resposta)])
+            await send(msg)
+
+        await self.app(scope, _receive, _send)
+        if status >= 400:
+            ua = dict(scope.get("headers") or []).get(b"user-agent", b"")
+            logger.warning(
+                "OAuth /register recusado (%s): %s | ua=%s | resposta=%s",
+                status, json.dumps(_forma_registro(bytes(corpo)), ensure_ascii=False),
+                ua.decode("latin-1")[:120], resposta.decode("utf-8", "replace")[:500],
+            )
 
 
 # ---------------------------------------------------------------------------
