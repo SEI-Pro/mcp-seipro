@@ -81,6 +81,11 @@ CONSULTA_REAL = {
 }
 
 
+# Minuta de outra unidade: o número SEI converte, e o SEI recusa o id.
+NUMERO_RECUSADO = "2900500"
+ID_RECUSADO = "3000500"
+
+
 class _FakeSEI:
     def __init__(self, *a, **k):
         self._unidade_ativa = "110000040"
@@ -107,7 +112,14 @@ class _FakeSEI:
         return {"IdProcedimento": "683589"}
 
     async def consultar_documento_interno(self, id_doc):
+        if id_doc == ID_RECUSADO:
+            raise Exception("Acesso ao documento não autorizado.")
         return {"nivelAcesso": "1" if id_doc == "3000009" else "0"}
+
+    async def consultar_documento_interno_formatado(self, numero):
+        if numero == NUMERO_RECUSADO:
+            return {"idDocumento": ID_RECUSADO, "protocolo": "683589"}
+        raise Exception("Documento não encontrado.")
 
     async def visualizar_documento_interno(self, id_doc):
         return "<p class='Texto_Justificado'>Conteúdo do <b>despacho</b>.</p>"
@@ -239,3 +251,27 @@ def test_ler_documento_restrito_autorizado_leva_aviso():
     assert sc["liberado"] is True
     assert sc["aviso_acesso"]["rotulo_nivel"] == "Restrito"
     assert sc["conteudo"].startswith("> **ATENÇÃO"), "aviso continua no texto"
+
+
+def test_nao_autorizado_apos_conversao_diz_o_que_se_sabe():
+    """O número foi convertido; a mensagem não pode sugerir que não foi."""
+    _, r = _chamar("sei_ler_documento", {"id_documento": NUMERO_RECUSADO})
+    assert r.isError
+    texto = r.content[0].text
+    assert f"{NUMERO_RECUSADO}, foi convertido para o id interno {ID_RECUSADO}" in texto
+    assert "não distingue" in texto
+    assert "Verifique se você passou" not in texto
+    assert json.loads(texto.split(": ", 1)[1])["erro_origem"] == "sei_acesso"
+
+
+def test_nao_autorizado_sem_conversao_aponta_o_auto():
+    _, r = _chamar("sei_ler_documento", {"id_documento": ID_RECUSADO, "tipo_documento": "I"})
+    assert r.isError
+    assert "sem conversão" in r.content[0].text
+    assert "tipo_documento='auto'" in r.content[0].text
+
+
+def test_msg_nao_autorizado_quando_nao_achou_como_numero():
+    m = srv._msg_nao_autorizado("123", "123", "Acesso negado.")
+    assert "não foi encontrado como número SEI" in m
+    assert m.endswith("Mensagem do SEI: Acesso negado.")

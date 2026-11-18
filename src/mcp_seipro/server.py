@@ -315,14 +315,49 @@ async def _solicitar_consentimento_via_elicit(
     return "recusou"
 
 
+def _msg_nao_autorizado(id_documento: str, referencia: str | None, msg_sei: str) -> str:
+    """Texto do 'não autorizado' do SEI sobre um documento: diz o que se sabe.
+
+    O SEI dá a mesma recusa para causas que o MCP não distingue daqui (minuta de
+    outra unidade, unidade atual sem acesso, falta de permissão). A mensagem
+    registra se e como a referência foi convertida em id e lista as causas como
+    possibilidades, sem eleger uma.
+
+    `referencia` é o que o usuário passou: diferente do id quando foi
+    convertida; igual quando não achou como número SEI e foi usada como id; None
+    quando não houve tentativa de conversão (tipo_documento forçado).
+    """
+    if referencia is not None and referencia != id_documento:
+        origem = (f"O número informado, {referencia}, foi convertido para o id "
+                  f"interno {id_documento} antes da consulta.")
+    elif referencia is not None:
+        origem = (f"'{referencia}' não foi encontrado como número SEI e foi "
+                  "consultado como id interno.")
+    else:
+        origem = (f"'{id_documento}' foi consultado como id interno, sem conversão "
+                  "(tipo_documento foi informado). Se for o número SEI, a "
+                  "chamada com tipo_documento='auto' faz a conversão.")
+    return (
+        f"O SEI recusou o acesso ao documento ('não autorizado'). {origem} "
+        "O SEI dá a mesma resposta para causas diferentes, que o MCP não "
+        "distingue: documento ainda não assinado de outra unidade, unidade atual "
+        "sem acesso ao processo, ou usuário sem permissão sobre o protocolo. "
+        f"Mensagem do SEI: {msg_sei}"
+    )
+
+
 async def _aplicar_gate_documento(
     ctx: Context,
     client: SEIClient,
     id_documento: str,
     tipo_documento: str,
     confirmou: bool,
+    referencia: str | None = None,
 ) -> tuple[str, dict | None, str]:
     """Resolve metadados e aplica o gate de acesso para um documento.
+
+    `referencia`: o que o usuário passou antes da conversão em id (só para a
+    mensagem de erro; ver _msg_nao_autorizado).
 
     Retorna (acao, payload, erro):
       - acao="liberar": prossiga; payload é o disclaimer acompanhante (ou None
@@ -340,13 +375,7 @@ async def _aplicar_gate_documento(
         msg = str(e)
         low = msg.lower()
         if "não autorizado" in low or "nao autorizado" in low:
-            return ("erro", None, (
-                f"SEI retornou 'não autorizado' para o id {id_documento!r}. "
-                "Verifique se você passou o id INTERNO do documento (ex.: 3149544) "
-                "e não o número SEI / protocoloFormatado (ex.: 2867926). "
-                "Se tiver apenas o número SEI, use sei_buscar_documento ou "
-                "sei_ler_documento (que faz auto-resolução)."
-            ))
+            return ("erro", None, _msg_nao_autorizado(str(id_documento), referencia, msg))
         return ("erro", None, f"Falha ao consultar metadados: {msg}")
 
     nivel, hipotese = access_control.extrair_nivel(meta)
@@ -1236,7 +1265,9 @@ async def sei_ler_documento(
         client = _get_client(ctx)
 
         # Resolver referência → id interno + tipo
+        referencia = None
         if tipo_documento == "auto":
+            referencia = str(id_documento).strip()
             try:
                 doc_id, detected_tipo = await _resolver_documento(client, id_documento)
                 id_documento = doc_id
@@ -1248,7 +1279,7 @@ async def sei_ler_documento(
         id_documento = str(id_documento)
         acao, payload, erro = await _aplicar_gate_documento(
             ctx, client, id_documento, tipo_documento,
-            confirmou=confirmar_acesso_restrito,
+            confirmou=confirmar_acesso_restrito, referencia=referencia,
         )
         if acao == "erro":
             _falhar(erro)
@@ -1351,6 +1382,7 @@ async def sei_baixar_anexo(
         client = _get_client(ctx)
 
         # Auto-resolver número SEI → id interno (igual a sei_ler_documento)
+        referencia = str(id_documento).strip()
         try:
             doc_id, _ = await _resolver_documento(client, id_documento)
             id_documento = doc_id
@@ -1363,7 +1395,7 @@ async def sei_baixar_anexo(
 
         acao, payload, erro = await _aplicar_gate_documento(
             ctx, client, str(id_documento), "X",
-            confirmou=confirmar_acesso_restrito,
+            confirmou=confirmar_acesso_restrito, referencia=referencia,
         )
         if acao == "erro":
             return _error(erro)
@@ -3699,26 +3731,24 @@ async def sei_consultar_documento_externo(
         except Exception as primeira:
             msg = str(primeira)
             low = msg.lower()
-            # Se não autorizado, pode ser id errado (passou número SEI). Tenta resolver.
+            # 'Não autorizado' pode vir de ter recebido o número SEI no lugar
+            # do id (namespaces colidem). Tenta converter e consultar de novo.
             if "não autorizado" in low or "nao autorizado" in low:
+                referencia = str(id_documento).strip()
                 try:
-                    doc_id, _ = await _resolver_documento(client, id_documento)
-                    if doc_id != id_documento:
-                        id_documento = doc_id
-                        result = await client.consultar_documento_externo(id_documento)
-                    else:
-                        raise primeira
+                    doc_id, _ = await _resolver_documento(client, referencia)
                 except Exception:
-                    return _json({
-                        "error": msg,
-                        "dica": (
-                            "SEI retornou 'não autorizado' para o id "
-                            f"{id_documento!r}. Verifique se você passou o id "
-                            "INTERNO do documento (ex.: 3149544) e não o número "
-                            "SEI / protocoloFormatado (ex.: 2867926). Use "
-                            "sei_buscar_documento para resolver número SEI → id."
-                        ),
-                    })
+                    doc_id = referencia
+                if doc_id == referencia:
+                    return _json({"error": msg,
+                                  "dica": _msg_nao_autorizado(referencia, referencia, msg)})
+                id_documento = doc_id
+                try:
+                    result = await client.consultar_documento_externo(id_documento)
+                except Exception as segunda:
+                    return _json({"error": str(segunda),
+                                  "dica": _msg_nao_autorizado(id_documento, referencia,
+                                                              str(segunda))})
             else:
                 raise
 
