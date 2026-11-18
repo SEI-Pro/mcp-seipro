@@ -70,7 +70,7 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 - Visualização Detalhada forçada via POST `hdnTipoVisualizacao=D` no form de procedimento_controlar
 - Especificação extraída do `onmouseover` do link do processo (`infraTooltipMostrar('Especificação','Tipo')`) — disponível INDEPENDENTE da configuração de colunas do painel
 - Labels de documentos parseados via regex: "Despacho GPF 2874369" → tipo=Despacho, sigla=GPF, numero=2874369
-- Tools que tinham caminho web: `sei_listar_processos`, `sei_arvore_processo`, `sei_listar_documentos`, `sei_listar_atividades`, `sei_consultar_processo` (híbrida)
+- Tools com caminho web: `sei_arvore_processo`, `sei_listar_atividades`, `sei_consultar_processo` (híbrida). `sei_listar_processos` e `sei_listar_documentos` perderam o caminho web ao ganhar saída tipada (o formato do scraper não cabe no schema); a árvore via web segue em `sei_arvore_processo`
 - **Desde jun/2026 (SSO Microsoft da ANTAQ) o scraper web não loga mais → essas tools rodam por REST por padrão.** O caminho web virou opt-in via `SEI_WEB_SCRAPER=1` (gate `_web_scraper_enabled()` no server.py). Bug corrigido nesse processo: `listar_atividades` REST exige o param `procedimento` (não `protocolo`)
 
 ### List view enxuta de `sei_listar_processos` (para consumo por agente)
@@ -135,6 +135,14 @@ Funciona com qualquer instância SEI que tenha o módulo mod-wssei v2 instalado.
 ### Resolução de id nas tools de seção (número SEI ≠ id interno)
 - `sei_listar_secoes` e `sei_editar_secao` agora resolvem via `_resolver_documento` (igual `sei_ler_documento`) — antes tratavam o argumento como id interno cru → passar um `protocoloFormatado` retornava **outro documento silenciosamente** (colisão de namespace: ambos são inteiros de magnitude parecida)
 - Ambas ecoam `_documento_resolvido` ({id_documento, nome, protocoloFormatado, idProcedimento}) — `nomeDocumento` (ex.: "Despacho 2949729") é o rótulo mais inequívoco. No `consultar_documento_interno`, o campo `protocolo` é o **idProcedimento** (não o nº do doc), e o nº SEI do doc sai do fim de `nomeDocumento`
+
+### Saída tipada (`outputSchema` + `structuredContent`)
+- Tool com retorno `-> str` gera o schema `{"result": string}`, e o Claude entrega ao modelo o `structuredContent`: o modelo lia JSON escapado dentro de string (`\n`, `\"`). Com modelo Pydantic no retorno, o schema descreve a forma real e a resposta cai 13–35%
+- Tipadas até agora: `sei_listar_processos`, `sei_listar_documentos`, `sei_consultar_processo`, `sei_ler_documento`. Modelos em `src/mcp_seipro/saidas.py`; testes pelo protocolo em memória em `tests/test_saidas_tipadas.py` (chamar a função direto NÃO exercita a validação do SDK)
+- **Erro em tool tipada é exceção** (`_falhar` → `ToolError` → `isError`), nunca `return _error(...)`: o SDK valida o retorno contra o schema e um `{"error": ...}` viraria "Output validation error". O texto leva o mesmo JSON (`erro_origem`/`erro_acao`), com o prefixo "Error executing tool X:"
+- Modelos com `extra="allow"` (Pydantic descarta em silêncio campo não declarado) e `coerce_numbers_to_str` (a wssei manda id ora string, ora número). Chave com `_` inicial (`_nota`, `_aviso_acesso`) é alias
+- `sei_ler_documento` devolve `CallToolResult` montado à mão: `content` com o documento em markdown puro, `structuredContent` com `{conteudo, liberado, aviso_acesso, bloqueio}`. Gate de restrito retendo conteúdo = `liberado=false` (não é erro)
+- `sei_listar_documentos(resumido=False)` agora mantém a list view e põe o item da wssei em `bruto`, em vez de trocar a forma do item
 
 ### Tool annotations e o gate de aprovação do cliente ("No approval received")
 - O "No approval received" é o **gate de aprovação por-ferramenta do CLIENTE** (ex.: Claude.ai), NÃO do código nem do SEI. O servidor não tem flag de "requires confirmation" — só sinaliza via **tool annotations** (hints MCP). Claude.ai **não suporta elicitation** → confirmações têm que ser parâmetro (ex.: `confirmar_acesso_restrito`), nunca prompt interativo
